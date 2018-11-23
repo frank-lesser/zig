@@ -55,8 +55,22 @@ static const ArchType arch_list[] = {
     {ZigLLVM_armeb, ZigLLVM_ARMSubArch_v5te},
     {ZigLLVM_armeb, ZigLLVM_ARMSubArch_v4t},
 
-    {ZigLLVM_aarch64, ZigLLVM_NoSubArch},
-    {ZigLLVM_aarch64_be, ZigLLVM_NoSubArch},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8_3a},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8_2a},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8_1a},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8r},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8m_baseline},
+    {ZigLLVM_aarch64, ZigLLVM_ARMSubArch_v8m_mainline},
+
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8_3a},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8_2a},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8_1a},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8r},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8m_baseline},
+    {ZigLLVM_aarch64_be, ZigLLVM_ARMSubArch_v8m_mainline},
+
     {ZigLLVM_arc, ZigLLVM_NoSubArch},
     {ZigLLVM_avr, ZigLLVM_NoSubArch},
     {ZigLLVM_bpfel, ZigLLVM_NoSubArch},
@@ -148,7 +162,6 @@ static const Os os_list[] = {
     OsRTEMS,
     OsNaCl,       // Native Client
     OsCNK,        // BG/P Compute-Node Kernel
-    OsBitrig,
     OsAIX,
     OsCUDA,       // NVIDIA CUDA
     OsNVCL,       // NVIDIA OpenCL
@@ -159,9 +172,11 @@ static const Os os_list[] = {
     OsWatchOS,    // Apple watchOS
     OsMesa3D,
     OsContiki,
+    OsAMDPAL,
     OsZen,
 };
 
+// Coordinate with zig_llvm.h
 static const ZigLLVM_EnvironmentType environ_list[] = {
     ZigLLVM_UnknownEnvironment,
 
@@ -181,9 +196,7 @@ static const ZigLLVM_EnvironmentType environ_list[] = {
     ZigLLVM_MSVC,
     ZigLLVM_Itanium,
     ZigLLVM_Cygnus,
-    ZigLLVM_AMDOpenCL,
     ZigLLVM_CoreCLR,
-    ZigLLVM_OpenCL,
     ZigLLVM_Simulator,
 };
 
@@ -237,7 +250,7 @@ Os get_target_os(size_t index) {
     return os_list[index];
 }
 
-static ZigLLVM_OSType get_llvm_os_type(Os os_type) {
+ZigLLVM_OSType get_llvm_os_type(Os os_type) {
     switch (os_type) {
         case OsFreestanding:
         case OsZen:
@@ -280,8 +293,6 @@ static ZigLLVM_OSType get_llvm_os_type(Os os_type) {
             return ZigLLVM_NaCl;
         case OsCNK:
             return ZigLLVM_CNK;
-        case OsBitrig:
-            return ZigLLVM_Bitrig;
         case OsAIX:
             return ZigLLVM_AIX;
         case OsCUDA:
@@ -302,6 +313,8 @@ static ZigLLVM_OSType get_llvm_os_type(Os os_type) {
             return ZigLLVM_Mesa3D;
         case OsContiki:
             return ZigLLVM_Contiki;
+        case OsAMDPAL:
+            return ZigLLVM_AMDPAL;
     }
     zig_unreachable();
 }
@@ -349,8 +362,6 @@ static Os get_zig_os_type(ZigLLVM_OSType os_type) {
             return OsNaCl;
         case ZigLLVM_CNK:
             return OsCNK;
-        case ZigLLVM_Bitrig:
-            return OsBitrig;
         case ZigLLVM_AIX:
             return OsAIX;
         case ZigLLVM_CUDA:
@@ -371,6 +382,8 @@ static Os get_zig_os_type(ZigLLVM_OSType os_type) {
             return OsMesa3D;
         case ZigLLVM_Contiki:
             return OsContiki;
+        case ZigLLVM_AMDPAL:
+            return OsAMDPAL;
     }
     zig_unreachable();
 }
@@ -400,7 +413,6 @@ const char *get_target_os_name(Os os_type) {
         case OsRTEMS:
         case OsNaCl:       // Native Client
         case OsCNK:        // BG/P Compute-Node Kernel
-        case OsBitrig:
         case OsAIX:
         case OsCUDA:       // NVIDIA CUDA
         case OsNVCL:       // NVIDIA OpenCL
@@ -411,6 +423,7 @@ const char *get_target_os_name(Os os_type) {
         case OsWatchOS:    // Apple watchOS
         case OsMesa3D:
         case OsContiki:
+        case OsAMDPAL:
             return ZigLLVMGetOSTypeName(get_llvm_os_type(os_type));
     }
     zig_unreachable();
@@ -597,10 +610,13 @@ void resolve_target_object_format(ZigTarget *target) {
         case ZigLLVM_tce:
         case ZigLLVM_tcele:
         case ZigLLVM_thumbeb:
-        case ZigLLVM_wasm32:
-        case ZigLLVM_wasm64:
         case ZigLLVM_xcore:
             target->oformat= ZigLLVM_ELF;
+            return;
+
+        case ZigLLVM_wasm32:
+        case ZigLLVM_wasm64:
+            target->oformat = ZigLLVM_Wasm;
             return;
 
         case ZigLLVM_ppc:
@@ -683,25 +699,46 @@ static int get_arch_pointer_bit_width(ZigLLVM_ArchType arch) {
 uint32_t target_c_type_size_in_bits(const ZigTarget *target, CIntType id) {
     switch (target->os) {
         case OsFreestanding:
-            switch (id) {
-                case CIntTypeShort:
-                case CIntTypeUShort:
-                    return 16;
-                case CIntTypeInt:
-                case CIntTypeUInt:
-                    return 32;
-                case CIntTypeLong:
-                case CIntTypeULong:
-                    return get_arch_pointer_bit_width(target->arch.arch);
-                case CIntTypeLongLong:
-                case CIntTypeULongLong:
-                    return 64;
-                case CIntTypeCount:
-                    zig_unreachable();
+            switch (target->arch.arch) {
+                case ZigLLVM_msp430:
+                    switch (id) {
+                        case CIntTypeShort:
+                        case CIntTypeUShort:
+                            return 16;
+                        case CIntTypeInt:
+                        case CIntTypeUInt:
+                            return 16;
+                        case CIntTypeLong:
+                        case CIntTypeULong:
+                            return 32;
+                        case CIntTypeLongLong:
+                        case CIntTypeULongLong:
+                            return 64;
+                        case CIntTypeCount:
+                            zig_unreachable();
+                    }
+                default:
+                    switch (id) {
+                        case CIntTypeShort:
+                        case CIntTypeUShort:
+                            return 16;
+                        case CIntTypeInt:
+                        case CIntTypeUInt:
+                            return 32;
+                        case CIntTypeLong:
+                        case CIntTypeULong:
+                            return get_arch_pointer_bit_width(target->arch.arch);
+                        case CIntTypeLongLong:
+                        case CIntTypeULongLong:
+                            return 64;
+                        case CIntTypeCount:
+                            zig_unreachable();
+                    }
             }
         case OsLinux:
         case OsMacOSX:
         case OsZen:
+        case OsOpenBSD:
             switch (id) {
                 case CIntTypeShort:
                 case CIntTypeUShort:
@@ -742,14 +779,12 @@ uint32_t target_c_type_size_in_bits(const ZigTarget *target, CIntType id) {
         case OsKFreeBSD:
         case OsLv2:
         case OsNetBSD:
-        case OsOpenBSD:
         case OsSolaris:
         case OsHaiku:
         case OsMinix:
         case OsRTEMS:
         case OsNaCl:
         case OsCNK:
-        case OsBitrig:
         case OsAIX:
         case OsCUDA:
         case OsNVCL:
@@ -761,6 +796,7 @@ uint32_t target_c_type_size_in_bits(const ZigTarget *target, CIntType id) {
         case OsMesa3D:
         case OsFuchsia:
         case OsContiki:
+        case OsAMDPAL:
             zig_panic("TODO c type size in bits for this target");
     }
     zig_unreachable();
@@ -787,6 +823,22 @@ const char *target_exe_file_ext(ZigTarget *target) {
         return ".exe";
     } else {
         return "";
+    }
+}
+
+const char *target_lib_file_ext(ZigTarget *target, bool is_static, size_t version_major, size_t version_minor, size_t version_patch) {
+    if (target->os == OsWindows) {
+        if (is_static) {
+            return ".lib";
+        } else {
+            return ".dll";
+        }
+    } else {
+        if (is_static) {
+            return ".a";
+        } else {
+            return buf_ptr(buf_sprintf(".so.%zu", version_major));
+        }
     }
 }
 
@@ -895,4 +947,128 @@ bool target_can_exec(const ZigTarget *host_target, const ZigTarget *guest_target
     }
 
     return false;
+}
+
+const char *arch_stack_pointer_register_name(const ArchType *arch) {
+    switch (arch->arch) {
+        case ZigLLVM_UnknownArch:
+            zig_unreachable();
+        case ZigLLVM_x86:
+            return "esp";
+        case ZigLLVM_x86_64:
+            return "rsp";
+        case ZigLLVM_aarch64:
+            return "sp";
+
+        case ZigLLVM_arm:
+        case ZigLLVM_thumb:
+        case ZigLLVM_aarch64_be:
+        case ZigLLVM_amdgcn:
+        case ZigLLVM_amdil:
+        case ZigLLVM_amdil64:
+        case ZigLLVM_armeb:
+        case ZigLLVM_arc:
+        case ZigLLVM_avr:
+        case ZigLLVM_bpfeb:
+        case ZigLLVM_bpfel:
+        case ZigLLVM_hexagon:
+        case ZigLLVM_lanai:
+        case ZigLLVM_hsail:
+        case ZigLLVM_hsail64:
+        case ZigLLVM_kalimba:
+        case ZigLLVM_le32:
+        case ZigLLVM_le64:
+        case ZigLLVM_mips:
+        case ZigLLVM_mips64:
+        case ZigLLVM_mips64el:
+        case ZigLLVM_mipsel:
+        case ZigLLVM_msp430:
+        case ZigLLVM_nios2:
+        case ZigLLVM_nvptx:
+        case ZigLLVM_nvptx64:
+        case ZigLLVM_ppc64le:
+        case ZigLLVM_r600:
+        case ZigLLVM_renderscript32:
+        case ZigLLVM_renderscript64:
+        case ZigLLVM_riscv32:
+        case ZigLLVM_riscv64:
+        case ZigLLVM_shave:
+        case ZigLLVM_sparc:
+        case ZigLLVM_sparcel:
+        case ZigLLVM_sparcv9:
+        case ZigLLVM_spir:
+        case ZigLLVM_spir64:
+        case ZigLLVM_systemz:
+        case ZigLLVM_tce:
+        case ZigLLVM_tcele:
+        case ZigLLVM_thumbeb:
+        case ZigLLVM_wasm32:
+        case ZigLLVM_wasm64:
+        case ZigLLVM_xcore:
+        case ZigLLVM_ppc:
+        case ZigLLVM_ppc64:
+            zig_panic("TODO populate this table with stack pointer register name for this CPU architecture");
+    }
+    zig_unreachable();
+}
+
+bool target_is_arm(const ZigTarget *target) {
+    switch (target->arch.arch) {
+        case ZigLLVM_UnknownArch:
+            zig_unreachable();
+        case ZigLLVM_aarch64:
+        case ZigLLVM_arm:
+        case ZigLLVM_thumb:
+        case ZigLLVM_aarch64_be:
+        case ZigLLVM_armeb:
+        case ZigLLVM_thumbeb:
+            return true;
+
+        case ZigLLVM_x86:
+        case ZigLLVM_x86_64:
+        case ZigLLVM_amdgcn:
+        case ZigLLVM_amdil:
+        case ZigLLVM_amdil64:
+        case ZigLLVM_arc:
+        case ZigLLVM_avr:
+        case ZigLLVM_bpfeb:
+        case ZigLLVM_bpfel:
+        case ZigLLVM_hexagon:
+        case ZigLLVM_lanai:
+        case ZigLLVM_hsail:
+        case ZigLLVM_hsail64:
+        case ZigLLVM_kalimba:
+        case ZigLLVM_le32:
+        case ZigLLVM_le64:
+        case ZigLLVM_mips:
+        case ZigLLVM_mips64:
+        case ZigLLVM_mips64el:
+        case ZigLLVM_mipsel:
+        case ZigLLVM_msp430:
+        case ZigLLVM_nios2:
+        case ZigLLVM_nvptx:
+        case ZigLLVM_nvptx64:
+        case ZigLLVM_ppc64le:
+        case ZigLLVM_r600:
+        case ZigLLVM_renderscript32:
+        case ZigLLVM_renderscript64:
+        case ZigLLVM_riscv32:
+        case ZigLLVM_riscv64:
+        case ZigLLVM_shave:
+        case ZigLLVM_sparc:
+        case ZigLLVM_sparcel:
+        case ZigLLVM_sparcv9:
+        case ZigLLVM_spir:
+        case ZigLLVM_spir64:
+        case ZigLLVM_systemz:
+        case ZigLLVM_tce:
+        case ZigLLVM_tcele:
+        case ZigLLVM_wasm32:
+        case ZigLLVM_wasm64:
+        case ZigLLVM_xcore:
+        case ZigLLVM_ppc:
+        case ZigLLVM_ppc64:
+            return false;
+    }
+    zig_unreachable();
 }

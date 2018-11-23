@@ -78,6 +78,10 @@ static inline Buf *buf_create_from_mem(const char *ptr, size_t len) {
     return buf;
 }
 
+static inline Buf *buf_create_from_slice(Slice<uint8_t> slice) {
+    return buf_create_from_mem((const char *)slice.ptr, slice.len);
+}
+
 static inline Buf *buf_create_from_str(const char *str) {
     return buf_create_from_mem(str, strlen(str));
 }
@@ -172,5 +176,20 @@ static inline void buf_upcase(Buf *buf) {
         buf_ptr(buf)[i] = (char)toupper(buf_ptr(buf)[i]);
     }
 }
+
+static inline Slice<uint8_t> buf_to_slice(Buf *buf) {
+    return Slice<uint8_t>{reinterpret_cast<uint8_t*>(buf_ptr(buf)), buf_len(buf)};
+}
+
+static inline void buf_replace(Buf* buf, char from, char to) {
+    const size_t count = buf_len(buf);
+    char* ptr = buf_ptr(buf);
+    for (size_t i = 0; i < count; ++i) {
+        char& l = ptr[i];
+        if (l == from)
+            l = to;
+    }
+}
+
 
 #endif

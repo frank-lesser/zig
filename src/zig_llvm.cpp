@@ -15,6 +15,11 @@
 
 #include "zig_llvm.h"
 
+#if __GNUC__ >= 8
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
+
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/IR/DIBuilder.h>
@@ -27,18 +32,26 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/InitializePasses.h>
 #include <llvm/MC/SubtargetFeature.h>
+#include <llvm/Object/Archive.h>
+#include <llvm/Object/ArchiveWriter.h>
 #include <llvm/PassRegistry.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetParser.h>
+#include <llvm/Support/Timer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Coroutines.h>
 #include <llvm/Transforms/IPO.h>
-#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/Scalar.h>
+#include <llvm/Transforms/Utils.h>
 
 #include <lld/Common/Driver.h>
+
+#if __GNUC__ >= 8
+#pragma GCC diagnostic pop
+#endif
 
 #include <new>
 
@@ -81,8 +94,11 @@ static const bool assertions_on = false;
 #endif
 
 bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
-        const char *filename, ZigLLVM_EmitOutputType output_type, char **error_message, bool is_debug)
+        const char *filename, ZigLLVM_EmitOutputType output_type, char **error_message, bool is_debug,
+        bool is_small, bool time_report)
 {
+    TimePassesIsEnabled = time_report;
+
     std::error_code EC;
     raw_fd_ostream dest(filename, EC, sys::fs::F_None);
     if (EC) {
@@ -100,7 +116,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
         return true;
     }
     PMBuilder->OptLevel = target_machine->getOptLevel();
-    PMBuilder->SizeLevel = 0;
+    PMBuilder->SizeLevel = is_small ? 2 : 0;
 
     PMBuilder->DisableTailCalls = is_debug;
     PMBuilder->DisableUnitAtATime = is_debug;
@@ -161,7 +177,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
                 abort();
         }
 
-        if (target_machine->addPassesToEmitFile(MPM, dest, ft)) {
+        if (target_machine->addPassesToEmitFile(MPM, dest, nullptr, ft)) {
             *error_message = strdup("TargetMachine can't emit a file of this type");
             return true;
         }
@@ -182,6 +198,9 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
         }
     }
 
+    if (time_report) {
+        TimerGroup::printAll(errs());
+    }
     return false;
 }
 
@@ -205,6 +224,20 @@ LLVMValueRef ZigLLVMBuildCall(LLVMBuilderRef B, LLVMValueRef Fn, LLVMValueRef *A
             break;
     }
     return wrap(unwrap(B)->Insert(call_inst));
+}
+
+LLVMValueRef ZigLLVMBuildMemCpy(LLVMBuilderRef B, LLVMValueRef Dst, unsigned DstAlign,
+        LLVMValueRef Src, unsigned SrcAlign, LLVMValueRef Size, bool isVolatile)
+{
+    CallInst *call_inst = unwrap(B)->CreateMemCpy(unwrap(Dst), DstAlign, unwrap(Src), SrcAlign, unwrap(Size), isVolatile);
+    return wrap(call_inst);
+}
+
+LLVMValueRef ZigLLVMBuildMemSet(LLVMBuilderRef B, LLVMValueRef Ptr, LLVMValueRef Val, LLVMValueRef Size,
+        unsigned Align, bool isVolatile)
+{
+    CallInst *call_inst = unwrap(B)->CreateMemSet(unwrap(Ptr), unwrap(Val), unwrap(Size), Align, isVolatile);
+    return wrap(call_inst);
 }
 
 void ZigLLVMFnSetSubprogram(LLVMValueRef fn, ZigLLVMDISubprogram *subprogram) {
@@ -438,6 +471,11 @@ ZigLLVMDIBuilder *ZigLLVMCreateDIBuilder(LLVMModuleRef module, bool allow_unreso
     if (di_builder == nullptr)
         return nullptr;
     return reinterpret_cast<ZigLLVMDIBuilder *>(di_builder);
+}
+
+void ZigLLVMDisposeDIBuilder(ZigLLVMDIBuilder *dbuilder) {
+    DIBuilder *di_builder = reinterpret_cast<DIBuilder *>(dbuilder);
+    delete di_builder;
 }
 
 void ZigLLVMSetCurrentDebugLocation(LLVMBuilderRef builder, int line, int column, ZigLLVMDIScope *scope) {
@@ -676,7 +714,7 @@ void ZigLLVMGetNativeTarget(ZigLLVM_ArchType *arch_type, ZigLLVM_SubArchType *su
         ZigLLVM_ObjectFormatType *oformat)
 {
     char *native_triple = LLVMGetDefaultTargetTriple();
-    Triple triple(native_triple);
+    Triple triple(Triple::normalize(native_triple));
 
     *arch_type = (ZigLLVM_ArchType)triple.getArch();
     *sub_arch_type = (ZigLLVM_SubArchType)triple.getSubArch();
@@ -692,6 +730,8 @@ const char *ZigLLVMGetSubArchTypeName(ZigLLVM_SubArchType sub_arch) {
     switch (sub_arch) {
         case ZigLLVM_NoSubArch:
             return "(none)";
+        case ZigLLVM_ARMSubArch_v8_4a:
+            return "v8_4a";
         case ZigLLVM_ARMSubArch_v8_3a:
             return "v8_3a";
         case ZigLLVM_ARMSubArch_v8_2a:
@@ -765,10 +805,12 @@ static AtomicOrdering mapFromLLVMOrdering(LLVMAtomicOrdering Ordering) {
 
 LLVMValueRef ZigLLVMBuildCmpXchg(LLVMBuilderRef builder, LLVMValueRef ptr, LLVMValueRef cmp,
         LLVMValueRef new_val, LLVMAtomicOrdering success_ordering,
-        LLVMAtomicOrdering failure_ordering)
+        LLVMAtomicOrdering failure_ordering, bool is_weak)
 {
-    return wrap(unwrap(builder)->CreateAtomicCmpXchg(unwrap(ptr), unwrap(cmp), unwrap(new_val),
-                mapFromLLVMOrdering(success_ordering), mapFromLLVMOrdering(failure_ordering)));
+    AtomicCmpXchgInst *inst = unwrap(builder)->CreateAtomicCmpXchg(unwrap(ptr), unwrap(cmp),
+                unwrap(new_val), mapFromLLVMOrdering(success_ordering), mapFromLLVMOrdering(failure_ordering));
+    inst->setWeak(is_weak);
+    return wrap(inst);
 }
 
 LLVMValueRef ZigLLVMBuildNSWShl(LLVMBuilderRef builder, LLVMValueRef LHS, LLVMValueRef RHS,
@@ -814,6 +856,42 @@ class MyOStream: public raw_ostream {
         size_t pos;
 };
 
+bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,
+        ZigLLVM_OSType os_type)
+{
+    object::Archive::Kind kind;
+    switch (os_type) {
+        case ZigLLVM_Win32:
+            // For some reason llvm-lib passes K_GNU on windows.
+            // See lib/ToolDrivers/llvm-lib/LibDriver.cpp:168 in libDriverMain
+            kind = object::Archive::K_GNU;
+            break;
+        case ZigLLVM_Linux:
+            kind = object::Archive::K_GNU;
+            break;
+        case ZigLLVM_Darwin:
+        case ZigLLVM_IOS:
+            kind = object::Archive::K_DARWIN;
+            break;
+        case ZigLLVM_OpenBSD:
+        case ZigLLVM_FreeBSD:
+            kind = object::Archive::K_BSD;
+            break;
+        default:
+            kind = object::Archive::K_GNU;
+    }
+    SmallVector<NewArchiveMember, 4> new_members;
+    for (size_t i = 0; i < file_name_count; i += 1) {
+        Expected<NewArchiveMember> new_member = NewArchiveMember::getFile(file_names[i], true);
+        Error err = new_member.takeError();
+        if (err) return true;
+        new_members.push_back(std::move(*new_member));
+    }
+    Error err = writeArchive(archive_name, new_members, true, kind, true, false, nullptr);
+    if (err) return true;
+    return false;
+}
+
 
 bool ZigLLDLink(ZigLLVM_ObjectFormatType oformat, const char **args, size_t arg_count,
         void (*append_diagnostic)(void *, const char *, size_t), void *context)
@@ -833,10 +911,10 @@ bool ZigLLDLink(ZigLLVM_ObjectFormatType oformat, const char **args, size_t arg_
             return lld::elf::link(array_ref_args, false, diag);
 
         case ZigLLVM_MachO:
-            return lld::mach_o::link(array_ref_args, diag);
+            return lld::mach_o::link(array_ref_args, false, diag);
 
         case ZigLLVM_Wasm:
-            assert(false); // TODO ZigLLDLink for Wasm
+            return lld::wasm::link(array_ref_args, false, diag);
     }
     assert(false); // unreachable
     abort();

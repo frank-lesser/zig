@@ -21,6 +21,7 @@
 #define ATTRIBUTE_PRINTF(a, b)
 #define ATTRIBUTE_RETURNS_NOALIAS __declspec(restrict)
 #define ATTRIBUTE_NORETURN __declspec(noreturn)
+#define ATTRIBUTE_MUST_USE
 
 #else
 
@@ -28,8 +29,11 @@
 #define ATTRIBUTE_PRINTF(a, b) __attribute__((format(printf, a, b)))
 #define ATTRIBUTE_RETURNS_NOALIAS __attribute__((__malloc__))
 #define ATTRIBUTE_NORETURN __attribute__((noreturn))
+#define ATTRIBUTE_MUST_USE __attribute__((warn_unused_result))
 
 #endif
+
+#include "softfloat.hpp"
 
 #define BREAKPOINT __asm("int $0x03")
 
@@ -38,11 +42,11 @@ ATTRIBUTE_NORETURN
 ATTRIBUTE_PRINTF(1, 2)
 void zig_panic(const char *format, ...);
 
-ATTRIBUTE_COLD
-ATTRIBUTE_NORETURN
-static inline void zig_unreachable(void) {
-    zig_panic("unreachable");
-}
+#ifdef WIN32
+#define __func__ __FUNCTION__
+#endif
+
+#define zig_unreachable() zig_panic("unreachable: %s:%s:%d", __FILE__, __func__, __LINE__)
 
 #if defined(_MSC_VER)
 static inline int clzll(unsigned long long mask) {
@@ -65,6 +69,11 @@ static inline int clzll(unsigned long long mask) {
 
 template<typename T>
 ATTRIBUTE_RETURNS_NOALIAS static inline T *allocate_nonzero(size_t count) {
+#ifndef NDEBUG
+    // make behavior when size == 0 portable
+    if (count == 0)
+        return nullptr;
+#endif
     T *ptr = reinterpret_cast<T*>(malloc(count * sizeof(T)));
     if (!ptr)
         zig_panic("allocation failed");
@@ -73,6 +82,11 @@ ATTRIBUTE_RETURNS_NOALIAS static inline T *allocate_nonzero(size_t count) {
 
 template<typename T>
 ATTRIBUTE_RETURNS_NOALIAS static inline T *allocate(size_t count) {
+#ifndef NDEBUG
+    // make behavior when size == 0 portable
+    if (count == 0)
+        return nullptr;
+#endif
     T *ptr = reinterpret_cast<T*>(calloc(count, sizeof(T)));
     if (!ptr)
         zig_panic("allocation failed");
@@ -93,9 +107,7 @@ static inline void safe_memcpy(T *dest, const T *src, size_t count) {
 
 template<typename T>
 static inline T *reallocate(T *old, size_t old_count, size_t new_count) {
-    T *ptr = reinterpret_cast<T*>(realloc(old, new_count * sizeof(T)));
-    if (!ptr)
-        zig_panic("allocation failed");
+    T *ptr = reallocate_nonzero(old, old_count, new_count);
     if (new_count > old_count) {
         memset(&ptr[old_count], 0, (new_count - old_count) * sizeof(T));
     }
@@ -104,6 +116,11 @@ static inline T *reallocate(T *old, size_t old_count, size_t new_count) {
 
 template<typename T>
 static inline T *reallocate_nonzero(T *old, size_t old_count, size_t new_count) {
+#ifndef NDEBUG
+    // make behavior when size == 0 portable
+    if (new_count == 0 && old == nullptr)
+        return nullptr;
+#endif
     T *ptr = reinterpret_cast<T*>(realloc(old, new_count * sizeof(T)));
     if (!ptr)
         zig_panic("allocation failed");
@@ -141,6 +158,17 @@ static inline bool is_power_of_2(uint64_t x) {
     return x != 0 && ((x & (~x + 1)) == x);
 }
 
+static inline uint64_t round_to_next_power_of_2(uint64_t x) {
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    x |= x >> 32;
+    return x + 1;
+}
+
 uint32_t int_hash(int i);
 bool int_eq(int a, int b);
 uint32_t uint64_hash(uint64_t i);
@@ -151,5 +179,130 @@ bool ptr_eq(const void *a, const void *b);
 static inline uint8_t log2_u64(uint64_t x) {
     return (63 - clzll(x));
 }
+
+static inline float16_t zig_double_to_f16(double x) {
+    float64_t y;
+    static_assert(sizeof(x) == sizeof(y), "");
+    memcpy(&y, &x, sizeof(x));
+    return f64_to_f16(y);
+}
+
+
+// Return value is safe to coerce to float even when |x| is NaN or Infinity.
+static inline double zig_f16_to_double(float16_t x) {
+    float64_t y = f16_to_f64(x);
+    double z;
+    static_assert(sizeof(y) == sizeof(z), "");
+    memcpy(&z, &y, sizeof(y));
+    return z;
+}
+
+template<typename T>
+struct Optional {
+    T value;
+    bool is_some;
+
+    static inline Optional<T> some(T x) {
+        return {x, true};
+    }
+
+    static inline Optional<T> none() {
+        return {{}, false};
+    }
+
+    inline bool unwrap(T *res) {
+        *res = value;
+        return is_some;
+    }
+};
+
+template<typename T>
+struct Slice {
+    T *ptr;
+    size_t len;
+
+    inline T &at(size_t i) {
+        assert(i < len);
+        return &ptr[i];
+    }
+
+    inline Slice<T> slice(size_t start, size_t end) {
+        assert(end <= len);
+        assert(end >= start);
+        return {
+            ptr + start,
+            end - start,
+        };
+    }
+
+    inline Slice<T> sliceFrom(size_t start) {
+        assert(start <= len);
+        return {
+            ptr + start,
+            len - start,
+        };
+    }
+
+    static inline Slice<T> alloc(size_t n) {
+        return {allocate_nonzero<T>(n), n};
+    }
+};
+
+template<typename T, size_t n>
+struct Array {
+    static const size_t len = n;
+    T items[n];
+
+    inline Slice<T> slice() {
+        return {
+            &items[0],
+            len,
+        };
+    }
+};
+
+static inline Slice<uint8_t> str(const char *literal) {
+    return {(uint8_t*)(literal), strlen(literal)};
+}
+
+// Ported from std/mem.zig
+template<typename T>
+static inline bool memEql(Slice<T> a, Slice<T> b) {
+    if (a.len != b.len)
+        return false;
+    for (size_t i = 0; i < a.len; i += 1) {
+        if (a.ptr[i] != b.ptr[i])
+            return false;
+    }
+    return true;
+}
+
+// Ported from std/mem.zig
+template<typename T>
+static inline bool memStartsWith(Slice<T> haystack, Slice<T> needle) {
+    if (needle.len > haystack.len)
+        return false;
+    return memEql(haystack.slice(0, needle.len), needle);
+}
+
+// Ported from std/mem.zig
+template<typename T>
+static inline void memCopy(Slice<T> dest, Slice<T> src) {
+    assert(dest.len >= src.len);
+    memcpy(dest.ptr, src.ptr, src.len * sizeof(T));
+}
+
+// Ported from std/mem.zig.
+// Coordinate struct fields with memSplit function
+struct SplitIterator {
+    size_t index;
+    Slice<uint8_t> buffer;
+    Slice<uint8_t> split_bytes;
+};
+
+bool SplitIterator_isSplitByte(SplitIterator *self, uint8_t byte);
+Optional< Slice<uint8_t> > SplitIterator_next(SplitIterator *self);
+Slice<uint8_t> SplitIterator_rest(SplitIterator *self);
+SplitIterator memSplit(Slice<uint8_t> buffer, Slice<uint8_t> split_bytes);
 
 #endif

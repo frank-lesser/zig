@@ -5,7 +5,6 @@
  * See http://opensource.org/licenses/MIT
  */
 
-#include "link.hpp"
 #include "os.hpp"
 #include "config.h"
 #include "codegen.hpp"
@@ -13,7 +12,6 @@
 
 struct LinkJob {
     CodeGen *codegen;
-    Buf out_file;
     ZigList<const char *> args;
     bool link_in_crt;
     HashMap<Buf *, bool, buf_hash, buf_eql_buf> rpath_table;
@@ -31,12 +29,22 @@ static const char *get_libc_static_file(CodeGen *g, const char *file) {
     return buf_ptr(out_buf);
 }
 
-static Buf *build_o_raw(CodeGen *parent_gen, const char *oname, Buf *full_path) {
+static Buf *build_a_raw(CodeGen *parent_gen, const char *aname, Buf *full_path) {
     ZigTarget *child_target = parent_gen->is_native_target ? nullptr : &parent_gen->zig_target;
-    CodeGen *child_gen = codegen_create(full_path, child_target, OutTypeObj, parent_gen->build_mode,
-        parent_gen->zig_lib_dir);
 
-    child_gen->want_h_file = false;
+    // The Mach-O LLD code is not well maintained, and trips an assertion
+    // when we link compiler_rt and builtin as libraries rather than objects.
+    // Here we workaround this by having compiler_rt and builtin be objects.
+    // TODO write our own linker. https://github.com/ziglang/zig/issues/1535
+    OutType child_out_type = OutTypeLib;
+    if (parent_gen->zig_target.os == OsMacOSX) {
+        child_out_type = OutTypeObj;
+    }
+
+    CodeGen *child_gen = codegen_create(full_path, child_target, child_out_type,
+        parent_gen->build_mode, parent_gen->zig_lib_dir);
+
+    child_gen->out_h_path = nullptr;
     child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
     child_gen->verbose_ast = parent_gen->verbose_ast;
     child_gen->verbose_link = parent_gen->verbose_link;
@@ -44,42 +52,36 @@ static Buf *build_o_raw(CodeGen *parent_gen, const char *oname, Buf *full_path) 
     child_gen->verbose_llvm_ir = parent_gen->verbose_llvm_ir;
     child_gen->verbose_cimport = parent_gen->verbose_cimport;
 
-    codegen_set_cache_dir(child_gen, parent_gen->cache_dir);
-
     codegen_set_strip(child_gen, parent_gen->strip_debug_symbols);
-    codegen_set_is_static(child_gen, parent_gen->is_static);
+    codegen_set_is_static(child_gen, true);
+    child_gen->disable_pic = parent_gen->disable_pic;
 
-    codegen_set_out_name(child_gen, buf_create_from_str(oname));
+    codegen_set_out_name(child_gen, buf_create_from_str(aname));
 
     codegen_set_errmsg_color(child_gen, parent_gen->err_color);
 
     codegen_set_mmacosx_version_min(child_gen, parent_gen->mmacosx_version_min);
     codegen_set_mios_version_min(child_gen, parent_gen->mios_version_min);
 
-    for (size_t i = 0; i < parent_gen->link_libs_list.length; i += 1) {
-        LinkLib *link_lib = parent_gen->link_libs_list.at(i);
-        LinkLib *new_link_lib = codegen_add_link_lib(child_gen, link_lib->name);
-        new_link_lib->provided_explicitly = link_lib->provided_explicitly;
+    // This is so that compiler_rt and builtin libraries know whether they
+    // will eventually be linked with libc. They make different decisions
+    // about what to export depending on whether libc is linked.
+    if (parent_gen->libc_link_lib != nullptr) {
+        LinkLib *new_link_lib = codegen_add_link_lib(child_gen, parent_gen->libc_link_lib->name);
+        new_link_lib->provided_explicitly = parent_gen->libc_link_lib->provided_explicitly;
     }
 
-    codegen_build(child_gen);
-    const char *o_ext = target_o_file_ext(&child_gen->zig_target);
-    Buf *o_out_name = buf_sprintf("%s%s", oname, o_ext);
-    Buf *output_path = buf_alloc();
-    os_path_join(parent_gen->cache_dir, o_out_name, output_path);
-    codegen_link(child_gen, buf_ptr(output_path));
-
-    codegen_destroy(child_gen);
-
-    return output_path;
+    child_gen->enable_cache = true;
+    codegen_build_and_link(child_gen);
+    return &child_gen->output_file_path;
 }
 
-static Buf *build_o(CodeGen *parent_gen, const char *oname) {
-    Buf *source_basename = buf_sprintf("%s.zig", oname);
+static Buf *build_a(CodeGen *parent_gen, const char *aname) {
+    Buf *source_basename = buf_sprintf("%s.zig", aname);
     Buf *full_path = buf_alloc();
     os_path_join(parent_gen->zig_std_special_dir, source_basename, full_path);
 
-    return build_o_raw(parent_gen, oname, full_path);
+    return build_a_raw(parent_gen, aname, full_path);
 }
 
 static Buf *build_compiler_rt(CodeGen *parent_gen) {
@@ -88,7 +90,7 @@ static Buf *build_compiler_rt(CodeGen *parent_gen) {
     Buf *full_path = buf_alloc();
     os_path_join(dir_path, buf_create_from_str("index.zig"), full_path);
 
-    return build_o_raw(parent_gen, "compiler_rt", full_path);
+    return build_a_raw(parent_gen, "compiler_rt", full_path);
 }
 
 static const char *get_darwin_arch_string(const ZigTarget *t) {
@@ -208,7 +210,9 @@ static Buf *get_dynamic_linker_path(CodeGen *g) {
 static void construct_linker_job_elf(LinkJob *lj) {
     CodeGen *g = lj->codegen;
 
-    if (lj->link_in_crt) {
+    lj->args.append("-error-limit=0");
+
+    if (g->libc_link_lib != nullptr) {
         find_libc_lib_path(g);
     }
 
@@ -217,6 +221,9 @@ static void construct_linker_job_elf(LinkJob *lj) {
         lj->args.append(g->linker_script);
     }
 
+    if (g->no_rosegment_workaround) {
+        lj->args.append("--no-rosegment");
+    }
     lj->args.append("--gc-sections");
 
     lj->args.append("-m");
@@ -236,15 +243,15 @@ static void construct_linker_job_elf(LinkJob *lj) {
     } else if (shared) {
         lj->args.append("-shared");
 
-        if (buf_len(&lj->out_file) == 0) {
-            buf_appendf(&lj->out_file, "lib%s.so.%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".%" ZIG_PRI_usize "",
+        if (buf_len(&g->output_file_path) == 0) {
+            buf_appendf(&g->output_file_path, "lib%s.so.%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".%" ZIG_PRI_usize "",
                     buf_ptr(g->root_out_name), g->version_major, g->version_minor, g->version_patch);
         }
         soname = buf_sprintf("lib%s.so.%" ZIG_PRI_usize "", buf_ptr(g->root_out_name), g->version_major);
     }
 
     lj->args.append("-o");
-    lj->args.append(buf_ptr(&lj->out_file));
+    lj->args.append(buf_ptr(&g->output_file_path));
 
     if (lj->link_in_crt) {
         const char *crt1o;
@@ -322,10 +329,13 @@ static void construct_linker_job_elf(LinkJob *lj) {
         lj->args.append((const char *)buf_ptr(g->link_objects.at(i)));
     }
 
-    if (g->libc_link_lib == nullptr && (g->out_type == OutTypeExe || g->out_type == OutTypeLib)) {
-        Buf *builtin_o_path = build_o(g, "builtin");
-        lj->args.append(buf_ptr(builtin_o_path));
+    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && !g->is_static)) {
+        if (g->libc_link_lib == nullptr) {
+            Buf *builtin_a_path = build_a(g, "builtin");
+            lj->args.append(buf_ptr(builtin_a_path));
+        }
 
+        // sometimes libgcc is missing stuff, so we still build compiler_rt and rely on weak linkage
         Buf *compiler_rt_o_path = build_compiler_rt(g);
         lj->args.append(buf_ptr(compiler_rt_o_path));
     }
@@ -388,6 +398,20 @@ static void construct_linker_job_elf(LinkJob *lj) {
     }
 }
 
+static void construct_linker_job_wasm(LinkJob *lj) {
+    CodeGen *g = lj->codegen;
+
+    lj->args.append("-error-limit=0");
+    lj->args.append("--no-entry");  // So lld doesn't look for _start.
+    lj->args.append("-o");
+    lj->args.append(buf_ptr(&g->output_file_path));
+
+    // .o files
+    for (size_t i = 0; i < g->link_objects.length; i += 1) {
+        lj->args.append((const char *)buf_ptr(g->link_objects.at(i)));
+    }
+}
+
 //static bool is_target_cyg_mingw(const ZigTarget *target) {
 //    return (target->os == ZigLLVM_Win32 && target->env_type == ZigLLVM_Cygnus) ||
 //        (target->os == ZigLLVM_Win32 && target->env_type == ZigLLVM_GNU);
@@ -416,7 +440,9 @@ static bool zig_lld_link(ZigLLVM_ObjectFormatType oformat, const char **args, si
 static void construct_linker_job_coff(LinkJob *lj) {
     CodeGen *g = lj->codegen;
 
-    if (lj->link_in_crt) {
+    lj->args.append("/ERRORLIMIT:0");
+
+    if (g->libc_link_lib != nullptr) {
         find_libc_lib_path(g);
     }
 
@@ -424,6 +450,11 @@ static void construct_linker_job_coff(LinkJob *lj) {
 
     if (!g->strip_debug_symbols) {
         lj->args.append("-DEBUG");
+    }
+
+    if (g->out_type == OutTypeExe) {
+        // TODO compile time stack upper bound detection
+        lj->args.append("/STACK:16777216");
     }
 
     coff_append_machine_arg(g, &lj->args);
@@ -461,7 +492,7 @@ static void construct_linker_job_coff(LinkJob *lj) {
     //    }
     //}
 
-    lj->args.append(buf_ptr(buf_sprintf("-OUT:%s", buf_ptr(&lj->out_file))));
+    lj->args.append(buf_ptr(buf_sprintf("-OUT:%s", buf_ptr(&g->output_file_path))));
 
     if (g->libc_link_lib != nullptr) {
         lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", buf_ptr(g->msvc_lib_dir))));
@@ -532,13 +563,13 @@ static void construct_linker_job_coff(LinkJob *lj) {
         lj->args.append((const char *)buf_ptr(g->link_objects.at(i)));
     }
 
-    if (g->out_type == OutTypeExe || g->out_type == OutTypeLib) {
+    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && !g->is_static)) {
         if (g->libc_link_lib == nullptr) {
-            Buf *builtin_o_path = build_o(g, "builtin");
-            lj->args.append(buf_ptr(builtin_o_path));
+            Buf *builtin_a_path = build_a(g, "builtin");
+            lj->args.append(buf_ptr(builtin_a_path));
         }
 
-        // msvc compiler_rt is missing some stuff, so we still build it and rely on LinkOnce
+        // msvc compiler_rt is missing some stuff, so we still build it and rely on weak linkage
         Buf *compiler_rt_o_path = build_compiler_rt(g);
         lj->args.append(buf_ptr(compiler_rt_o_path));
     }
@@ -568,11 +599,11 @@ static void construct_linker_job_coff(LinkJob *lj) {
             buf_appendf(def_contents, "\n");
 
             Buf *def_path = buf_alloc();
-            os_path_join(g->cache_dir, buf_sprintf("%s.def", buf_ptr(link_lib->name)), def_path);
+            os_path_join(&g->artifact_dir, buf_sprintf("%s.def", buf_ptr(link_lib->name)), def_path);
             os_write_file(def_path, def_contents);
 
             Buf *generated_lib_path = buf_alloc();
-            os_path_join(g->cache_dir, buf_sprintf("%s.lib", buf_ptr(link_lib->name)), generated_lib_path);
+            os_path_join(&g->artifact_dir, buf_sprintf("%s.lib", buf_ptr(link_lib->name)), generated_lib_path);
 
             gen_lib_args.resize(0);
             gen_lib_args.append("link");
@@ -747,6 +778,8 @@ static bool darwin_version_lt(DarwinPlatform *platform, int major, int minor) {
 static void construct_linker_job_macho(LinkJob *lj) {
     CodeGen *g = lj->codegen;
 
+    // LLD MACH-O has no error limit option.
+    //lj->args.append("-error-limit=0");
     lj->args.append("-demangle");
 
     if (g->linker_rdynamic) {
@@ -780,8 +813,8 @@ static void construct_linker_job_macho(LinkJob *lj) {
             //lj->args.append("-install_name");
             //lj->args.append(buf_ptr(dylib_install_name));
 
-            if (buf_len(&lj->out_file) == 0) {
-                buf_appendf(&lj->out_file, "lib%s.%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".dylib",
+            if (buf_len(&g->output_file_path) == 0) {
+                buf_appendf(&g->output_file_path, "lib%s.%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".%" ZIG_PRI_usize ".dylib",
                     buf_ptr(g->root_out_name), g->version_major, g->version_minor, g->version_patch);
             }
         }
@@ -815,13 +848,13 @@ static void construct_linker_job_macho(LinkJob *lj) {
     }
 
     lj->args.append("-o");
-    lj->args.append(buf_ptr(&lj->out_file));
+    lj->args.append(buf_ptr(&g->output_file_path));
 
     for (size_t i = 0; i < g->rpath_list.length; i += 1) {
         Buf *rpath = g->rpath_list.at(i);
         add_rpath(lj, rpath);
     }
-    add_rpath(lj, &lj->out_file);
+    add_rpath(lj, &g->output_file_path);
 
     if (shared) {
         lj->args.append("-headerpad_max_install_names");
@@ -864,7 +897,7 @@ static void construct_linker_job_macho(LinkJob *lj) {
     }
 
     // compiler_rt on darwin is missing some stuff, so we still build it and rely on LinkOnce
-    if (g->out_type == OutTypeExe || g->out_type == OutTypeLib) {
+    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && !g->is_static)) {
         Buf *compiler_rt_o_path = build_compiler_rt(g);
         lj->args.append(buf_ptr(compiler_rt_o_path));
     }
@@ -882,7 +915,7 @@ static void construct_linker_job_macho(LinkJob *lj) {
                 if (strchr(buf_ptr(link_lib->name), '/') == nullptr) {
                     Buf *arg = buf_sprintf("-l%s", buf_ptr(link_lib->name));
                     lj->args.append(buf_ptr(arg));
-            } else {
+                } else {
                     lj->args.append(buf_ptr(link_lib->name));
                 }
             }
@@ -921,11 +954,12 @@ static void construct_linker_job(LinkJob *lj) {
         case ZigLLVM_MachO:
             return construct_linker_job_macho(lj);
         case ZigLLVM_Wasm:
-            zig_panic("TODO link wasm");
+            return construct_linker_job_wasm(lj);
     }
 }
 
-void codegen_link(CodeGen *g, const char *out_file) {
+void codegen_link(CodeGen *g) {
+    assert(g->out_type != OutTypeObj);
     codegen_add_time_event(g, "Build Dependencies");
 
     LinkJob lj = {0};
@@ -936,11 +970,6 @@ void codegen_link(CodeGen *g, const char *out_file) {
 
     lj.rpath_table.init(4);
     lj.codegen = g;
-    if (out_file) {
-        buf_init_from_str(&lj.out_file, out_file);
-    } else {
-        buf_resize(&lj.out_file, 0);
-    }
 
     if (g->verbose_llvm_ir) {
         fprintf(stderr, "\nOptimization:\n");
@@ -949,34 +978,17 @@ void codegen_link(CodeGen *g, const char *out_file) {
         LLVMDumpModule(g->module);
     }
 
-    bool override_out_file = (buf_len(&lj.out_file) != 0);
-    if (!override_out_file) {
-        assert(g->root_out_name);
-
-        buf_init_from_buf(&lj.out_file, g->root_out_name);
-        if (g->out_type == OutTypeExe) {
-            buf_append_str(&lj.out_file, target_exe_file_ext(&g->zig_target));
-        }
-    }
-
-    if (g->out_type == OutTypeObj) {
-        if (override_out_file) {
-            assert(g->link_objects.length == 1);
-            Buf *o_file_path = g->link_objects.at(0);
-            int err;
-            if ((err = os_rename(o_file_path, &lj.out_file))) {
-                zig_panic("unable to rename object file %s into final output %s: %s", buf_ptr(o_file_path), buf_ptr(&lj.out_file), err_str(err));
-            }
-        }
-        return;
-    }
-
     if (g->out_type == OutTypeLib && g->is_static) {
-        // invoke `ar`
-        // example:
-        // # static link into libfoo.a
-        // ar rcs libfoo.a foo1.o foo2.o
-        zig_panic("TODO invoke ar");
+        ZigList<const char *> file_names = {};
+        for (size_t i = 0; i < g->link_objects.length; i += 1) {
+            file_names.append((const char *)buf_ptr(g->link_objects.at(i)));
+        }
+        ZigLLVM_OSType os_type = get_llvm_os_type(g->zig_target.os);
+        codegen_add_time_event(g, "LLVM Link");
+        if (ZigLLVMWriteArchive(buf_ptr(&g->output_file_path), file_names.items, file_names.length, os_type)) {
+            fprintf(stderr, "Unable to write archive '%s'\n", buf_ptr(&g->output_file_path));
+            exit(1);
+        }
         return;
     }
 
@@ -996,10 +1008,18 @@ void codegen_link(CodeGen *g, const char *out_file) {
     Buf diag = BUF_INIT;
 
     codegen_add_time_event(g, "LLVM Link");
-    if (!zig_lld_link(g->zig_target.oformat, lj.args.items, lj.args.length, &diag)) {
+    if (g->system_linker_hack && g->zig_target.os == OsMacOSX) {
+        Termination term;
+        ZigList<const char *> args = {};
+        for (size_t i = 1; i < lj.args.length; i += 1) {
+            args.append(lj.args.at(i));
+        }
+        os_spawn_process("ld", args, &term);
+        if (term.how != TerminationIdClean || term.code != 0) {
+            exit(1);
+        }
+    } else if (!zig_lld_link(g->zig_target.oformat, lj.args.items, lj.args.length, &diag)) {
         fprintf(stderr, "%s\n", buf_ptr(&diag));
         exit(1);
     }
-
-    codegen_add_time_event(g, "Done");
 }

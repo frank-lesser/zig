@@ -7,8 +7,8 @@
 
 #include "error.hpp"
 
-const char *err_str(int err) {
-    switch ((enum Error)err) {
+const char *err_str(Error err) {
+    switch (err) {
         case ErrorNone: return "(no error)";
         case ErrorNoMem: return "out of memory";
         case ErrorInvalidFormat: return "invalid format";
@@ -27,6 +27,12 @@ const char *err_str(int err) {
         case ErrorNegativeDenominator: return "negative denominator";
         case ErrorShiftedOutOneBits: return "exact shift shifted out one bits";
         case ErrorCCompileErrors: return "C compile errors";
+        case ErrorEndOfFile: return "end of file";
+        case ErrorIsDir: return "is directory";
+        case ErrorUnsupportedOperatingSystem: return "unsupported operating system";
+        case ErrorSharingViolation: return "sharing violation";
+        case ErrorPipeBusy: return "pipe busy";
+        case ErrorPrimitiveTypeNotFound: return "primitive type not found";
     }
     return "(invalid error)";
 }

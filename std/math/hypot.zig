@@ -8,6 +8,7 @@
 const std = @import("../index.zig");
 const math = std.math;
 const assert = std.debug.assert;
+const maxInt = std.math.maxInt;
 
 pub fn hypot(comptime T: type, x: T, y: T) T {
     return switch (T) {
@@ -21,8 +22,8 @@ fn hypot32(x: f32, y: f32) f32 {
     var ux = @bitCast(u32, x);
     var uy = @bitCast(u32, y);
 
-    ux &= @maxValue(u32) >> 1;
-    uy &= @maxValue(u32) >> 1;
+    ux &= maxInt(u32) >> 1;
+    uy &= maxInt(u32) >> 1;
     if (ux < uy) {
         const tmp = ux;
         ux = uy;
@@ -39,34 +40,34 @@ fn hypot32(x: f32, y: f32) f32 {
     }
 
     var z: f32 = 1.0;
-    if (ux >= (0x7F+60) << 23) {
+    if (ux >= (0x7F + 60) << 23) {
         z = 0x1.0p90;
         xx *= 0x1.0p-90;
         yy *= 0x1.0p-90;
-    } else if (uy < (0x7F-60) << 23) {
+    } else if (uy < (0x7F - 60) << 23) {
         z = 0x1.0p-90;
         xx *= 0x1.0p-90;
         yy *= 0x1.0p-90;
     }
 
-    return z * math.sqrt(f32(f64(x) * x + f64(y) * y));
+    return z * math.sqrt(@floatCast(f32, f64(x) * x + f64(y) * y));
 }
 
-fn sq(hi: &f64, lo: &f64, x: f64) void {
+fn sq(hi: *f64, lo: *f64, x: f64) void {
     const split: f64 = 0x1.0p27 + 1.0;
     const xc = x * split;
     const xh = x - xc + xc;
     const xl = x - xh;
-    *hi = x * x;
-    *lo = xh * xh - *hi + 2 * xh * xl + xl * xl;
+    hi.* = x * x;
+    lo.* = xh * xh - hi.* + 2 * xh * xl + xl * xl;
 }
 
 fn hypot64(x: f64, y: f64) f64 {
     var ux = @bitCast(u64, x);
     var uy = @bitCast(u64, y);
 
-    ux &= @maxValue(u64) >> 1;
-    uy &= @maxValue(u64) >> 1;
+    ux &= maxInt(u64) >> 1;
+    uy &= maxInt(u64) >> 1;
     if (ux < uy) {
         const tmp = ux;
         ux = uy;

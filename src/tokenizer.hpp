@@ -28,6 +28,7 @@ enum TokenId {
     TokenIdBitShiftRight,
     TokenIdBitShiftRightEq,
     TokenIdBitXorEq,
+    TokenIdBracketStarBracket,
     TokenIdCharLiteral,
     TokenIdCmpEq,
     TokenIdCmpGreaterOrEq,
@@ -40,7 +41,6 @@ enum TokenId {
     TokenIdDash,
     TokenIdDivEq,
     TokenIdDot,
-    TokenIdDoubleQuestion,
     TokenIdEllipsis2,
     TokenIdEllipsis3,
     TokenIdEof,
@@ -50,6 +50,7 @@ enum TokenId {
     TokenIdIntLiteral,
     TokenIdKeywordAlign,
     TokenIdKeywordAnd,
+    TokenIdKeywordAnyerror,
     TokenIdKeywordAsm,
     TokenIdKeywordAsync,
     TokenIdKeywordAwait,
@@ -75,18 +76,18 @@ enum TokenId {
     TokenIdKeywordNoAlias,
     TokenIdKeywordNull,
     TokenIdKeywordOr,
+    TokenIdKeywordOrElse,
     TokenIdKeywordPacked,
     TokenIdKeywordPromise,
     TokenIdKeywordPub,
     TokenIdKeywordResume,
     TokenIdKeywordReturn,
-    TokenIdKeywordSection,
+    TokenIdKeywordLinkSection,
     TokenIdKeywordStdcallCC,
     TokenIdKeywordStruct,
     TokenIdKeywordSuspend,
     TokenIdKeywordSwitch,
     TokenIdKeywordTest,
-    TokenIdKeywordThis,
     TokenIdKeywordTrue,
     TokenIdKeywordTry,
     TokenIdKeywordUndefined,
@@ -99,8 +100,7 @@ enum TokenId {
     TokenIdLBrace,
     TokenIdLBracket,
     TokenIdLParen,
-    TokenIdMaybe,
-    TokenIdMaybeAssign,
+    TokenIdQuestion,
     TokenIdMinusEq,
     TokenIdMinusPercent,
     TokenIdMinusPercentEq,
@@ -126,6 +126,7 @@ enum TokenId {
     TokenIdTimesEq,
     TokenIdTimesPercent,
     TokenIdTimesPercentEq,
+    TokenIdCount,
 };
 
 struct TokenFloatLit {
@@ -169,6 +170,8 @@ struct Token {
         TokenCharLit char_lit;
     } data;
 };
+// work around conflicting name Token which is also found in libclang
+typedef Token ZigToken;
 
 struct Tokenization {
     ZigList<Token> *tokens;

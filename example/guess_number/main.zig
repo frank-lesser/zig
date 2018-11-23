@@ -6,8 +6,7 @@ const os = std.os;
 
 pub fn main() !void {
     var stdout_file = try io.getStdOut();
-    var stdout_file_stream = io.FileOutStream.init(&stdout_file);
-    const stdout = &stdout_file_stream.stream;
+    const stdout = &stdout_file.outStream().stream;
 
     try stdout.print("Welcome to the Guess Number Game in Zig.\n");
 
@@ -23,7 +22,7 @@ pub fn main() !void {
 
     while (true) {
         try stdout.print("\nGuess a number between 1 and 100: ");
-        var line_buf : [20]u8 = undefined;
+        var line_buf: [20]u8 = undefined;
 
         const line_len = io.readLine(line_buf[0..]) catch |err| switch (err) {
             error.InputTooLong => {

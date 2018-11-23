@@ -10,6 +10,7 @@
 
 #include "list.hpp"
 #include "buffer.hpp"
+#include "cache_hash.hpp"
 #include "zig_llvm.h"
 #include "hash_map.hpp"
 #include "errmsg.hpp"
@@ -20,12 +21,12 @@
 
 struct AstNode;
 struct ImportTableEntry;
-struct FnTableEntry;
+struct ZigFn;
 struct Scope;
 struct ScopeBlock;
 struct ScopeFnDef;
-struct TypeTableEntry;
-struct VariableTableEntry;
+struct ZigType;
+struct ZigVar;
 struct ErrorTableEntry;
 struct BuiltinFnEntry;
 struct TypeStructField;
@@ -40,9 +41,17 @@ struct Tld;
 struct TldExport;
 struct IrAnalyze;
 
+enum X64CABIClass {
+    X64CABIClass_Unknown,
+    X64CABIClass_MEMORY,
+    X64CABIClass_INTEGER,
+    X64CABIClass_SSE,
+};
+
 struct IrExecutable {
     ZigList<IrBasicBlock *> basic_block_list;
     Buf *name;
+    ZigFn *name_fn;
     size_t mem_slot_count;
     size_t next_debug_id;
     size_t *backward_branch_count;
@@ -50,7 +59,7 @@ struct IrExecutable {
     bool invalid;
     bool is_inline;
     bool is_generic_instantiation;
-    FnTableEntry *fn_entry;
+    ZigFn *fn_entry;
     Buf *c_import_buf;
     AstNode *source_node;
     IrExecutable *parent_exec;
@@ -60,7 +69,7 @@ struct IrExecutable {
     ZigList<Tld *> tld_list;
 
     IrInstruction *coro_handle;
-    IrInstruction *coro_awaiter_field_ptr; // this one is shared and in the promise
+    IrInstruction *atomic_state_field_ptr; // this one is shared and in the promise
     IrInstruction *coro_result_ptr_field_ptr;
     IrInstruction *coro_result_field_ptr;
     IrInstruction *await_handle_var_ptr; // this one is where we put the one we extracted from the promise
@@ -68,7 +77,7 @@ struct IrExecutable {
     IrBasicBlock *coro_normal_final;
     IrBasicBlock *coro_suspend_block;
     IrBasicBlock *coro_final_cleanup_block;
-    VariableTableEntry *coro_allocator_var;
+    ZigVar *coro_allocator_var;
 };
 
 enum OutType {
@@ -83,6 +92,7 @@ enum ConstParentId {
     ConstParentIdStruct,
     ConstParentIdArray,
     ConstParentIdUnion,
+    ConstParentIdScalar,
 };
 
 struct ConstParent {
@@ -100,6 +110,9 @@ struct ConstParent {
         struct {
             ConstExprValue *union_val;
         } p_union;
+        struct {
+            ConstExprValue *scalar_val;
+        } p_scalar;
     } data;
 };
 
@@ -117,14 +130,18 @@ struct ConstUnionValue {
 enum ConstArraySpecial {
     ConstArraySpecialNone,
     ConstArraySpecialUndef,
+    ConstArraySpecialBuf,
 };
 
 struct ConstArrayValue {
     ConstArraySpecial special;
-    struct {
-        ConstExprValue *elements;
-        ConstParent parent;
-    } s_none;
+    union {
+        struct {
+            ConstExprValue *elements;
+            ConstParent parent;
+        } s_none;
+        Buf *s_buf;
+    } data;
 };
 
 enum ConstPtrSpecial {
@@ -140,6 +157,9 @@ enum ConstPtrSpecial {
     // understand the value of pointee at compile time. However, we will still
     // emit a binary with a compile time known address.
     // In this case index is the numeric address value.
+    // We also use this for null pointer. We need the data layout for ConstCastOnly == true
+    // types to be the same, so all optionals of pointer types use x_ptr
+    // instead of x_optional
     ConstPtrSpecialHardCodedAddr,
     // This means that the pointer represents memory of assigning to _.
     // That is, storing discards the data, and loading is invalid.
@@ -183,7 +203,7 @@ struct ConstPtrValue {
             uint64_t addr;
         } hard_coded_addr;
         struct {
-            FnTableEntry *fn_entry;
+            ZigFn *fn_entry;
         } fn;
     } data;
 };
@@ -194,7 +214,7 @@ struct ConstErrValue {
 };
 
 struct ConstBoundFnValue {
-    FnTableEntry *fn;
+    ZigFn *fn;
     IrInstruction *first_arg;
 };
 
@@ -215,10 +235,10 @@ enum RuntimeHintErrorUnion {
     RuntimeHintErrorUnionNonError,
 };
 
-enum RuntimeHintMaybe {
-    RuntimeHintMaybeUnknown,
-    RuntimeHintMaybeNull, // TODO is this value even possible? if this is the case it might mean the const value is compile time known.
-    RuntimeHintMaybeNonNull,
+enum RuntimeHintOptional {
+    RuntimeHintOptionalUnknown,
+    RuntimeHintOptionalNull, // TODO is this value even possible? if this is the case it might mean the const value is compile time known.
+    RuntimeHintOptionalNonNull,
 };
 
 enum RuntimeHintPtr {
@@ -227,13 +247,23 @@ enum RuntimeHintPtr {
     RuntimeHintPtrNonStack,
 };
 
+enum RuntimeHintSliceId {
+    RuntimeHintSliceIdUnknown,
+    RuntimeHintSliceIdLen,
+};
+
+struct RuntimeHintSlice {
+    enum RuntimeHintSliceId id;
+    uint64_t len;
+};
+
 struct ConstGlobalRefs {
     LLVMValueRef llvm_value;
     LLVMValueRef llvm_global;
 };
 
 struct ConstExprValue {
-    TypeTableEntry *type;
+    ZigType *type;
     ConstValSpecial special;
     ConstGlobalRefs *global_refs;
 
@@ -241,13 +271,14 @@ struct ConstExprValue {
         // populated if special == ConstValSpecialStatic
         BigInt x_bigint;
         BigFloat x_bigfloat;
+        float16_t x_f16;
         float x_f32;
         double x_f64;
         float128_t x_f128;
         bool x_bool;
         ConstBoundFnValue x_bound_fn;
-        TypeTableEntry *x_type;
-        ConstExprValue *x_maybe;
+        ZigType *x_type;
+        ConstExprValue *x_optional;
         ConstErrValue x_err_union;
         ErrorTableEntry *x_err_set;
         BigInt x_enum_tag;
@@ -256,13 +287,13 @@ struct ConstExprValue {
         ConstArrayValue x_array;
         ConstPtrValue x_ptr;
         ImportTableEntry *x_import;
-        Scope *x_block;
         ConstArgTuple x_arg_tuple;
 
         // populated if special == ConstValSpecialRuntime
         RuntimeHintErrorUnion rh_error_union;
-        RuntimeHintMaybe rh_maybe;
+        RuntimeHintOptional rh_maybe;
         RuntimeHintPtr rh_ptr;
+        RuntimeHintSlice rh_slice;
     } data;
 };
 
@@ -317,7 +348,7 @@ struct Tld {
 struct TldVar {
     Tld base;
 
-    VariableTableEntry *var;
+    ZigVar *var;
     Buf *extern_lib_name;
     Buf *section_name;
 };
@@ -325,7 +356,7 @@ struct TldVar {
 struct TldFn {
     Tld base;
 
-    FnTableEntry *fn_entry;
+    ZigFn *fn_entry;
     Buf *extern_lib_name;
 };
 
@@ -333,7 +364,7 @@ struct TldContainer {
     Tld base;
 
     ScopeDecls *decls_scope;
-    TypeTableEntry *type_entry;
+    ZigType *type_entry;
 };
 
 struct TldCompTime {
@@ -350,13 +381,12 @@ struct TypeEnumField {
 struct TypeUnionField {
     Buf *name;
     TypeEnumField *enum_field;
-    TypeTableEntry *type_entry;
+    ZigType *type_entry;
     AstNode *decl_node;
     uint32_t gen_index;
 };
 
 enum NodeType {
-    NodeTypeRoot,
     NodeTypeFnProto,
     NodeTypeFnDef,
     NodeTypeParamDecl,
@@ -374,16 +404,17 @@ enum NodeType {
     NodeTypeCharLiteral,
     NodeTypeSymbol,
     NodeTypePrefixOpExpr,
-    NodeTypeAddrOfExpr,
+    NodeTypePointerType,
     NodeTypeFnCallExpr,
     NodeTypeArrayAccessExpr,
     NodeTypeSliceExpr,
     NodeTypeFieldAccessExpr,
+    NodeTypePtrDeref,
+    NodeTypeUnwrapOptional,
     NodeTypeUse,
     NodeTypeBoolLiteral,
     NodeTypeNullLiteral,
     NodeTypeUndefinedLiteral,
-    NodeTypeThisLiteral,
     NodeTypeUnreachable,
     NodeTypeIfBoolExpr,
     NodeTypeWhileExpr,
@@ -409,10 +440,6 @@ enum NodeType {
     NodeTypeAwaitExpr,
     NodeTypeSuspend,
     NodeTypePromiseType,
-};
-
-struct AstNodeRoot {
-    ZigList<AstNode *> top_level_decls;
 };
 
 enum CallingConvention {
@@ -548,7 +575,7 @@ enum BinOpType {
     BinOpTypeMultWrap,
     BinOpTypeDiv,
     BinOpTypeMod,
-    BinOpTypeUnwrapMaybe,
+    BinOpTypeUnwrapOptional,
     BinOpTypeArrayCat,
     BinOpTypeArrayMult,
     BinOpTypeErrorUnion,
@@ -567,6 +594,10 @@ struct AstNodeCatchExpr {
     AstNode *op2;
 };
 
+struct AstNodeUnwrapOptional {
+    AstNode *expr;
+};
+
 enum CastOp {
     CastOpNoCast, // signifies the function call expression is not a cast
     CastOpNoop, // fn call expr is a cast, but does nothing
@@ -577,6 +608,8 @@ enum CastOp {
     CastOpBytesToSlice,
     CastOpNumLitToConcrete,
     CastOpErrSet,
+    CastOpBitCast,
+    CastOpPtrOfArrayToSlice,
 };
 
 struct AstNodeFnCallExpr {
@@ -603,15 +636,18 @@ struct AstNodeFieldAccessExpr {
     Buf *field_name;
 };
 
+struct AstNodePtrDerefExpr {
+    AstNode *target;
+};
+
 enum PrefixOp {
     PrefixOpInvalid,
     PrefixOpBoolNot,
     PrefixOpBinNot,
     PrefixOpNegation,
     PrefixOpNegationWrap,
-    PrefixOpDereference,
-    PrefixOpMaybe,
-    PrefixOpUnwrapMaybe,
+    PrefixOpOptional,
+    PrefixOpAddrOf,
 };
 
 struct AstNodePrefixOpExpr {
@@ -619,10 +655,11 @@ struct AstNodePrefixOpExpr {
     AstNode *primary_expr;
 };
 
-struct AstNodeAddrOfExpr {
+struct AstNodePointerType {
+    Token *star_token;
     AstNode *align_expr;
     BigInt *bit_offset_start;
-    BigInt *bit_offset_end;
+    BigInt *host_int_bytes;
     bool is_const;
     bool is_volatile;
     AstNode *op_expr;
@@ -770,7 +807,7 @@ struct AstNodeContainerDecl {
     ZigList<AstNode *> decls;
     ContainerLayout layout;
     AstNode *init_arg_expr; // enum(T), struct(endianness), or union(T), or union(enum(T))
-    bool auto_enum; // union(enum)
+    bool auto_enum, is_root; // union(enum)
 };
 
 struct AstNodeErrorSetDecl {
@@ -868,7 +905,6 @@ struct AstNodeAwaitExpr {
 
 struct AstNodeSuspend {
     AstNode *block;
-    AstNode *promise_symbol;
 };
 
 struct AstNodePromiseType {
@@ -881,7 +917,6 @@ struct AstNode {
     size_t column;
     ImportTableEntry *owner;
     union {
-        AstNodeRoot root;
         AstNodeFnDef fn_def;
         AstNodeFnProto fn_proto;
         AstNodeParamDecl param_decl;
@@ -893,8 +928,9 @@ struct AstNode {
         AstNodeTestDecl test_decl;
         AstNodeBinOpExpr bin_op_expr;
         AstNodeCatchExpr unwrap_err_expr;
+        AstNodeUnwrapOptional unwrap_optional;
         AstNodePrefixOpExpr prefix_op_expr;
-        AstNodeAddrOfExpr addr_of_expr;
+        AstNodePointerType pointer_type;
         AstNodeFnCallExpr fn_call_expr;
         AstNodeArrayAccessExpr array_access_expr;
         AstNodeSliceExpr slice_expr;
@@ -910,6 +946,7 @@ struct AstNode {
         AstNodeCompTime comptime_expr;
         AstNodeAsmExpr asm_expr;
         AstNodeFieldAccessExpr field_access_expr;
+        AstNodePtrDerefExpr ptr_deref_expr;
         AstNodeContainerDecl container_decl;
         AstNodeStructField struct_field;
         AstNodeStringLiteral string_literal;
@@ -940,11 +977,12 @@ struct AstNode {
 // this struct is allocated with allocate_nonzero
 struct FnTypeParamInfo {
     bool is_noalias;
-    TypeTableEntry *type;
+    ZigType *type;
 };
 
 struct GenericFnTypeId {
-    FnTableEntry *fn_entry;
+    CodeGen *codegen;
+    ZigFn *fn_entry;
     ConstExprValue *params;
     size_t param_count;
 };
@@ -953,100 +991,110 @@ uint32_t generic_fn_type_id_hash(GenericFnTypeId *id);
 bool generic_fn_type_id_eql(GenericFnTypeId *a, GenericFnTypeId *b);
 
 struct FnTypeId {
-    TypeTableEntry *return_type;
+    ZigType *return_type;
     FnTypeParamInfo *param_info;
     size_t param_count;
     size_t next_param_index;
     bool is_var_args;
     CallingConvention cc;
     uint32_t alignment;
-    TypeTableEntry *async_allocator_type;
+    ZigType *async_allocator_type;
 };
 
 uint32_t fn_type_id_hash(FnTypeId*);
 bool fn_type_id_eql(FnTypeId *a, FnTypeId *b);
 
-struct TypeTableEntryPointer {
-    TypeTableEntry *child_type;
-    bool is_const;
-    bool is_volatile;
-    uint32_t alignment;
-    uint32_t bit_offset;
-    uint32_t unaligned_bit_count;
-    TypeTableEntry *slice_parent;
+enum PtrLen {
+    PtrLenUnknown,
+    PtrLenSingle,
 };
 
-struct TypeTableEntryInt {
+struct ZigTypePointer {
+    ZigType *child_type;
+    ZigType *slice_parent;
+    PtrLen ptr_len;
+    uint32_t explicit_alignment; // 0 means use ABI alignment
+    uint32_t bit_offset_in_host;
+    uint32_t host_int_bytes; // size of host integer. 0 means no host integer; this field is aligned
+    bool is_const;
+    bool is_volatile;
+};
+
+struct ZigTypeInt {
     uint32_t bit_count;
     bool is_signed;
 };
 
-struct TypeTableEntryFloat {
+struct ZigTypeFloat {
     size_t bit_count;
 };
 
-struct TypeTableEntryArray {
-    TypeTableEntry *child_type;
+struct ZigTypeArray {
+    ZigType *child_type;
     uint64_t len;
 };
 
 struct TypeStructField {
     Buf *name;
-    TypeTableEntry *type_entry;
+    ZigType *type_entry;
     size_t src_index;
     size_t gen_index;
-    // offset from the memory at gen_index
-    size_t packed_bits_offset;
-    size_t packed_bits_size;
-    size_t unaligned_bit_count;
+    uint32_t bit_offset_in_host; // offset from the memory at gen_index
     AstNode *decl_node;
 };
-struct TypeTableEntryStruct {
+
+enum ResolveStatus {
+    ResolveStatusUnstarted,
+    ResolveStatusInvalid,
+    ResolveStatusZeroBitsKnown,
+    ResolveStatusAlignmentKnown,
+    ResolveStatusSizeKnown,
+};
+
+struct ZigTypeStruct {
     AstNode *decl_node;
-    ContainerLayout layout;
+    TypeStructField *fields;
+    ScopeDecls *decls_scope;
+    uint64_t size_bytes;
+    HashMap<Buf *, TypeStructField *, buf_hash, buf_eql_buf> fields_by_name;
+
     uint32_t src_field_count;
     uint32_t gen_field_count;
-    TypeStructField *fields;
-    uint64_t size_bytes;
-    bool is_invalid; // true if any fields are invalid
+
+    uint32_t abi_alignment; // known after ResolveStatusAlignmentKnown
+    ContainerLayout layout;
+    ResolveStatus resolve_status;
+
     bool is_slice;
-    ScopeDecls *decls_scope;
-
-    // set this flag temporarily to detect infinite loops
-    bool embedded_in_current;
+    bool resolve_loop_flag; // set this flag temporarily to detect infinite loops
     bool reported_infinite_err;
-    // whether we've finished resolving it
-    bool complete;
-
-    bool zero_bits_loop_flag;
-    bool zero_bits_known;
-    uint32_t abi_alignment; // also figured out with zero_bits pass
-
-    HashMap<Buf *, TypeStructField *, buf_hash, buf_eql_buf> fields_by_name;
+    // whether any of the fields require comptime
+    // known after ResolveStatusZeroBitsKnown
+    bool requires_comptime;
 };
 
-struct TypeTableEntryMaybe {
-    TypeTableEntry *child_type;
+struct ZigTypeOptional {
+    ZigType *child_type;
 };
 
-struct TypeTableEntryErrorUnion {
-    TypeTableEntry *err_set_type;
-    TypeTableEntry *payload_type;
+struct ZigTypeErrorUnion {
+    ZigType *err_set_type;
+    ZigType *payload_type;
 };
 
-struct TypeTableEntryErrorSet {
+struct ZigTypeErrorSet {
     uint32_t err_count;
     ErrorTableEntry **errors;
-    FnTableEntry *infer_fn;
+    ZigFn *infer_fn;
 };
 
-struct TypeTableEntryEnum {
+struct ZigTypeEnum {
     AstNode *decl_node;
     ContainerLayout layout;
     uint32_t src_field_count;
     TypeEnumField *fields;
     bool is_invalid; // true if any fields are invalid
-    TypeTableEntry *tag_int_type;
+    ZigType *tag_int_type;
 
     ScopeDecls *decls_scope;
 
@@ -1059,23 +1107,22 @@ struct TypeTableEntryEnum {
     bool zero_bits_loop_flag;
     bool zero_bits_known;
 
-    bool generate_name_table;
-    LLVMValueRef name_table;
+    LLVMValueRef name_function;
 
     HashMap<Buf *, TypeEnumField *, buf_hash, buf_eql_buf> fields_by_name;
 };
 
-uint32_t type_ptr_hash(const TypeTableEntry *ptr);
-bool type_ptr_eql(const TypeTableEntry *a, const TypeTableEntry *b);
+uint32_t type_ptr_hash(const ZigType *ptr);
+bool type_ptr_eql(const ZigType *a, const ZigType *b);
 
-struct TypeTableEntryUnion {
+struct ZigTypeUnion {
     AstNode *decl_node;
     ContainerLayout layout;
     uint32_t src_field_count;
     uint32_t gen_field_count;
     TypeUnionField *fields;
     bool is_invalid; // true if any fields are invalid
-    TypeTableEntry *tag_type; // always an enum or null
+    ZigType *tag_type; // always an enum or null
     LLVMTypeRef union_type_ref;
 
     ScopeDecls *decls_scope;
@@ -1085,6 +1132,10 @@ struct TypeTableEntryUnion {
     bool reported_infinite_err;
     // whether we've finished resolving it
     bool complete;
+
+    // whether any of the fields require comptime
+    // the value is not valid until zero_bits_known == true
+    bool requires_comptime;
 
     bool zero_bits_loop_flag;
     bool zero_bits_known;
@@ -1096,7 +1147,7 @@ struct TypeTableEntryUnion {
     bool have_explicit_tag_type;
 
     uint32_t union_size_bytes;
-    TypeTableEntry *most_aligned_union_member;
+    ZigType *most_aligned_union_member;
 
     HashMap<Buf *, TypeUnionField *, buf_hash, buf_eql_buf> fields_by_name;
 };
@@ -1105,91 +1156,89 @@ struct FnGenParamInfo {
     size_t src_index;
     size_t gen_index;
     bool is_byval;
-    TypeTableEntry *type;
+    ZigType *type;
 };
 
-struct TypeTableEntryFn {
+struct ZigTypeFn {
     FnTypeId fn_type_id;
     bool is_generic;
-    TypeTableEntry *gen_return_type;
+    ZigType *gen_return_type;
     size_t gen_param_count;
     FnGenParamInfo *gen_param_info;
 
     LLVMTypeRef raw_type_ref;
 
-    TypeTableEntry *bound_fn_parent;
+    ZigType *bound_fn_parent;
 };
 
-struct TypeTableEntryBoundFn {
-    TypeTableEntry *fn_type;
+struct ZigTypeBoundFn {
+    ZigType *fn_type;
 };
 
-struct TypeTableEntryPromise {
+struct ZigTypePromise {
     // null if `promise` instead of `promise->T`
-    TypeTableEntry *result_type;
+    ZigType *result_type;
 };
 
-enum TypeTableEntryId {
-    TypeTableEntryIdInvalid,
-    TypeTableEntryIdMetaType,
-    TypeTableEntryIdVoid,
-    TypeTableEntryIdBool,
-    TypeTableEntryIdUnreachable,
-    TypeTableEntryIdInt,
-    TypeTableEntryIdFloat,
-    TypeTableEntryIdPointer,
-    TypeTableEntryIdArray,
-    TypeTableEntryIdStruct,
-    TypeTableEntryIdNumLitFloat,
-    TypeTableEntryIdNumLitInt,
-    TypeTableEntryIdUndefLit,
-    TypeTableEntryIdNullLit,
-    TypeTableEntryIdMaybe,
-    TypeTableEntryIdErrorUnion,
-    TypeTableEntryIdErrorSet,
-    TypeTableEntryIdEnum,
-    TypeTableEntryIdUnion,
-    TypeTableEntryIdFn,
-    TypeTableEntryIdNamespace,
-    TypeTableEntryIdBlock,
-    TypeTableEntryIdBoundFn,
-    TypeTableEntryIdArgTuple,
-    TypeTableEntryIdOpaque,
-    TypeTableEntryIdPromise,
+enum ZigTypeId {
+    ZigTypeIdInvalid,
+    ZigTypeIdMetaType,
+    ZigTypeIdVoid,
+    ZigTypeIdBool,
+    ZigTypeIdUnreachable,
+    ZigTypeIdInt,
+    ZigTypeIdFloat,
+    ZigTypeIdPointer,
+    ZigTypeIdArray,
+    ZigTypeIdStruct,
+    ZigTypeIdComptimeFloat,
+    ZigTypeIdComptimeInt,
+    ZigTypeIdUndefined,
+    ZigTypeIdNull,
+    ZigTypeIdOptional,
+    ZigTypeIdErrorUnion,
+    ZigTypeIdErrorSet,
+    ZigTypeIdEnum,
+    ZigTypeIdUnion,
+    ZigTypeIdFn,
+    ZigTypeIdNamespace,
+    ZigTypeIdBoundFn,
+    ZigTypeIdArgTuple,
+    ZigTypeIdOpaque,
+    ZigTypeIdPromise,
 };
 
-struct TypeTableEntry {
-    TypeTableEntryId id;
+struct ZigType {
+    ZigTypeId id;
     Buf name;
 
     LLVMTypeRef type_ref;
     ZigLLVMDIType *di_type;
 
     bool zero_bits; // this is denormalized data
-    bool is_copyable;
     bool gen_h_loop_flag;
 
     union {
-        TypeTableEntryPointer pointer;
-        TypeTableEntryInt integral;
-        TypeTableEntryFloat floating;
-        TypeTableEntryArray array;
-        TypeTableEntryStruct structure;
-        TypeTableEntryMaybe maybe;
-        TypeTableEntryErrorUnion error_union;
-        TypeTableEntryErrorSet error_set;
-        TypeTableEntryEnum enumeration;
-        TypeTableEntryUnion unionation;
-        TypeTableEntryFn fn;
-        TypeTableEntryBoundFn bound_fn;
-        TypeTableEntryPromise promise;
+        ZigTypePointer pointer;
+        ZigTypeInt integral;
+        ZigTypeFloat floating;
+        ZigTypeArray array;
+        ZigTypeStruct structure;
+        ZigTypeOptional maybe;
+        ZigTypeErrorUnion error_union;
+        ZigTypeErrorSet error_set;
+        ZigTypeEnum enumeration;
+        ZigTypeUnion unionation;
+        ZigTypeFn fn;
+        ZigTypeBoundFn bound_fn;
+        ZigTypePromise promise;
     } data;
 
     // use these fields to make sure we don't duplicate type table entries for the same type
-    TypeTableEntry *pointer_parent[2]; // [0 - mut, 1 - const]
-    TypeTableEntry *maybe_parent;
-    TypeTableEntry *promise_parent;
-    TypeTableEntry *promise_frame_parent;
+    ZigType *pointer_parent[2]; // [0 - mut, 1 - const]
+    ZigType *optional_parent;
+    ZigType *promise_parent;
+    ZigType *promise_frame_parent;
     // If we generate a constant name value for this type, we memoize it here.
     // The type of this is array
     ConstExprValue *cached_const_name_val;
@@ -1236,7 +1285,8 @@ struct FnExport {
     GlobalLinkageId linkage;
 };
 
-struct FnTableEntry {
+struct ZigFn {
+    CodeGen *codegen;
     LLVMValueRef llvm_value;
     const char *llvm_name;
     AstNode *proto_node;
@@ -1245,11 +1295,11 @@ struct FnTableEntry {
     Scope *child_scope; // parent is scope for last parameter
     ScopeBlock *def_scope; // parent is child_scope
     Buf symbol_name;
-    TypeTableEntry *type_entry; // function type
+    ZigType *type_entry; // function type
     // in the case of normal functions this is the implicit return type
     // in the case of async functions this is the implicit return type according to the
     // zig source code, not according to zig ir
-    TypeTableEntry *src_implicit_return_type;
+    ZigType *src_implicit_return_type;
     bool is_test;
     FnInline fn_inline;
     FnAnalState anal_state;
@@ -1264,7 +1314,7 @@ struct FnTableEntry {
     AstNode *fn_static_eval_set_node;
 
     ZigList<IrInstruction *> alloca_list;
-    ZigList<VariableTableEntry *> variable_list;
+    ZigList<ZigVar *> variable_list;
 
     Buf *section_name;
     AstNode *set_alignstack_node;
@@ -1277,8 +1327,8 @@ struct FnTableEntry {
     bool calls_or_awaits_errorable_fn;
 };
 
-uint32_t fn_table_entry_hash(FnTableEntry*);
-bool fn_table_entry_eql(FnTableEntry *a, FnTableEntry *b);
+uint32_t fn_table_entry_hash(ZigFn*);
+bool fn_table_entry_eql(ZigFn *a, ZigFn *b);
 
 enum BuiltinFnId {
     BuiltinFnIdInvalid,
@@ -1286,11 +1336,11 @@ enum BuiltinFnId {
     BuiltinFnIdMemset,
     BuiltinFnIdSizeof,
     BuiltinFnIdAlignOf,
-    BuiltinFnIdMaxValue,
-    BuiltinFnIdMinValue,
     BuiltinFnIdMemberCount,
     BuiltinFnIdMemberType,
     BuiltinFnIdMemberName,
+    BuiltinFnIdField,
+    BuiltinFnIdTypeInfo,
     BuiltinFnIdTypeof,
     BuiltinFnIdAddWithOverflow,
     BuiltinFnIdSubWithOverflow,
@@ -1303,27 +1353,42 @@ enum BuiltinFnId {
     BuiltinFnIdCompileLog,
     BuiltinFnIdCtz,
     BuiltinFnIdClz,
+    BuiltinFnIdPopCount,
     BuiltinFnIdImport,
     BuiltinFnIdCImport,
     BuiltinFnIdErrName,
     BuiltinFnIdBreakpoint,
     BuiltinFnIdReturnAddress,
     BuiltinFnIdFrameAddress,
+    BuiltinFnIdHandle,
     BuiltinFnIdEmbedFile,
-    BuiltinFnIdCmpExchange,
+    BuiltinFnIdCmpxchgWeak,
+    BuiltinFnIdCmpxchgStrong,
     BuiltinFnIdFence,
     BuiltinFnIdDivExact,
     BuiltinFnIdDivTrunc,
     BuiltinFnIdDivFloor,
     BuiltinFnIdRem,
     BuiltinFnIdMod,
+    BuiltinFnIdSqrt,
     BuiltinFnIdTruncate,
+    BuiltinFnIdIntCast,
+    BuiltinFnIdFloatCast,
+    BuiltinFnIdErrSetCast,
+    BuiltinFnIdToBytes,
+    BuiltinFnIdFromBytes,
+    BuiltinFnIdIntToFloat,
+    BuiltinFnIdFloatToInt,
+    BuiltinFnIdBoolToInt,
+    BuiltinFnIdErrToInt,
+    BuiltinFnIdIntToErr,
+    BuiltinFnIdEnumToInt,
+    BuiltinFnIdIntToEnum,
     BuiltinFnIdIntType,
     BuiltinFnIdSetCold,
     BuiltinFnIdSetRuntimeSafety,
     BuiltinFnIdSetFloatMode,
     BuiltinFnIdTypeName,
-    BuiltinFnIdCanImplicitCast,
     BuiltinFnIdPanic,
     BuiltinFnIdPtrCast,
     BuiltinFnIdBitCast,
@@ -1332,20 +1397,24 @@ enum BuiltinFnId {
     BuiltinFnIdTagName,
     BuiltinFnIdTagType,
     BuiltinFnIdFieldParentPtr,
-    BuiltinFnIdOffsetOf,
+    BuiltinFnIdByteOffsetOf,
+    BuiltinFnIdBitOffsetOf,
     BuiltinFnIdInlineCall,
     BuiltinFnIdNoInlineCall,
+    BuiltinFnIdNewStackCall,
     BuiltinFnIdTypeId,
     BuiltinFnIdShlExact,
     BuiltinFnIdShrExact,
     BuiltinFnIdSetEvalBranchQuota,
     BuiltinFnIdAlignCast,
     BuiltinFnIdOpaqueType,
+    BuiltinFnIdThis,
     BuiltinFnIdSetAlignStack,
     BuiltinFnIdArgType,
     BuiltinFnIdExport,
     BuiltinFnIdErrorReturnTrace,
     BuiltinFnIdAtomicRmw,
+    BuiltinFnIdAtomicLoad,
 };
 
 struct BuiltinFnEntry {
@@ -1366,10 +1435,12 @@ enum PanicMsgId {
     PanicMsgIdRemainderDivisionByZero,
     PanicMsgIdExactDivisionRemainder,
     PanicMsgIdSliceWidenRemainder,
-    PanicMsgIdUnwrapMaybeFail,
+    PanicMsgIdUnwrapOptionalFail,
     PanicMsgIdInvalidErrorCode,
     PanicMsgIdIncorrectAlignment,
     PanicMsgIdBadUnionField,
+    PanicMsgIdBadEnumValue,
+    PanicMsgIdFloatToInt,
 
     PanicMsgIdCount,
 };
@@ -1378,19 +1449,20 @@ uint32_t fn_eval_hash(Scope*);
 bool fn_eval_eql(Scope *a, Scope *b);
 
 struct TypeId {
-    TypeTableEntryId id;
+    ZigTypeId id;
 
     union {
         struct {
-            TypeTableEntry *child_type;
+            ZigType *child_type;
+            PtrLen ptr_len;
             bool is_const;
             bool is_volatile;
             uint32_t alignment;
-            uint32_t bit_offset;
-            uint32_t unaligned_bit_count;
+            uint32_t bit_offset_in_host;
+            uint32_t host_int_bytes;
         } pointer;
         struct {
-            TypeTableEntry *child_type;
+            ZigType *child_type;
             uint64_t size;
         } array;
         struct {
@@ -1398,8 +1470,8 @@ struct TypeId {
             uint32_t bit_count;
         } integer;
         struct {
-            TypeTableEntry *err_set_type;
-            TypeTableEntry *payload_type;
+            ZigType *err_set_type;
+            ZigType *payload_type;
         } error_union;
     } data;
 };
@@ -1410,9 +1482,11 @@ bool type_id_eql(TypeId a, TypeId b);
 enum ZigLLVMFnId {
     ZigLLVMFnIdCtz,
     ZigLLVMFnIdClz,
+    ZigLLVMFnIdPopCount,
     ZigLLVMFnIdOverflowArithmetic,
     ZigLLVMFnIdFloor,
     ZigLLVMFnIdCeil,
+    ZigLLVMFnIdSqrt,
 };
 
 enum AddSubMul {
@@ -1433,7 +1507,10 @@ struct ZigLLVMFnKey {
         } clz;
         struct {
             uint32_t bit_count;
-        } floor_ceil;
+        } pop_count;
+        struct {
+            uint32_t bit_count;
+        } floating;
         struct {
             AddSubMul add_sub_mul;
             uint32_t bit_count;
@@ -1454,6 +1531,7 @@ enum BuildMode {
     BuildModeDebug,
     BuildModeFastRelease,
     BuildModeSafeRelease,
+    BuildModeSmallRelease,
 };
 
 enum EmitFileType {
@@ -1469,165 +1547,23 @@ struct LinkLib {
     bool provided_explicitly;
 };
 
+// When adding fields, check if they should be added to the hash computation in build_with_cache
 struct CodeGen {
+    //////////////////////////// Runtime State
     LLVMModuleRef module;
     ZigList<ErrorMsg*> errors;
     LLVMBuilderRef builder;
     ZigLLVMDIBuilder *dbuilder;
     ZigLLVMDICompileUnit *compile_unit;
     ZigLLVMDIFile *compile_unit_file;
-
-    ZigList<LinkLib *> link_libs_list;
     LinkLib *libc_link_lib;
-
-    // add -framework [name] args to linker
-    ZigList<Buf *> darwin_frameworks;
-    // add -rpath [name] args to linker
-    ZigList<Buf *> rpath_list;
-
-
-    // reminder: hash tables must be initialized before use
-    HashMap<Buf *, ImportTableEntry *, buf_hash, buf_eql_buf> import_table;
-    HashMap<Buf *, BuiltinFnEntry *, buf_hash, buf_eql_buf> builtin_fn_table;
-    HashMap<Buf *, TypeTableEntry *, buf_hash, buf_eql_buf> primitive_type_table;
-    HashMap<TypeId, TypeTableEntry *, type_id_hash, type_id_eql> type_table;
-    HashMap<FnTypeId *, TypeTableEntry *, fn_type_id_hash, fn_type_id_eql> fn_type_table;
-    HashMap<Buf *, ErrorTableEntry *, buf_hash, buf_eql_buf> error_table;
-    HashMap<GenericFnTypeId *, FnTableEntry *, generic_fn_type_id_hash, generic_fn_type_id_eql> generic_table;
-    HashMap<Scope *, IrInstruction *, fn_eval_hash, fn_eval_eql> memoized_fn_eval_table;
-    HashMap<ZigLLVMFnKey, LLVMValueRef, zig_llvm_fn_key_hash, zig_llvm_fn_key_eql> llvm_fn_table;
-    HashMap<Buf *, AstNode *, buf_hash, buf_eql_buf> exported_symbol_names;
-    HashMap<Buf *, Tld *, buf_hash, buf_eql_buf> external_prototypes;
-    HashMap<Buf *, ConstExprValue *, buf_hash, buf_eql_buf> string_literals_table;
-
-
-    ZigList<ImportTableEntry *> import_queue;
-    size_t import_queue_index;
-    ZigList<Tld *> resolve_queue;
-    size_t resolve_queue_index;
-    ZigList<AstNode *> use_queue;
-    size_t use_queue_index;
-
-    uint32_t next_unresolved_index;
-
-    struct {
-        TypeTableEntry *entry_bool;
-        TypeTableEntry *entry_int[2][12]; // [signed,unsigned][2,3,4,5,6,7,8,16,29,32,64,128]
-        TypeTableEntry *entry_c_int[CIntTypeCount];
-        TypeTableEntry *entry_c_longdouble;
-        TypeTableEntry *entry_c_void;
-        TypeTableEntry *entry_u8;
-        TypeTableEntry *entry_u16;
-        TypeTableEntry *entry_u32;
-        TypeTableEntry *entry_u29;
-        TypeTableEntry *entry_u64;
-        TypeTableEntry *entry_u128;
-        TypeTableEntry *entry_i8;
-        TypeTableEntry *entry_i16;
-        TypeTableEntry *entry_i32;
-        TypeTableEntry *entry_i64;
-        TypeTableEntry *entry_i128;
-        TypeTableEntry *entry_isize;
-        TypeTableEntry *entry_usize;
-        TypeTableEntry *entry_f32;
-        TypeTableEntry *entry_f64;
-        TypeTableEntry *entry_f128;
-        TypeTableEntry *entry_void;
-        TypeTableEntry *entry_unreachable;
-        TypeTableEntry *entry_type;
-        TypeTableEntry *entry_invalid;
-        TypeTableEntry *entry_namespace;
-        TypeTableEntry *entry_block;
-        TypeTableEntry *entry_num_lit_int;
-        TypeTableEntry *entry_num_lit_float;
-        TypeTableEntry *entry_undef;
-        TypeTableEntry *entry_null;
-        TypeTableEntry *entry_var;
-        TypeTableEntry *entry_global_error_set;
-        TypeTableEntry *entry_arg_tuple;
-        TypeTableEntry *entry_promise;
-    } builtin_types;
-
-    EmitFileType emit_file_type;
-    ZigTarget zig_target;
     LLVMTargetDataRef target_data_ref;
-    unsigned pointer_size_bytes;
-    bool is_big_endian;
-    bool is_static;
-    bool strip_debug_symbols;
-    bool want_h_file;
-    bool have_pub_main;
-    bool have_c_main;
-    bool have_winmain;
-    bool have_winmain_crt_startup;
-    bool have_dllmain_crt_startup;
-    bool have_pub_panic;
-    Buf *libc_lib_dir;
-    Buf *libc_static_lib_dir;
-    Buf *libc_include_dir;
-    Buf *msvc_lib_dir;
-    Buf *kernel32_lib_dir;
-    Buf *zig_lib_dir;
-    Buf *zig_std_dir;
-    Buf *zig_c_headers_dir;
-    Buf *zig_std_special_dir;
-    Buf *dynamic_linker;
-    Buf *ar_path;
-    ZigWindowsSDK *win_sdk;
-    Buf triple_str;
-    BuildMode build_mode;
-    bool is_test_build;
-    bool have_err_ret_tracing;
-    uint32_t target_os_index;
-    uint32_t target_arch_index;
-    uint32_t target_environ_index;
-    uint32_t target_oformat_index;
     LLVMTargetMachineRef target_machine;
     ZigLLVMDIFile *dummy_di_file;
-    bool is_native_target;
-    PackageTableEntry *root_package;
-    PackageTableEntry *std_package;
-    PackageTableEntry *panic_package;
-    PackageTableEntry *test_runner_package;
-    PackageTableEntry *compile_var_package;
-    ImportTableEntry *compile_var_import;
-    Buf *root_out_name;
-    bool windows_subsystem_windows;
-    bool windows_subsystem_console;
-    Buf *mmacosx_version_min;
-    Buf *mios_version_min;
-    bool linker_rdynamic;
-    const char *linker_script;
-
-    // The function definitions this module includes.
-    ZigList<FnTableEntry *> fn_defs;
-    size_t fn_defs_index;
-    ZigList<TldVar *> global_vars;
-
-    OutType out_type;
-    FnTableEntry *cur_fn;
-    FnTableEntry *main_fn;
-    FnTableEntry *panic_fn;
     LLVMValueRef cur_ret_ptr;
     LLVMValueRef cur_fn_val;
     LLVMValueRef cur_err_ret_trace_val_arg;
     LLVMValueRef cur_err_ret_trace_val_stack;
-    bool c_want_stdint;
-    bool c_want_stdbool;
-    AstNode *root_export_decl;
-    size_t version_major;
-    size_t version_minor;
-    size_t version_patch;
-    bool verbose_tokenize;
-    bool verbose_ast;
-    bool verbose_link;
-    bool verbose_ir;
-    bool verbose_llvm_ir;
-    bool verbose_cimport;
-    ErrColor err_color;
-    ImportTableEntry *root_import;
-    ImportTableEntry *bootstrap_import;
-    ImportTableEntry *test_runner_import;
     LLVMValueRef memcpy_fn_val;
     LLVMValueRef memset_fn_val;
     LLVMValueRef trap_fn_val;
@@ -1645,61 +1581,208 @@ struct CodeGen {
     LLVMValueRef coro_save_fn_val;
     LLVMValueRef coro_promise_fn_val;
     LLVMValueRef coro_alloc_helper_fn_val;
+    LLVMValueRef coro_frame_fn_val;
     LLVMValueRef merge_err_ret_traces_fn_val;
     LLVMValueRef add_error_return_trace_addr_fn_val;
-    bool error_during_imports;
+    LLVMValueRef stacksave_fn_val;
+    LLVMValueRef stackrestore_fn_val;
+    LLVMValueRef write_register_fn_val;
+    LLVMValueRef sp_md_node;
+    LLVMValueRef err_name_table;
+    LLVMValueRef safety_crash_err_fn;
+    LLVMValueRef return_err_fn;
 
-    const char **clang_argv;
-    size_t clang_argv_len;
+    // reminder: hash tables must be initialized before use
+    HashMap<Buf *, ImportTableEntry *, buf_hash, buf_eql_buf> import_table;
+    HashMap<Buf *, BuiltinFnEntry *, buf_hash, buf_eql_buf> builtin_fn_table;
+    HashMap<Buf *, ZigType *, buf_hash, buf_eql_buf> primitive_type_table;
+    HashMap<TypeId, ZigType *, type_id_hash, type_id_eql> type_table;
+    HashMap<FnTypeId *, ZigType *, fn_type_id_hash, fn_type_id_eql> fn_type_table;
+    HashMap<Buf *, ErrorTableEntry *, buf_hash, buf_eql_buf> error_table;
+    HashMap<GenericFnTypeId *, ZigFn *, generic_fn_type_id_hash, generic_fn_type_id_eql> generic_table;
+    HashMap<Scope *, IrInstruction *, fn_eval_hash, fn_eval_eql> memoized_fn_eval_table;
+    HashMap<ZigLLVMFnKey, LLVMValueRef, zig_llvm_fn_key_hash, zig_llvm_fn_key_eql> llvm_fn_table;
+    HashMap<Buf *, AstNode *, buf_hash, buf_eql_buf> exported_symbol_names;
+    HashMap<Buf *, Tld *, buf_hash, buf_eql_buf> external_prototypes;
+    HashMap<Buf *, ConstExprValue *, buf_hash, buf_eql_buf> string_literals_table;
+    HashMap<const ZigType *, ConstExprValue *, type_ptr_hash, type_ptr_eql> type_info_cache;
+
+    ZigList<ImportTableEntry *> import_queue;
+    size_t import_queue_index;
+    ZigList<Tld *> resolve_queue;
+    size_t resolve_queue_index;
+    ZigList<AstNode *> use_queue;
+    size_t use_queue_index;
+    ZigList<TimeEvent> timing_events;
+    ZigList<ZigLLVMDIType **> error_di_types;
+    ZigList<AstNode *> tld_ref_source_node_stack;
+    ZigList<ZigFn *> inline_fns;
+    ZigList<ZigFn *> test_fns;
+    ZigList<ZigLLVMDIEnumerator *> err_enumerators;
+    ZigList<ErrorTableEntry *> errors_by_index;
+    size_t largest_err_name_len;
+
+    PackageTableEntry *std_package;
+    PackageTableEntry *panic_package;
+    PackageTableEntry *test_runner_package;
+    PackageTableEntry *compile_var_package;
+    ImportTableEntry *compile_var_import;
+    ImportTableEntry *root_import;
+    ImportTableEntry *bootstrap_import;
+    ImportTableEntry *test_runner_import;
+
+    struct {
+        ZigType *entry_bool;
+        ZigType *entry_c_int[CIntTypeCount];
+        ZigType *entry_c_longdouble;
+        ZigType *entry_c_void;
+        ZigType *entry_u8;
+        ZigType *entry_u16;
+        ZigType *entry_u32;
+        ZigType *entry_u29;
+        ZigType *entry_u64;
+        ZigType *entry_i8;
+        ZigType *entry_i32;
+        ZigType *entry_i64;
+        ZigType *entry_isize;
+        ZigType *entry_usize;
+        ZigType *entry_f16;
+        ZigType *entry_f32;
+        ZigType *entry_f64;
+        ZigType *entry_f128;
+        ZigType *entry_void;
+        ZigType *entry_unreachable;
+        ZigType *entry_type;
+        ZigType *entry_invalid;
+        ZigType *entry_namespace;
+        ZigType *entry_block;
+        ZigType *entry_num_lit_int;
+        ZigType *entry_num_lit_float;
+        ZigType *entry_undef;
+        ZigType *entry_null;
+        ZigType *entry_var;
+        ZigType *entry_global_error_set;
+        ZigType *entry_arg_tuple;
+        ZigType *entry_promise;
+    } builtin_types;
+    ZigType *align_amt_type;
+    ZigType *stack_trace_type;
+    ZigType *ptr_to_stack_trace_type;
+    ZigType *err_tag_type;
+    ZigType *test_fn_type;
+
+    Buf triple_str;
+    Buf global_asm;
+    Buf *out_h_path;
+    Buf artifact_dir;
+    Buf output_file_path;
+    Buf o_file_output_path;
+    Buf *wanted_output_file_path;
+    Buf cache_dir;
+
+    IrInstruction *invalid_instruction;
+    IrInstruction *unreach_instruction;
+
+    ConstExprValue const_void_val;
+    ConstExprValue panic_msg_vals[PanicMsgIdCount];
+
+    // The function definitions this module includes.
+    ZigList<ZigFn *> fn_defs;
+    size_t fn_defs_index;
+    ZigList<TldVar *> global_vars;
+
+    ZigFn *cur_fn;
+    ZigFn *main_fn;
+    ZigFn *panic_fn;
+    AstNode *root_export_decl;
+
+    CacheHash cache_hash;
+    ErrColor err_color;
+    uint32_t next_unresolved_index;
+    unsigned pointer_size_bytes;
+    uint32_t target_os_index;
+    uint32_t target_arch_index;
+    uint32_t target_environ_index;
+    uint32_t target_oformat_index;
+    bool is_big_endian;
+    bool have_pub_main;
+    bool have_c_main;
+    bool have_winmain;
+    bool have_winmain_crt_startup;
+    bool have_dllmain_crt_startup;
+    bool have_pub_panic;
+    bool have_err_ret_tracing;
+    bool c_want_stdint;
+    bool c_want_stdbool;
+    bool verbose_tokenize;
+    bool verbose_ast;
+    bool verbose_link;
+    bool verbose_ir;
+    bool verbose_llvm_ir;
+    bool verbose_cimport;
+    bool error_during_imports;
+    bool generate_error_name_table;
+    bool enable_cache;
+    bool enable_time_report;
+    bool system_linker_hack;
+
+    //////////////////////////// Participates in Input Parameter Cache Hash
+    ZigList<LinkLib *> link_libs_list;
+    // add -framework [name] args to linker
+    ZigList<Buf *> darwin_frameworks;
+    // add -rpath [name] args to linker
+    ZigList<Buf *> rpath_list;
+    ZigList<Buf *> forbidden_libs;
+    ZigList<Buf *> link_objects;
+    ZigList<Buf *> assembly_files;
     ZigList<const char *> lib_dirs;
+
+    size_t version_major;
+    size_t version_minor;
+    size_t version_patch;
+    const char *linker_script;
+
+    EmitFileType emit_file_type;
+    BuildMode build_mode;
+    OutType out_type;
+    ZigTarget zig_target;
+    bool is_static;
+    bool strip_debug_symbols;
+    bool is_test_build;
+    bool is_native_target;
+    bool windows_subsystem_windows;
+    bool windows_subsystem_console;
+    bool linker_rdynamic;
+    bool no_rosegment_workaround;
+    bool each_lib_rpath;
+    bool disable_pic;
+
+    Buf *mmacosx_version_min;
+    Buf *mios_version_min;
+    Buf *root_out_name;
+    Buf *test_filter;
+    Buf *test_name_prefix;
+    PackageTableEntry *root_package;
 
     const char **llvm_argv;
     size_t llvm_argv_len;
 
-    ZigList<FnTableEntry *> test_fns;
-    TypeTableEntry *test_fn_type;
+    const char **clang_argv;
+    size_t clang_argv_len;
 
-    bool each_lib_rpath;
+    //////////////////////////// Unsorted
 
-    TypeTableEntry *err_tag_type;
-    ZigList<ZigLLVMDIEnumerator *> err_enumerators;
-    ZigList<ErrorTableEntry *> errors_by_index;
-    bool generate_error_name_table;
-    LLVMValueRef err_name_table;
-    size_t largest_err_name_len;
-    LLVMValueRef safety_crash_err_fn;
-
-    LLVMValueRef return_err_fn;
-
-    IrInstruction *invalid_instruction;
-    ConstExprValue const_void_val;
-
-    ConstExprValue panic_msg_vals[PanicMsgIdCount];
-
-    Buf global_asm;
-    ZigList<Buf *> link_objects;
-    ZigList<Buf *> assembly_files;
-
-    ZigList<TypeTableEntry *> name_table_enums;
-
-    Buf *test_filter;
-    Buf *test_name_prefix;
-
-    ZigList<TimeEvent> timing_events;
-
-    Buf *cache_dir;
-    Buf *out_h_path;
-
-    ZigList<FnTableEntry *> inline_fns;
-    ZigList<AstNode *> tld_ref_source_node_stack;
-
-    TypeTableEntry *align_amt_type;
-    TypeTableEntry *stack_trace_type;
-    TypeTableEntry *ptr_to_stack_trace_type;
-
-    ZigList<ZigLLVMDIType **> error_di_types;
-
-    ZigList<Buf *> forbidden_libs;
+    Buf *libc_lib_dir;
+    Buf *libc_static_lib_dir;
+    Buf *libc_include_dir;
+    Buf *msvc_lib_dir;
+    Buf *kernel32_lib_dir;
+    Buf *zig_lib_dir;
+    Buf *zig_std_dir;
+    Buf *zig_c_headers_dir;
+    Buf *zig_std_special_dir;
+    Buf *dynamic_linker;
+    ZigWindowsSDK *win_sdk;
 };
 
 enum VarLinkage {
@@ -1708,7 +1791,7 @@ enum VarLinkage {
     VarLinkageExternal,
 };
 
-struct VariableTableEntry {
+struct ZigVar {
     Buf name;
     ConstExprValue *value;
     LLVMValueRef value_ref;
@@ -1728,15 +1811,19 @@ struct VariableTableEntry {
     IrExecutable *owner_exec;
     size_t ref_count;
     VarLinkage linkage;
-    IrInstruction *decl_instruction;
     uint32_t align_bytes;
+
+    // In an inline loop, multiple variables may be created,
+    // In this case, a reference to a variable should follow
+    // this pointer to the redefined variable.
+    ZigVar *next_var;
 };
 
 struct ErrorTableEntry {
     Buf name;
     uint32_t value;
     AstNode *decl_node;
-    TypeTableEntry *set_with_only_this_in_it;
+    ZigType *set_with_only_this_in_it;
     // If we generate a constant error name value for this error, we memoize it here.
     // The type of this is array
     ConstExprValue *cached_error_name_val;
@@ -1750,35 +1837,38 @@ enum ScopeId {
     ScopeIdVarDecl,
     ScopeIdCImport,
     ScopeIdLoop,
+    ScopeIdSuspend,
     ScopeIdFnDef,
     ScopeIdCompTime,
     ScopeIdCoroPrelude,
+    ScopeIdRuntime,
 };
 
 struct Scope {
-    ScopeId id;
+    CodeGen *codegen;
     AstNode *source_node;
 
     // if the scope has a parent, this is it
     Scope *parent;
 
     ZigLLVMDIScope *di_scope;
+    ScopeId id;
 };
 
 // This scope comes from global declarations or from
 // declarations in a container declaration
-// NodeTypeRoot, NodeTypeContainerDecl
+// NodeTypeContainerDecl
 struct ScopeDecls {
     Scope base;
 
     HashMap<Buf *, Tld *, buf_hash, buf_eql_buf> decl_table;
     bool safety_off;
     AstNode *safety_set_node;
-    bool fast_math_off;
+    bool fast_math_on;
     AstNode *fast_math_set_node;
     ImportTableEntry *import;
     // If this is a scope from a container, this is the type entry, otherwise null
-    TypeTableEntry *container_type;
+    ZigType *container_type;
 };
 
 // This scope comes from a block expression in user code.
@@ -1794,7 +1884,7 @@ struct ScopeBlock {
 
     bool safety_off;
     AstNode *safety_set_node;
-    bool fast_math_off;
+    bool fast_math_on;
     AstNode *fast_math_set_node;
 };
 
@@ -1820,7 +1910,7 @@ struct ScopeVarDecl {
     Scope base;
 
     // The variable that creates this scope
-    VariableTableEntry *var;
+    ZigVar *var;
 };
 
 // This scope is created for a @cImport
@@ -1845,6 +1935,25 @@ struct ScopeLoop {
     ZigList<IrBasicBlock *> *incoming_blocks;
 };
 
+// This scope blocks certain things from working such as comptime continue
+// inside a runtime if expression.
+// NodeTypeIfBoolExpr, NodeTypeWhileExpr, NodeTypeForExpr
+struct ScopeRuntime {
+    Scope base;
+
+    IrInstruction *is_comptime;
+};
+
+// This scope is created for a suspend block in order to have labeled
+// suspend for breaking out of a suspend and for detecting if a suspend
+// block is inside a suspend block.
+struct ScopeSuspend {
+    Scope base;
+
+    IrBasicBlock *resume_block;
+    bool reported_err;
+};
+
 // This scope is created for a comptime expression.
 // NodeTypeCompTime, NodeTypeSwitchExpr
 struct ScopeCompTime {
@@ -1857,7 +1966,7 @@ struct ScopeCompTime {
 struct ScopeFnDef {
     Scope base;
 
-    FnTableEntry *fn_entry;
+    ZigFn *fn_entry;
 };
 
 // This scope is created to indicate that the code in the scope
@@ -1912,12 +2021,6 @@ struct IrBasicBlock {
     IrInstruction *must_be_comptime_source_instr;
 };
 
-struct LVal {
-    bool is_ptr;
-    bool is_const;
-    bool is_volatile;
-};
-
 enum IrInstructionId {
     IrInstructionIdInvalid,
     IrInstructionIdBr,
@@ -1957,20 +2060,18 @@ enum IrInstructionId {
     IrInstructionIdAsm,
     IrInstructionIdSizeOf,
     IrInstructionIdTestNonNull,
-    IrInstructionIdUnwrapMaybe,
-    IrInstructionIdMaybeWrap,
+    IrInstructionIdUnwrapOptional,
+    IrInstructionIdOptionalWrap,
     IrInstructionIdUnionTag,
     IrInstructionIdClz,
     IrInstructionIdCtz,
+    IrInstructionIdPopCount,
     IrInstructionIdImport,
     IrInstructionIdCImport,
     IrInstructionIdCInclude,
     IrInstructionIdCDefine,
     IrInstructionIdCUndef,
-    IrInstructionIdArrayLen,
     IrInstructionIdRef,
-    IrInstructionIdMinValue,
-    IrInstructionIdMaxValue,
     IrInstructionIdCompileErr,
     IrInstructionIdCompileLog,
     IrInstructionIdErrName,
@@ -1978,6 +2079,11 @@ enum IrInstructionId {
     IrInstructionIdCmpxchg,
     IrInstructionIdFence,
     IrInstructionIdTruncate,
+    IrInstructionIdIntCast,
+    IrInstructionIdFloatCast,
+    IrInstructionIdIntToFloat,
+    IrInstructionIdFloatToInt,
+    IrInstructionIdBoolToInt,
     IrInstructionIdIntType,
     IrInstructionIdBoolNot,
     IrInstructionIdMemset,
@@ -1989,6 +2095,7 @@ enum IrInstructionId {
     IrInstructionIdBreakpoint,
     IrInstructionIdReturnAddress,
     IrInstructionIdFrameAddress,
+    IrInstructionIdHandle,
     IrInstructionIdAlignOf,
     IrInstructionIdOverflowOp,
     IrInstructionIdTestErr,
@@ -2004,21 +2111,23 @@ enum IrInstructionId {
     IrInstructionIdIntToPtr,
     IrInstructionIdPtrToInt,
     IrInstructionIdIntToEnum,
+    IrInstructionIdEnumToInt,
     IrInstructionIdIntToErr,
     IrInstructionIdErrToInt,
     IrInstructionIdCheckSwitchProngs,
     IrInstructionIdCheckStatementIsVoid,
     IrInstructionIdTypeName,
-    IrInstructionIdCanImplicitCast,
     IrInstructionIdDeclRef,
     IrInstructionIdPanic,
     IrInstructionIdTagName,
     IrInstructionIdTagType,
     IrInstructionIdFieldParentPtr,
-    IrInstructionIdOffsetOf,
+    IrInstructionIdByteOffsetOf,
+    IrInstructionIdBitOffsetOf,
+    IrInstructionIdTypeInfo,
     IrInstructionIdTypeId,
     IrInstructionIdSetEvalBranchQuota,
-    IrInstructionIdPtrTypeOf,
+    IrInstructionIdPtrType,
     IrInstructionIdAlignCast,
     IrInstructionIdOpaqueType,
     IrInstructionIdSetAlignStack,
@@ -2041,12 +2150,18 @@ enum IrInstructionId {
     IrInstructionIdCoroPromise,
     IrInstructionIdCoroAllocHelper,
     IrInstructionIdAtomicRmw,
+    IrInstructionIdAtomicLoad,
     IrInstructionIdPromiseResultType,
     IrInstructionIdAwaitBookkeeping,
     IrInstructionIdSaveErrRetAddr,
     IrInstructionIdAddImplicitReturnType,
     IrInstructionIdMergeErrRetTraces,
     IrInstructionIdMarkErrRetTracePtr,
+    IrInstructionIdSqrt,
+    IrInstructionIdErrSetCast,
+    IrInstructionIdToBytes,
+    IrInstructionIdFromBytes,
+    IrInstructionIdCheckRuntimeScope,
 };
 
 struct IrInstruction {
@@ -2059,7 +2174,10 @@ struct IrInstruction {
     // if ref_count is zero and the instruction has no side effects,
     // the instruction can be omitted in codegen
     size_t ref_count;
-    IrInstruction *other;
+    // When analyzing IR, instructions that point to this instruction in the "old ir"
+    // can find the instruction that corresponds to this value in the "new ir"
+    // with this child field.
+    IrInstruction *child;
     IrBasicBlock *owner_bb;
     // true if this instruction was generated by zig and not from user code
     bool is_gen;
@@ -2094,6 +2212,7 @@ struct IrInstructionSwitchBr {
     size_t case_count;
     IrInstructionSwitchBrCase *cases;
     IrInstruction *is_comptime;
+    IrInstruction *switch_prongs_void;
 };
 
 struct IrInstructionSwitchVar {
@@ -2123,7 +2242,7 @@ enum IrUnOp {
     IrUnOpNegation,
     IrUnOpNegationWrap,
     IrUnOpDereference,
-    IrUnOpMaybe,
+    IrUnOpOptional,
 };
 
 struct IrInstructionUnOp {
@@ -2180,7 +2299,7 @@ struct IrInstructionBinOp {
 struct IrInstructionDeclVar {
     IrInstruction base;
 
-    VariableTableEntry *var;
+    ZigVar *var;
     IrInstruction *var_type;
     IrInstruction *align_value;
     IrInstruction *init_value;
@@ -2203,7 +2322,8 @@ struct IrInstructionFieldPtr {
     IrInstruction base;
 
     IrInstruction *container_ptr;
-    Buf *field_name;
+    Buf *field_name_buffer;
+    IrInstruction *field_name_expr;
     bool is_const;
 };
 
@@ -2228,6 +2348,7 @@ struct IrInstructionElemPtr {
 
     IrInstruction *array_ptr;
     IrInstruction *elem_index;
+    PtrLen ptr_len;
     bool is_const;
     bool safety_check_on;
 };
@@ -2235,16 +2356,15 @@ struct IrInstructionElemPtr {
 struct IrInstructionVarPtr {
     IrInstruction base;
 
-    VariableTableEntry *var;
-    bool is_const;
-    bool is_volatile;
+    ZigVar *var;
+    ScopeFnDef *crossed_fndef_scope;
 };
 
 struct IrInstructionCall {
     IrInstruction base;
 
     IrInstruction *fn_ref;
-    FnTableEntry *fn_entry;
+    ZigFn *fn_entry;
     size_t arg_count;
     IrInstruction **args;
     bool is_comptime;
@@ -2253,6 +2373,7 @@ struct IrInstructionCall {
     bool is_async;
 
     IrInstruction *async_allocator;
+    IrInstruction *new_stack;
 };
 
 struct IrInstructionConst {
@@ -2273,7 +2394,7 @@ struct IrInstructionCast {
     IrInstruction base;
 
     IrInstruction *value;
-    TypeTableEntry *dest_type;
+    ZigType *dest_type;
     CastOp cast_op;
     LLVMValueRef tmp_ptr;
 };
@@ -2310,7 +2431,7 @@ struct IrInstructionStructInitField {
 struct IrInstructionStructInit {
     IrInstruction base;
 
-    TypeTableEntry *struct_type;
+    ZigType *struct_type;
     size_t field_count;
     IrInstructionStructInitField *fields;
     LLVMValueRef tmp_ptr;
@@ -2319,7 +2440,7 @@ struct IrInstructionStructInit {
 struct IrInstructionUnionInit {
     IrInstruction base;
 
-    TypeTableEntry *union_type;
+    ZigType *union_type;
     TypeUnionField *field;
     IrInstruction *init_value;
     LLVMValueRef tmp_ptr;
@@ -2373,6 +2494,18 @@ struct IrInstructionArrayType {
     IrInstruction *child_type;
 };
 
+struct IrInstructionPtrType {
+    IrInstruction base;
+
+    IrInstruction *align_value;
+    IrInstruction *child_type;
+    uint32_t bit_offset_start;
+    uint32_t host_int_bytes;
+    PtrLen ptr_len;
+    bool is_const;
+    bool is_volatile;
+};
+
 struct IrInstructionPromiseType {
     IrInstruction base;
 
@@ -2394,7 +2527,7 @@ struct IrInstructionAsm {
     // Most information on inline assembly comes from the source node.
     IrInstruction **input_list;
     IrInstruction **output_types;
-    VariableTableEntry **output_vars;
+    ZigVar **output_vars;
     size_t return_count;
     bool has_side_effects;
 };
@@ -2413,7 +2546,7 @@ struct IrInstructionTestNonNull {
     IrInstruction *value;
 };
 
-struct IrInstructionUnwrapMaybe {
+struct IrInstructionUnwrapOptional {
     IrInstruction base;
 
     IrInstruction *value;
@@ -2432,6 +2565,12 @@ struct IrInstructionClz {
     IrInstruction *value;
 };
 
+struct IrInstructionPopCount {
+    IrInstruction base;
+
+    IrInstruction *value;
+};
+
 struct IrInstructionUnionTag {
     IrInstruction base;
 
@@ -2444,12 +2583,6 @@ struct IrInstructionImport {
     IrInstruction *name;
 };
 
-struct IrInstructionArrayLen {
-    IrInstruction base;
-
-    IrInstruction *array_value;
-};
-
 struct IrInstructionRef {
     IrInstruction base;
 
@@ -2457,18 +2590,6 @@ struct IrInstructionRef {
     LLVMValueRef tmp_ptr;
     bool is_const;
     bool is_volatile;
-};
-
-struct IrInstructionMinValue {
-    IrInstruction base;
-
-    IrInstruction *value;
-};
-
-struct IrInstructionMaxValue {
-    IrInstruction base;
-
-    IrInstruction *value;
 };
 
 struct IrInstructionCompileErr {
@@ -2522,6 +2643,7 @@ struct IrInstructionEmbedFile {
 struct IrInstructionCmpxchg {
     IrInstruction base;
 
+    IrInstruction *type_value;
     IrInstruction *ptr;
     IrInstruction *cmp_value;
     IrInstruction *new_value;
@@ -2529,8 +2651,13 @@ struct IrInstructionCmpxchg {
     IrInstruction *failure_order_value;
 
     // if this instruction gets to runtime then we know these values:
+    ZigType *type;
     AtomicOrder success_order;
     AtomicOrder failure_order;
+
+    bool is_weak;
+
+    LLVMValueRef tmp_ptr;
 };
 
 struct IrInstructionFence {
@@ -2546,6 +2673,60 @@ struct IrInstructionTruncate {
     IrInstruction base;
 
     IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionIntCast {
+    IrInstruction base;
+
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionFloatCast {
+    IrInstruction base;
+
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionErrSetCast {
+    IrInstruction base;
+
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionToBytes {
+    IrInstruction base;
+
+    IrInstruction *target;
+};
+
+struct IrInstructionFromBytes {
+    IrInstruction base;
+
+    IrInstruction *dest_child_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionIntToFloat {
+    IrInstruction base;
+
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionFloatToInt {
+    IrInstruction base;
+
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionBoolToInt {
+    IrInstruction base;
+
     IrInstruction *target;
 };
 
@@ -2620,6 +2801,10 @@ struct IrInstructionFrameAddress {
     IrInstruction base;
 };
 
+struct IrInstructionHandle {
+    IrInstruction base;
+};
+
 enum IrOverflowOp {
     IrOverflowOpAdd,
     IrOverflowOpSub,
@@ -2636,7 +2821,7 @@ struct IrInstructionOverflowOp {
     IrInstruction *op2;
     IrInstruction *result_ptr;
 
-    TypeTableEntry *result_ptr_type;
+    ZigType *result_ptr_type;
 };
 
 struct IrInstructionAlignOf {
@@ -2665,7 +2850,7 @@ struct IrInstructionUnwrapErrPayload {
     bool safety_check_on;
 };
 
-struct IrInstructionMaybeWrap {
+struct IrInstructionOptionalWrap {
     IrInstruction base;
 
     IrInstruction *value;
@@ -2739,6 +2924,13 @@ struct IrInstructionIntToPtr {
 struct IrInstructionIntToEnum {
     IrInstruction base;
 
+    IrInstruction *dest_type;
+    IrInstruction *target;
+};
+
+struct IrInstructionEnumToInt {
+    IrInstruction base;
+
     IrInstruction *target;
 };
 
@@ -2780,11 +2972,9 @@ struct IrInstructionTypeName {
     IrInstruction *type_value;
 };
 
-struct IrInstructionCanImplicitCast {
-    IrInstruction base;
-
-    IrInstruction *type_value;
-    IrInstruction *target_value;
+enum LVal {
+    LValNone,
+    LValPtr,
 };
 
 struct IrInstructionDeclRef {
@@ -2821,11 +3011,24 @@ struct IrInstructionFieldParentPtr {
     TypeStructField *field;
 };
 
-struct IrInstructionOffsetOf {
+struct IrInstructionByteOffsetOf {
     IrInstruction base;
 
     IrInstruction *type_value;
     IrInstruction *field_name;
+};
+
+struct IrInstructionBitOffsetOf {
+    IrInstruction base;
+
+    IrInstruction *type_value;
+    IrInstruction *field_name;
+};
+
+struct IrInstructionTypeInfo {
+    IrInstruction base;
+
+    IrInstruction *type_value;
 };
 
 struct IrInstructionTypeId {
@@ -2838,17 +3041,6 @@ struct IrInstructionSetEvalBranchQuota {
     IrInstruction base;
 
     IrInstruction *new_quota;
-};
-
-struct IrInstructionPtrTypeOf {
-    IrInstruction base;
-
-    IrInstruction *align_value;
-    IrInstruction *child_type;
-    uint32_t bit_offset_start;
-    uint32_t bit_offset_end;
-    bool is_const;
-    bool is_volatile;
 };
 
 struct IrInstructionAlignCast {
@@ -2886,10 +3078,10 @@ struct IrInstructionExport {
 struct IrInstructionErrorReturnTrace {
     IrInstruction base;
 
-    enum Nullable {
+    enum Optional {
         Null,
         NonNull,
-    } nullable;
+    } optional;
 };
 
 struct IrInstructionErrorUnion {
@@ -3000,6 +3192,15 @@ struct IrInstructionAtomicRmw {
     AtomicOrder resolved_ordering;
 };
 
+struct IrInstructionAtomicLoad {
+    IrInstruction base;
+
+    IrInstruction *operand_type;
+    IrInstruction *ptr;
+    IrInstruction *ordering;
+    AtomicOrder resolved_ordering;
+};
+
 struct IrInstructionPromiseResultType {
     IrInstruction base;
 
@@ -3036,6 +3237,20 @@ struct IrInstructionMarkErrRetTracePtr {
     IrInstruction *err_ret_trace_ptr;
 };
 
+struct IrInstructionSqrt {
+    IrInstruction base;
+
+    IrInstruction *type;
+    IrInstruction *op;
+};
+
+struct IrInstructionCheckRuntimeScope {
+    IrInstruction base;
+
+    IrInstruction *scope_is_comptime;
+    IrInstruction *is_comptime;
+};
+
 static const size_t slice_ptr_index = 0;
 static const size_t slice_len_index = 1;
 
@@ -3054,15 +3269,64 @@ static const size_t stack_trace_ptr_count = 30;
 #define RESULT_FIELD_NAME "result"
 #define ASYNC_ALLOC_FIELD_NAME "allocFn"
 #define ASYNC_FREE_FIELD_NAME "freeFn"
-#define AWAITER_HANDLE_FIELD_NAME "awaiter_handle"
+#define ATOMIC_STATE_FIELD_NAME "atomic_state"
 // these point to data belonging to the awaiter
 #define ERR_RET_TRACE_PTR_FIELD_NAME "err_ret_trace_ptr"
 #define RESULT_PTR_FIELD_NAME "result_ptr"
 
 
 enum FloatMode {
-    FloatModeOptimized,
     FloatModeStrict,
+    FloatModeOptimized,
+};
+
+enum FnWalkId {
+    FnWalkIdAttrs,
+    FnWalkIdCall,
+    FnWalkIdTypes,
+    FnWalkIdVars,
+    FnWalkIdInits,
+};
+
+struct FnWalkAttrs {
+    ZigFn *fn;
+    unsigned gen_i;
+};
+
+struct FnWalkCall {
+    ZigList<LLVMValueRef> *gen_param_values;
+    IrInstructionCall *inst;
+    bool is_var_args;
+};
+
+struct FnWalkTypes {
+    ZigList<ZigLLVMDIType *> *param_di_types;
+    ZigList<LLVMTypeRef> *gen_param_types;
+};
+
+struct FnWalkVars {
+    ImportTableEntry *import;
+    LLVMValueRef llvm_fn;
+    ZigFn *fn;
+    ZigVar *var;
+    unsigned gen_i;
+};
+
+struct FnWalkInits {
+    LLVMValueRef llvm_fn;
+    ZigFn *fn;
+    unsigned gen_i;
+};
+
+struct FnWalk {
+    FnWalkId id;
+    union {
+        FnWalkAttrs attrs;
+        FnWalkCall call;
+        FnWalkTypes types;
+        FnWalkVars vars;
+        FnWalkInits inits;
+    } data;
 };
 
 #endif

@@ -24,22 +24,18 @@ fn round32(x_: f32) f32 {
     const e = (u >> 23) & 0xFF;
     var y: f32 = undefined;
 
-    if (e >= 0x7F+23) {
+    if (e >= 0x7F + 23) {
         return x;
     }
     if (u >> 31 != 0) {
         x = -x;
     }
-    if (e < 0x7F-1) {
+    if (e < 0x7F - 1) {
         math.forceEval(x + math.f32_toint);
         return 0 * @bitCast(f32, u);
     }
 
-    {
-        @setFloatMode(this, builtin.FloatMode.Strict);
-        y = x + math.f32_toint - math.f32_toint - x;
-    }
-
+    y = x + math.f32_toint - math.f32_toint - x;
     if (y > 0.5) {
         y = y + x - 1;
     } else if (y <= -0.5) {
@@ -61,22 +57,18 @@ fn round64(x_: f64) f64 {
     const e = (u >> 52) & 0x7FF;
     var y: f64 = undefined;
 
-    if (e >= 0x3FF+52) {
+    if (e >= 0x3FF + 52) {
         return x;
     }
     if (u >> 63 != 0) {
         x = -x;
     }
-    if (e < 0x3ff-1) {
+    if (e < 0x3ff - 1) {
         math.forceEval(x + math.f64_toint);
         return 0 * @bitCast(f64, u);
     }
 
-    {
-        @setFloatMode(this, builtin.FloatMode.Strict);
-        y = x + math.f64_toint - math.f64_toint - x;
-    }
-
+    y = x + math.f64_toint - math.f64_toint - x;
     if (y > 0.5) {
         y = y + x - 1;
     } else if (y <= -0.5) {

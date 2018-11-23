@@ -9,6 +9,7 @@ const std = @import("../index.zig");
 const math = std.math;
 const assert = std.debug.assert;
 const expo2 = @import("expo2.zig").expo2;
+const maxInt = std.math.maxInt;
 
 pub fn tanh(x: var) @typeOf(x) {
     const T = @typeOf(x);
@@ -68,8 +69,8 @@ fn tanh32(x: f32) f32 {
 
 fn tanh64(x: f64) f64 {
     const u = @bitCast(u64, x);
-    const w = u32(u >> 32);
-    const ax = @bitCast(f64, u & (@maxValue(u64) >> 1));
+    const w = @intCast(u32, u >> 32);
+    const ax = @bitCast(f64, u & (maxInt(u64) >> 1));
 
     var t: f64 = undefined;
 
@@ -100,7 +101,7 @@ fn tanh64(x: f64) f64 {
     }
     // |x| is subnormal
     else {
-        math.forceEval(f32(x));
+        math.forceEval(@floatCast(f32, x));
         t = x;
     }
 

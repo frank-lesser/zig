@@ -3,13 +3,10 @@ const assert = @import("std").debug.assert;
 test "try on error union" {
     tryOnErrorUnionImpl();
     comptime tryOnErrorUnionImpl();
-
 }
 
 fn tryOnErrorUnionImpl() void {
-    const x = if (returnsTen()) |val|
-        val + 1
-    else |err| switch (err) {
+    const x = if (returnsTen()) |val| val + 1 else |err| switch (err) {
         error.ItBroke, error.NoMem => 1,
         error.CrappedOut => i32(2),
         else => unreachable,
@@ -17,7 +14,7 @@ fn tryOnErrorUnionImpl() void {
     assert(x == 11);
 }
 
-fn returnsTen() error!i32 {
+fn returnsTen() anyerror!i32 {
     return 10;
 }
 
@@ -29,7 +26,7 @@ test "try without vars" {
     assert(result2 == 1);
 }
 
-fn failIfTrue(ok: bool) error!void {
+fn failIfTrue(ok: bool) anyerror!void {
     if (ok) {
         return error.ItBroke;
     } else {
