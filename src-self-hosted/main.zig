@@ -24,7 +24,7 @@ var stderr_file: os.File = undefined;
 var stderr: *io.OutStream(os.File.WriteError) = undefined;
 var stdout: *io.OutStream(os.File.WriteError) = undefined;
 
-const max_src_size = 2 * 1024 * 1024 * 1024; // 2 GiB
+pub const max_src_size = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 const usage =
     \\usage: zig [command] [options]
@@ -154,9 +154,7 @@ const usage_build_generic =
     \\    release-small              optimize for small binary, safety off
     \\  --static                     Output will be statically linked
     \\  --strip                      Exclude debug symbols
-    \\  --target-arch [name]         Specify target architecture
-    \\  --target-environ [name]      Specify target environment
-    \\  --target-os [name]           Specify target operating system
+    \\  -target [name]               <arch><sub>-<os>-<abi> see the targets command
     \\  --verbose-tokenize           Turn on compiler debug output for tokenization
     \\  --verbose-ast-tree           Turn on compiler debug output for parsing into an AST (tree view)
     \\  --verbose-ast-fmt            Turn on compiler debug output for parsing into an AST (render source)
@@ -220,9 +218,7 @@ const args_build_generic = []Flag{
     Flag.Bool("--pkg-end"),
     Flag.Bool("--static"),
     Flag.Bool("--strip"),
-    Flag.Arg1("--target-arch"),
-    Flag.Arg1("--target-environ"),
-    Flag.Arg1("--target-os"),
+    Flag.Arg1("-target"),
     Flag.Bool("--verbose-tokenize"),
     Flag.Bool("--verbose-ast-tree"),
     Flag.Bool("--verbose-ast-fmt"),
@@ -351,7 +347,7 @@ fn buildOutputType(allocator: *Allocator, args: []const []const u8, out_type: Co
     const root_name = if (provided_name) |n| n else blk: {
         if (root_source_file) |file| {
             const basename = os.path.basename(file);
-            var it = mem.split(basename, ".");
+            var it = mem.separate(basename, ".");
             break :blk it.next() orelse basename;
         } else {
             try stderr.write("--name [name] not provided and unable to infer\n");
@@ -510,7 +506,7 @@ fn cmdBuildObj(allocator: *Allocator, args: []const []const u8) !void {
     return buildOutputType(allocator, args, Compilation.Kind.Obj);
 }
 
-const usage_fmt =
+pub const usage_fmt =
     \\usage: zig fmt [file]...
     \\
     \\   Formats the input files and modifies them in-place.
@@ -527,7 +523,7 @@ const usage_fmt =
     \\
 ;
 
-const args_fmt_spec = []Flag{
+pub const args_fmt_spec = []Flag{
     Flag.Bool("--help"),
     Flag.Bool("--check"),
     Flag.Option("--color", []const []const u8{
@@ -757,7 +753,7 @@ async fn fmtPath(fmt: *Fmt, file_path_ref: []const u8, check_mode: bool) FmtErro
             var group = event.Group(FmtError!void).init(fmt.loop);
             while (try dir.next()) |entry| {
                 if (entry.kind == std.os.Dir.Entry.Kind.Directory or mem.endsWith(u8, entry.name, ".zig")) {
-                    const full_path = try os.path.join(fmt.loop.allocator, file_path, entry.name);
+                    const full_path = try os.path.join(fmt.loop.allocator, [][]const u8{ file_path, entry.name });
                     try group.call(fmtPath, fmt, full_path, check_mode);
                 }
             }
@@ -839,15 +835,15 @@ fn cmdTargets(allocator: *Allocator, args: []const []const u8) !void {
     }
     try stdout.write("\n");
 
-    try stdout.write("Environments:\n");
+    try stdout.write("C ABIs:\n");
     {
         comptime var i: usize = 0;
-        inline while (i < @memberCount(builtin.Environ)) : (i += 1) {
-            comptime const environ_tag = @memberName(builtin.Environ, i);
+        inline while (i < @memberCount(builtin.Abi)) : (i += 1) {
+            comptime const abi_tag = @memberName(builtin.Abi, i);
             // NOTE: Cannot use empty string, see #918.
-            comptime const native_str = if (comptime mem.eql(u8, environ_tag, @tagName(builtin.environ))) " (native)\n" else "\n";
+            comptime const native_str = if (comptime mem.eql(u8, abi_tag, @tagName(builtin.abi))) " (native)\n" else "\n";
 
-            try stdout.print("  {}{}", environ_tag, native_str);
+            try stdout.print("  {}{}", abi_tag, native_str);
         }
     }
 }
@@ -944,12 +940,13 @@ const CliPkg = struct {
     parent: ?*CliPkg,
 
     pub fn init(allocator: *mem.Allocator, name: []const u8, path: []const u8, parent: ?*CliPkg) !*CliPkg {
-        var pkg = try allocator.create(CliPkg{
+        var pkg = try allocator.create(CliPkg);
+        pkg.* = CliPkg{
             .name = name,
             .path = path,
             .children = ArrayList(*CliPkg).init(allocator),
             .parent = parent,
-        });
+        };
         return pkg;
     }
 

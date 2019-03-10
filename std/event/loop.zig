@@ -1,6 +1,7 @@
-const std = @import("../index.zig");
+const std = @import("../std.zig");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
+const testing = std.testing;
 const mem = std.mem;
 const AtomicRmwOp = builtin.AtomicRmwOp;
 const AtomicOrder = builtin.AtomicOrder;
@@ -49,7 +50,7 @@ pub const Loop = struct {
         };
 
         pub const EventFd = switch (builtin.os) {
-            builtin.Os.macosx, builtin.Os.freebsd => KEventFd,
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => KEventFd,
             builtin.Os.linux => struct {
                 base: ResumeNode,
                 epoll_op: u32,
@@ -68,7 +69,7 @@ pub const Loop = struct {
         };
 
         pub const Basic = switch (builtin.os) {
-            builtin.Os.macosx, builtin.Os.freebsd => KEventBasic,
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => KEventBasic,
             builtin.Os.linux => struct {
                 base: ResumeNode,
             },
@@ -97,6 +98,7 @@ pub const Loop = struct {
     /// TODO copy elision / named return values so that the threads referencing *Loop
     /// have the correct pointer value.
     pub fn initMultiThreaded(self: *Loop, allocator: *mem.Allocator) !void {
+        if (builtin.single_threaded) @compileError("initMultiThreaded unavailable when building in single-threaded mode");
         const core_count = try os.cpuCount(allocator);
         return self.initInternal(allocator, core_count);
     }
@@ -201,6 +203,11 @@ pub const Loop = struct {
                     self.os_data.fs_thread.wait();
                 }
 
+                if (builtin.single_threaded) {
+                    assert(extra_thread_count == 0);
+                    return;
+                }
+
                 var extra_thread_index: usize = 0;
                 errdefer {
                     // writing 8 bytes to an eventfd cannot fail
@@ -214,7 +221,7 @@ pub const Loop = struct {
                     self.extra_threads[extra_thread_index] = try os.spawnThread(self, workerRun);
                 }
             },
-            builtin.Os.macosx, builtin.Os.freebsd => {
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                 self.os_data.kqfd = try os.bsdKQueue();
                 errdefer os.close(self.os_data.kqfd);
 
@@ -301,6 +308,11 @@ pub const Loop = struct {
                     self.os_data.fs_thread.wait();
                 }
 
+                if (builtin.single_threaded) {
+                    assert(extra_thread_count == 0);
+                    return;
+                }
+
                 var extra_thread_index: usize = 0;
                 errdefer {
                     _ = os.bsdKEvent(self.os_data.kqfd, final_kev_arr, empty_kevs, null) catch unreachable;
@@ -338,6 +350,11 @@ pub const Loop = struct {
                     self.available_eventfd_resume_nodes.push(eventfd_node);
                 }
 
+                if (builtin.single_threaded) {
+                    assert(extra_thread_count == 0);
+                    return;
+                }
+
                 var extra_thread_index: usize = 0;
                 errdefer {
                     var i: usize = 0;
@@ -369,7 +386,7 @@ pub const Loop = struct {
                 os.close(self.os_data.epollfd);
                 self.allocator.free(self.eventfd_resume_nodes);
             },
-            builtin.Os.macosx, builtin.Os.freebsd => {
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                 os.close(self.os_data.kqfd);
                 os.close(self.os_data.fs_kqfd);
             },
@@ -484,7 +501,7 @@ pub const Loop = struct {
             const eventfd_node = &resume_stack_node.data;
             eventfd_node.base.handle = next_tick_node.data;
             switch (builtin.os) {
-                builtin.Os.macosx, builtin.Os.freebsd => {
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                     const kevent_array = (*[1]posix.Kevent)(&eventfd_node.kevent);
                     const empty_kevs = ([*]posix.Kevent)(undefined)[0..0];
                     _ = os.bsdKEvent(self.os_data.kqfd, kevent_array, empty_kevs, null) catch {
@@ -547,6 +564,7 @@ pub const Loop = struct {
             builtin.Os.linux,
             builtin.Os.macosx,
             builtin.Os.freebsd,
+            builtin.Os.netbsd,
             => self.os_data.fs_thread.wait(),
             else => {},
         }
@@ -611,7 +629,7 @@ pub const Loop = struct {
                     os.posixWrite(self.os_data.final_eventfd, wakeup_bytes) catch unreachable;
                     return;
                 },
-                builtin.Os.macosx, builtin.Os.freebsd => {
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                     self.posixFsRequest(&self.os_data.fs_end_request);
                     const final_kevent = (*[1]posix.Kevent)(&self.os_data.final_kevent);
                     const empty_kevs = ([*]posix.Kevent)(undefined)[0..0];
@@ -669,7 +687,7 @@ pub const Loop = struct {
                         }
                     }
                 },
-                builtin.Os.macosx, builtin.Os.freebsd => {
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                     var eventlist: [1]posix.Kevent = undefined;
                     const empty_kevs = ([*]posix.Kevent)(undefined)[0..0];
                     const count = os.bsdKEvent(self.os_data.kqfd, empty_kevs, eventlist[0..], null) catch unreachable;
@@ -732,7 +750,7 @@ pub const Loop = struct {
         self.beginOneEvent(); // finished in posixFsRun after processing the msg
         self.os_data.fs_queue.put(request_node);
         switch (builtin.os) {
-            builtin.Os.macosx, builtin.Os.freebsd => {
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                 const fs_kevs = (*[1]posix.Kevent)(&self.os_data.fs_kevent_wake);
                 const empty_kevs = ([*]posix.Kevent)(undefined)[0..0];
                 _ = os.bsdKEvent(self.os_data.fs_kqfd, fs_kevs, empty_kevs, null) catch unreachable;
@@ -802,7 +820,7 @@ pub const Loop = struct {
                         else => unreachable,
                     }
                 },
-                builtin.Os.macosx, builtin.Os.freebsd => {
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                     const fs_kevs = (*[1]posix.Kevent)(&self.os_data.fs_kevent_wait);
                     var out_kevs: [1]posix.Kevent = undefined;
                     _ = os.bsdKEvent(self.os_data.fs_kqfd, fs_kevs, out_kevs[0..], null) catch unreachable;
@@ -814,7 +832,7 @@ pub const Loop = struct {
 
     const OsData = switch (builtin.os) {
         builtin.Os.linux => LinuxOsData,
-        builtin.Os.macosx, builtin.Os.freebsd => KEventData,
+        builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => KEventData,
         builtin.Os.windows => struct {
             io_port: windows.HANDLE,
             extra_thread_count: usize,
@@ -845,6 +863,9 @@ pub const Loop = struct {
 };
 
 test "std.event.Loop - basic" {
+    // https://github.com/ziglang/zig/issues/1908
+    if (builtin.single_threaded or builtin.os != builtin.Os.linux) return error.SkipZigTest;
+
     var da = std.heap.DirectAllocator.init();
     defer da.deinit();
 
@@ -858,6 +879,9 @@ test "std.event.Loop - basic" {
 }
 
 test "std.event.Loop - call" {
+    // https://github.com/ziglang/zig/issues/1908
+    if (builtin.single_threaded or builtin.os != builtin.Os.linux) return error.SkipZigTest;
+
     var da = std.heap.DirectAllocator.init();
     defer da.deinit();
 
@@ -874,7 +898,7 @@ test "std.event.Loop - call" {
 
     loop.run();
 
-    assert(did_it);
+    testing.expect(did_it);
 }
 
 async fn testEventLoop() i32 {
@@ -883,6 +907,6 @@ async fn testEventLoop() i32 {
 
 async fn testEventLoop2(h: promise->i32, did_it: *bool) void {
     const value = await h;
-    assert(value == 1234);
+    testing.expect(value == 1234);
     did_it.* = true;
 }

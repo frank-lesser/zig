@@ -18,7 +18,7 @@ struct ParseContext {
     Buf *buf;
     size_t current_token;
     ZigList<Token> *tokens;
-    ImportTableEntry *owner;
+    ZigType *owner;
     ErrColor err_color;
 };
 
@@ -130,8 +130,10 @@ static void ast_error(ParseContext *pc, Token *token, const char *format, ...) {
     va_end(ap);
 
 
-    ErrorMsg *err = err_msg_create_with_line(pc->owner->path, token->start_line, token->start_column,
-            pc->owner->source_code, pc->owner->line_offsets, msg);
+    ErrorMsg *err = err_msg_create_with_line(pc->owner->data.structure.root_struct->path,
+            token->start_line, token->start_column,
+            pc->owner->data.structure.root_struct->source_code,
+            pc->owner->data.structure.root_struct->line_offsets, msg);
     err->line_start = token->start_line;
     err->column_start = token->start_column;
 
@@ -148,8 +150,10 @@ static void ast_asm_error(ParseContext *pc, AstNode *node, size_t offset, const 
     Buf *msg = buf_vprintf(format, ap);
     va_end(ap);
 
-    ErrorMsg *err = err_msg_create_with_line(pc->owner->path, node->line, node->column,
-            pc->owner->source_code, pc->owner->line_offsets, msg);
+    ErrorMsg *err = err_msg_create_with_line(pc->owner->data.structure.root_struct->path,
+            node->line, node->column,
+            pc->owner->data.structure.root_struct->source_code,
+            pc->owner->data.structure.root_struct->line_offsets, msg);
 
     print_err_msg(err, pc->err_color);
     exit(EXIT_FAILURE);
@@ -381,7 +385,7 @@ static AstNode *ast_parse_if_expr_helper(ParseContext *pc, AstNode *(*body_parse
         else_body = ast_expect(pc, body_parser);
     }
 
-    assert(res->type == NodeTypeTestExpr);
+    assert(res->type == NodeTypeIfOptional);
     if (err_payload != nullptr) {
         AstNodeTestExpr old = res->data.test_expr;
         res->type = NodeTypeIfErrorExpr;
@@ -570,9 +574,7 @@ static void ast_parse_asm_template(ParseContext *pc, AstNode *node) {
     }
 }
 
-AstNode *ast_parse(Buf *buf, ZigList<Token> *tokens, ImportTableEntry *owner,
-        ErrColor err_color)
-{
+AstNode *ast_parse(Buf *buf, ZigList<Token> *tokens, ZigType *owner, ErrColor err_color) {
     ParseContext pc = {};
     pc.err_color = err_color;
     pc.owner = owner;
@@ -844,12 +846,17 @@ static AstNode *ast_parse_fn_proto(ParseContext *pc) {
 
 // VarDecl <- (KEYWORD_const / KEYWORD_var) IDENTIFIER (COLON TypeExpr)? ByteAlign? LinkSection? (EQUAL Expr)? SEMICOLON
 static AstNode *ast_parse_var_decl(ParseContext *pc) {
-    Token *first = eat_token_if(pc, TokenIdKeywordConst);
-    if (first == nullptr)
-        first = eat_token_if(pc, TokenIdKeywordVar);
-    if (first == nullptr)
-        return nullptr;
-
+    Token *thread_local_kw = eat_token_if(pc, TokenIdKeywordThreadLocal);
+    Token *mut_kw = eat_token_if(pc, TokenIdKeywordConst);
+    if (mut_kw == nullptr)
+        mut_kw = eat_token_if(pc, TokenIdKeywordVar);
+    if (mut_kw == nullptr) {
+        if (thread_local_kw == nullptr) {
+            return nullptr;
+        } else {
+            ast_invalid_token_error(pc, peek_token(pc));
+        }
+    }
     Token *identifier = expect_token(pc, TokenIdSymbol);
     AstNode *type_expr = nullptr;
     if (eat_token_if(pc, TokenIdColon) != nullptr)
@@ -863,8 +870,9 @@ static AstNode *ast_parse_var_decl(ParseContext *pc) {
 
     expect_token(pc, TokenIdSemicolon);
 
-    AstNode *res = ast_create_node(pc, NodeTypeVariableDeclaration, first);
-    res->data.variable_declaration.is_const = first->id == TokenIdKeywordConst;
+    AstNode *res = ast_create_node(pc, NodeTypeVariableDeclaration, mut_kw);
+    res->data.variable_declaration.threadlocal_tok = thread_local_kw;
+    res->data.variable_declaration.is_const = mut_kw->id == TokenIdKeywordConst;
     res->data.variable_declaration.symbol = token_buf(identifier);
     res->data.variable_declaration.type = type_expr;
     res->data.variable_declaration.align_expr = align_expr;
@@ -990,7 +998,7 @@ static AstNode *ast_parse_if_statement(ParseContext *pc) {
     if (requires_semi && else_body == nullptr)
         expect_token(pc, TokenIdSemicolon);
 
-    assert(res->type == NodeTypeTestExpr);
+    assert(res->type == NodeTypeIfOptional);
     if (err_payload != nullptr) {
         AstNodeTestExpr old = res->data.test_expr;
         res->type = NodeTypeIfErrorExpr;
@@ -2204,7 +2212,7 @@ static AstNode *ast_parse_if_prefix(ParseContext *pc) {
     Optional<PtrPayload> opt_payload = ast_parse_ptr_payload(pc);
 
     PtrPayload payload;
-    AstNode *res = ast_create_node(pc, NodeTypeTestExpr, first);
+    AstNode *res = ast_create_node(pc, NodeTypeIfOptional, first);
     res->data.test_expr.target_node = condition;
     if (opt_payload.unwrap(&payload)) {
         res->data.test_expr.var_symbol = token_buf(payload.payload);
@@ -2733,6 +2741,7 @@ static AstNode *ast_parse_async_prefix(ParseContext *pc) {
 
     AstNode *res = ast_create_node(pc, NodeTypeFnCallExpr, async);
     res->data.fn_call_expr.is_async = true;
+    res->data.fn_call_expr.seen = false;
     if (eat_token_if(pc, TokenIdCmpLessThan) != nullptr) {
         AstNode *prefix_expr = ast_expect(pc, ast_parse_prefix_expr);
         expect_token(pc, TokenIdCmpGreaterThan);
@@ -2753,6 +2762,7 @@ static AstNode *ast_parse_fn_call_argumnets(ParseContext *pc) {
 
     AstNode *res = ast_create_node(pc, NodeTypeFnCallExpr, paren);
     res->data.fn_call_expr.params = params;
+    res->data.fn_call_expr.seen = false;
     return res;
 }
 
@@ -2772,7 +2782,8 @@ static AstNode *ast_parse_array_type_start(ParseContext *pc) {
 // PtrTypeStart
 //     <- ASTERISK
 //      / ASTERISK2
-//      / LBRACKET ASTERISK RBRACKET
+//      / PTRUNKNOWN
+//      / PTRC
 static AstNode *ast_parse_ptr_type_start(ParseContext *pc) {
     Token *asterisk = eat_token_if(pc, TokenIdStar);
     if (asterisk != nullptr) {
@@ -2795,6 +2806,13 @@ static AstNode *ast_parse_ptr_type_start(ParseContext *pc) {
     if (multptr != nullptr) {
         AstNode *res = ast_create_node(pc, NodeTypePointerType, multptr);
         res->data.pointer_type.star_token = multptr;
+        return res;
+    }
+
+    Token *cptr = eat_token_if(pc, TokenIdBracketStarCBracket);
+    if (cptr != nullptr) {
+        AstNode *res = ast_create_node(pc, NodeTypePointerType, cptr);
+        res->data.pointer_type.star_token = cptr;
         return res;
     }
 
@@ -2999,7 +3017,7 @@ void ast_visit_node_children(AstNode *node, void (*visit)(AstNode **, void *cont
             visit_field(&node->data.if_err_expr.then_node, visit, context);
             visit_field(&node->data.if_err_expr.else_node, visit, context);
             break;
-        case NodeTypeTestExpr:
+        case NodeTypeIfOptional:
             visit_field(&node->data.test_expr.target_node, visit, context);
             visit_field(&node->data.test_expr.then_node, visit, context);
             visit_field(&node->data.test_expr.else_node, visit, context);

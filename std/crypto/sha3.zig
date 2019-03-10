@@ -1,7 +1,7 @@
 const mem = @import("../mem.zig");
-const math = @import("../math/index.zig");
+const math = @import("../math.zig");
 const endian = @import("../endian.zig");
-const debug = @import("../debug/index.zig");
+const debug = @import("../debug.zig");
 const builtin = @import("builtin");
 const htest = @import("test.zig");
 
@@ -13,8 +13,8 @@ pub const Sha3_512 = Keccak(512, 0x06);
 fn Keccak(comptime bits: usize, comptime delim: u8) type {
     return struct {
         const Self = @This();
-        const block_length = 200;
-        const digest_length = bits / 8;
+        pub const block_length = 200;
+        pub const digest_length = bits / 8;
 
         s: [200]u8,
         offset: usize,
@@ -120,7 +120,7 @@ fn keccak_f(comptime F: usize, d: []u8) void {
     var c = []const u64{0} ** 5;
 
     for (s) |*r, i| {
-        r.* = mem.readIntLE(u64, d[8 * i .. 8 * i + 8]);
+        r.* = mem.readIntSliceLittle(u64, d[8 * i .. 8 * i + 8]);
     }
 
     comptime var x: usize = 0;
@@ -167,7 +167,8 @@ fn keccak_f(comptime F: usize, d: []u8) void {
     }
 
     for (s) |r, i| {
-        mem.writeInt(d[8 * i .. 8 * i + 8], r, builtin.Endian.Little);
+        // TODO https://github.com/ziglang/zig/issues/863
+        mem.writeIntSliceLittle(u64, d[8 * i .. 8 * i + 8], r);
     }
 }
 

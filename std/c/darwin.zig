@@ -36,11 +36,20 @@ pub extern "c" fn sysctlnametomib(name: [*]const u8, mibp: ?*c_int, sizep: ?*usi
 pub extern "c" fn bind(socket: c_int, address: ?*const sockaddr, address_len: socklen_t) c_int;
 pub extern "c" fn socket(domain: c_int, type: c_int, protocol: c_int) c_int;
 
+const mach_hdr = if (@sizeOf(usize) == 8) mach_header_64 else mach_header;
+
 /// The value of the link editor defined symbol _MH_EXECUTE_SYM is the address
 /// of the mach header in a Mach-O executable file type.  It does not appear in
 /// any file type other than a MH_EXECUTE file type.  The type of the symbol is
 /// absolute as the header is not part of any section.
-pub extern "c" var _mh_execute_header: if (@sizeOf(usize) == 8) mach_header_64 else mach_header;
+/// This symbol is populated when linking the system's libc, which is guaranteed
+/// on this operating system. However when building object files or libraries,
+/// the system libc won't be linked until the final executable. So we
+/// export a weak symbol here, to be overridden by the real one.
+pub extern "c" var _mh_execute_header: mach_hdr = undefined;
+comptime {
+    @export("__mh_execute_header", _mh_execute_header, @import("builtin").GlobalLinkage.Weak);
+}
 
 pub const mach_header_64 = macho.mach_header_64;
 pub const mach_header = macho.mach_header;
@@ -73,8 +82,8 @@ pub const sockaddr_in6 = extern struct {
 };
 
 pub const timeval = extern struct {
-    tv_sec: isize,
-    tv_usec: isize,
+    tv_sec: c_long,
+    tv_usec: i32,
 };
 
 pub const timezone = extern struct {
@@ -154,7 +163,7 @@ pub const Kevent = extern struct {
 // sys/types.h on macos uses #pragma pack(4) so these checks are
 // to make sure the struct is laid out the same. These values were
 // produced from C code using the offsetof macro.
-const std = @import("../index.zig");
+const std = @import("../std.zig");
 const assert = std.debug.assert;
 
 comptime {
@@ -175,6 +184,24 @@ pub const kevent64_s = extern struct {
     udata: u64,
     ext: [2]u64,
 };
+
+pub const mach_port_t = c_uint;
+pub const clock_serv_t = mach_port_t;
+pub const clock_res_t = c_int;
+pub const mach_port_name_t = natural_t;
+pub const natural_t = c_uint;
+pub const mach_timespec_t = extern struct {
+    tv_sec: c_uint,
+    tv_nsec: clock_res_t,
+};
+pub const kern_return_t = c_int;
+pub const host_t = mach_port_t;
+pub const CALENDAR_CLOCK = 1;
+
+pub extern fn mach_host_self() mach_port_t;
+pub extern fn clock_get_time(clock_serv: clock_serv_t, cur_time: *mach_timespec_t) kern_return_t;
+pub extern fn host_get_clock_service(host: host_t, clock_id: clock_id_t, clock_serv: ?[*]clock_serv_t) kern_return_t;
+pub extern fn mach_port_deallocate(task: ipc_space_t, name: mach_port_name_t) kern_return_t;
 
 // sys/types.h on macos uses #pragma pack() so these checks are
 // to make sure the struct is laid out the same. These values were

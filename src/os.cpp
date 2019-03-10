@@ -35,6 +35,7 @@
 #include <shlobj.h>
 #include <io.h>
 #include <fcntl.h>
+#include <ntsecapi.h>
 
 typedef SSIZE_T ssize_t;
 #else
@@ -50,11 +51,15 @@ typedef SSIZE_T ssize_t;
 
 #endif
 
-#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD)
+#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD) || defined(ZIG_OS_NETBSD)
 #include <link.h>
 #endif
 
-#if defined(ZIG_OS_FREEBSD)
+#if defined(ZIG_OS_LINUX)
+#include <sys/auxv.h>
+#endif
+
+#if defined(ZIG_OS_FREEBSD) || defined(ZIG_OS_NETBSD)
 #include <sys/sysctl.h>
 #endif
 
@@ -78,7 +83,7 @@ static clock_serv_t cclock;
 #if defined(__APPLE__) && !defined(environ)
 #include <crt_externs.h>
 #define environ (*_NSGetEnviron())
-#elif defined(ZIG_OS_FREEBSD)
+#elif defined(ZIG_OS_FREEBSD) || defined(ZIG_OS_NETBSD)
 extern char **environ;
 #endif
 
@@ -264,7 +269,7 @@ void os_path_join(Buf *dirname, Buf *basename, Buf *out_full_path) {
     buf_append_buf(out_full_path, basename);
 }
 
-int os_path_real(Buf *rel_path, Buf *out_abs_path) {
+Error os_path_real(Buf *rel_path, Buf *out_abs_path) {
 #if defined(ZIG_OS_WINDOWS)
     buf_resize(out_abs_path, 4096);
     if (_fullpath(buf_ptr(out_abs_path), buf_ptr(rel_path), buf_len(out_abs_path)) == nullptr) {
@@ -1026,7 +1031,7 @@ Error os_exec_process(const char *exe, ZigList<const char *> &args,
 #endif
 }
 
-void os_write_file(Buf *full_path, Buf *contents) {
+Error os_write_file(Buf *full_path, Buf *contents) {
     FILE *f = fopen(buf_ptr(full_path), "wb");
     if (!f) {
         zig_panic("os_write_file failed for %s", buf_ptr(full_path));
@@ -1036,6 +1041,7 @@ void os_write_file(Buf *full_path, Buf *contents) {
         zig_panic("write failed: %s", strerror(errno));
     if (fclose(f))
         zig_panic("close failed");
+    return ErrorNone;
 }
 
 Error os_copy_file(Buf *src_path, Buf *dest_path) {
@@ -1099,7 +1105,7 @@ Error os_fetch_file_path(Buf *full_path, Buf *out_contents, bool skip_shebang) {
             case EINTR:
                 return ErrorInterrupted;
             case EINVAL:
-                zig_unreachable();
+                return ErrorInvalidFilename;
             case ENFILE:
             case ENOMEM:
                 return ErrorSystemResources;
@@ -1200,79 +1206,6 @@ bool os_stderr_tty(void) {
     return isatty(STDERR_FILENO) != 0;
 #else
 #error "missing os_stderr_tty implementation"
-#endif
-}
-
-#if defined(ZIG_OS_POSIX)
-static Error os_buf_to_tmp_file_posix(Buf *contents, Buf *suffix, Buf *out_tmp_path) {
-    const char *tmp_dir = getenv("TMPDIR");
-    if (!tmp_dir) {
-        tmp_dir = P_tmpdir;
-    }
-    buf_resize(out_tmp_path, 0);
-    buf_appendf(out_tmp_path, "%s/XXXXXX%s", tmp_dir, buf_ptr(suffix));
-
-    int fd = mkstemps(buf_ptr(out_tmp_path), (int)buf_len(suffix));
-    if (fd < 0) {
-        return ErrorFileSystem;
-    }
-
-    FILE *f = fdopen(fd, "wb");
-    if (!f) {
-        zig_panic("fdopen failed");
-    }
-
-    size_t amt_written = fwrite(buf_ptr(contents), 1, buf_len(contents), f);
-    if (amt_written != (size_t)buf_len(contents))
-        zig_panic("write failed: %s", strerror(errno));
-    if (fclose(f))
-        zig_panic("close failed");
-
-    return ErrorNone;
-}
-#endif
-
-#if defined(ZIG_OS_WINDOWS)
-static Error os_buf_to_tmp_file_windows(Buf *contents, Buf *suffix, Buf *out_tmp_path) {
-    char tmp_dir[MAX_PATH + 1];
-    if (GetTempPath(MAX_PATH, tmp_dir) == 0) {
-        zig_panic("GetTempPath failed");
-    }
-    buf_init_from_str(out_tmp_path, tmp_dir);
-
-    const char base64[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
-    assert(array_length(base64) == 64 + 1);
-    for (size_t i = 0; i < 8; i += 1) {
-        buf_append_char(out_tmp_path, base64[rand() % 64]);
-    }
-
-    buf_append_buf(out_tmp_path, suffix);
-
-    FILE *f = fopen(buf_ptr(out_tmp_path), "wb");
-
-    if (!f) {
-        zig_panic("unable to open %s: %s", buf_ptr(out_tmp_path), strerror(errno));
-    }
-
-    size_t amt_written = fwrite(buf_ptr(contents), 1, buf_len(contents), f);
-    if (amt_written != (size_t)buf_len(contents)) {
-        zig_panic("write failed: %s", strerror(errno));
-    }
-
-    if (fclose(f)) {
-        zig_panic("fclose failed");
-    }
-    return ErrorNone;
-}
-#endif
-
-Error os_buf_to_tmp_file(Buf *contents, Buf *suffix, Buf *out_tmp_path) {
-#if defined(ZIG_OS_WINDOWS)
-    return os_buf_to_tmp_file_windows(contents, suffix, out_tmp_path);
-#elif defined(ZIG_OS_POSIX)
-    return os_buf_to_tmp_file_posix(contents, suffix, out_tmp_path);
-#else
-#error "missing os_buf_to_tmp_file implementation"
 #endif
 }
 
@@ -1384,8 +1317,38 @@ Error os_make_dir(Buf *path) {
 #endif
 }
 
+static void init_rand() {
+#if defined(ZIG_OS_WINDOWS)
+    char bytes[sizeof(unsigned)];
+    unsigned seed;
+    RtlGenRandom(bytes, sizeof(unsigned));
+    memcpy(&seed, bytes, sizeof(unsigned));
+    srand(seed);
+#elif defined(ZIG_OS_LINUX)
+    srand(*((unsigned*)getauxval(AT_RANDOM)));
+#else
+    int fd = open("/dev/urandom", O_RDONLY|O_CLOEXEC);
+    if (fd == -1) {
+        zig_panic("unable to open /dev/urandom");
+    }
+    char bytes[sizeof(unsigned)];
+    size_t amt_read;
+    while ((amt_read = read(fd, bytes, sizeof(unsigned))) == -1) {
+        if (errno == EINTR) continue;
+        zig_panic("unable to read /dev/urandom");
+    }
+    if (amt_read != sizeof(unsigned)) {
+        zig_panic("unable to read enough bytes from /dev/urandom");
+    }
+    close(fd);
+    unsigned seed;
+    memcpy(&seed, bytes, sizeof(unsigned));
+    srand(seed);
+#endif
+}
+
 int os_init(void) {
-    srand((unsigned)time(NULL));
+    init_rand();
 #if defined(ZIG_OS_WINDOWS)
     _setmode(fileno(stdout), _O_BINARY);
     _setmode(fileno(stderr), _O_BINARY);
@@ -1456,7 +1419,16 @@ Error os_self_exe_path(Buf *out_path) {
     if (sysctl(mib, 4, buf_ptr(out_path), &cb, nullptr, 0) != 0) {
         return ErrorUnexpected;
     }
-    buf_resize(out_path, cb);
+    buf_resize(out_path, cb - 1);
+    return ErrorNone;
+#elif defined(ZIG_OS_NETBSD)
+    buf_resize(out_path, PATH_MAX);
+    int mib[4] = { CTL_KERN, KERN_PROC_ARGS, -1, KERN_PROC_PATHNAME };
+    size_t cb = PATH_MAX;
+    if (sysctl(mib, 4, buf_ptr(out_path), &cb, nullptr, 0) != 0) {
+        return ErrorUnexpected;
+    }
+    buf_resize(out_path, cb - 1);
     return ErrorNone;
 #endif
     return ErrorFileNotFound;
@@ -1541,7 +1513,7 @@ void os_stderr_set_color(TermColor color) {
 #endif
 }
 
-int os_get_win32_ucrt_lib_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchType platform_type) {
+Error os_get_win32_ucrt_lib_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchType platform_type) {
 #if defined(ZIG_OS_WINDOWS)
     buf_resize(output_buf, 0);
     buf_appendf(output_buf, "%s\\Lib\\%s\\ucrt\\", sdk->path10_ptr, sdk->version10_ptr);
@@ -1562,7 +1534,7 @@ int os_get_win32_ucrt_lib_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_Arch
     buf_init_from_buf(tmp_buf, output_buf);
     buf_append_str(tmp_buf, "ucrt.lib");
     if (GetFileAttributesA(buf_ptr(tmp_buf)) != INVALID_FILE_ATTRIBUTES) {
-        return 0;
+        return ErrorNone;
     }
     else {
         buf_resize(output_buf, 0);
@@ -1573,12 +1545,12 @@ int os_get_win32_ucrt_lib_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_Arch
 #endif
 }
 
-int os_get_win32_ucrt_include_path(ZigWindowsSDK *sdk, Buf* output_buf) {
+Error os_get_win32_ucrt_include_path(ZigWindowsSDK *sdk, Buf* output_buf) {
 #if defined(ZIG_OS_WINDOWS)
     buf_resize(output_buf, 0);
     buf_appendf(output_buf, "%s\\Include\\%s\\ucrt", sdk->path10_ptr, sdk->version10_ptr);
     if (GetFileAttributesA(buf_ptr(output_buf)) != INVALID_FILE_ATTRIBUTES) {
-        return 0;
+        return ErrorNone;
     }
     else {
         buf_resize(output_buf, 0);
@@ -1589,7 +1561,7 @@ int os_get_win32_ucrt_include_path(ZigWindowsSDK *sdk, Buf* output_buf) {
 #endif
 }
 
-int os_get_win32_kern32_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchType platform_type) {
+Error os_get_win32_kern32_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchType platform_type) {
 #if defined(ZIG_OS_WINDOWS)
     {
         buf_resize(output_buf, 0);
@@ -1611,7 +1583,7 @@ int os_get_win32_kern32_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchTy
         buf_init_from_buf(tmp_buf, output_buf);
         buf_append_str(tmp_buf, "kernel32.lib");
         if (GetFileAttributesA(buf_ptr(tmp_buf)) != INVALID_FILE_ATTRIBUTES) {
-            return 0;
+            return ErrorNone;
         }
     }
     {
@@ -1634,7 +1606,7 @@ int os_get_win32_kern32_path(ZigWindowsSDK *sdk, Buf* output_buf, ZigLLVM_ArchTy
         buf_init_from_buf(tmp_buf, output_buf);
         buf_append_str(tmp_buf, "kernel32.lib");
         if (GetFileAttributesA(buf_ptr(tmp_buf)) != INVALID_FILE_ATTRIBUTES) {
-            return 0;
+            return ErrorNone;
         }
     }
     return ErrorFileNotFound;
@@ -1776,7 +1748,7 @@ Error os_get_app_data_dir(Buf *out_path, const char *appname) {
 }
 
 
-#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD)
+#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD) || defined(ZIG_OS_NETBSD)
 static int self_exe_shared_libs_callback(struct dl_phdr_info *info, size_t size, void *data) {
     ZigList<Buf *> *libs = reinterpret_cast< ZigList<Buf *> *>(data);
     if (info->dlpi_name[0] == '/') {
@@ -1787,7 +1759,7 @@ static int self_exe_shared_libs_callback(struct dl_phdr_info *info, size_t size,
 #endif
 
 Error os_self_exe_shared_libs(ZigList<Buf *> &paths) {
-#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD)
+#if defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD) || defined(ZIG_OS_NETBSD)
     paths.resize(0);
     dl_iterate_phdr(self_exe_shared_libs_callback, &paths);
     return ErrorNone;
@@ -1808,7 +1780,7 @@ Error os_self_exe_shared_libs(ZigList<Buf *> &paths) {
 #endif
 }
 
-Error os_file_open_r(Buf *full_path, OsFile *out_file) {
+Error os_file_open_r(Buf *full_path, OsFile *out_file, OsTimeStamp *mtime) {
 #if defined(ZIG_OS_WINDOWS)
     // TODO use CreateFileW
     HANDLE result = CreateFileA(buf_ptr(full_path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -1834,8 +1806,18 @@ Error os_file_open_r(Buf *full_path, OsFile *out_file) {
                 return ErrorUnexpected;
         }
     }
-
     *out_file = result;
+
+    if (mtime != nullptr) {
+        FILETIME last_write_time;
+        if (!GetFileTime(result, nullptr, nullptr, &last_write_time)) {
+            CloseHandle(result);
+            return ErrorUnexpected;
+        }
+        mtime->sec = (((ULONGLONG) last_write_time.dwHighDateTime) << 32) + last_write_time.dwLowDateTime;
+        mtime->nsec = 0;
+    }
+
     return ErrorNone;
 #else
     for (;;) {
@@ -1858,7 +1840,26 @@ Error os_file_open_r(Buf *full_path, OsFile *out_file) {
                     return ErrorFileSystem;
             }
         }
+        struct stat statbuf;
+        if (fstat(fd, &statbuf) == -1) {
+            close(fd);
+            return ErrorFileSystem;
+        }
+        if (S_ISDIR(statbuf.st_mode)) {
+            close(fd);
+            return ErrorIsDir;
+        }
         *out_file = fd;
+
+        if (mtime != nullptr) {
+#if defined(ZIG_OS_DARWIN)
+            mtime->sec = statbuf.st_mtimespec.tv_sec;
+            mtime->nsec = statbuf.st_mtimespec.tv_nsec;
+#else
+            mtime->sec = statbuf.st_mtim.tv_sec;
+            mtime->nsec = statbuf.st_mtim.tv_nsec;
+#endif
+        }
         return ErrorNone;
     }
 #endif
@@ -1914,6 +1915,8 @@ Error os_file_open_lock_rw(Buf *full_path, OsFile *out_file) {
                     return ErrorIsDir;
                 case ENOENT:
                     return ErrorFileNotFound;
+                case ENOTDIR:
+                    return ErrorNotDir;
                 default:
                     return ErrorFileSystem;
             }
@@ -1945,35 +1948,6 @@ Error os_file_open_lock_rw(Buf *full_path, OsFile *out_file) {
     }
     *out_file = fd;
     return ErrorNone;
-#endif
-}
-
-Error os_file_mtime(OsFile file, OsTimeStamp *mtime) {
-#if defined(ZIG_OS_WINDOWS)
-    FILETIME last_write_time;
-    if (!GetFileTime(file, nullptr, nullptr, &last_write_time))
-        return ErrorUnexpected;
-    mtime->sec = (((ULONGLONG) last_write_time.dwHighDateTime) << 32) + last_write_time.dwLowDateTime;
-    mtime->nsec = 0;
-    return ErrorNone;
-#elif defined(ZIG_OS_LINUX) || defined(ZIG_OS_FREEBSD)
-    struct stat statbuf;
-    if (fstat(file, &statbuf) == -1)
-        return ErrorFileSystem;
-
-    mtime->sec = statbuf.st_mtim.tv_sec;
-    mtime->nsec = statbuf.st_mtim.tv_nsec;
-    return ErrorNone;
-#elif defined(ZIG_OS_DARWIN)
-    struct stat statbuf;
-    if (fstat(file, &statbuf) == -1)
-        return ErrorFileSystem;
-
-    mtime->sec = statbuf.st_mtimespec.tv_sec;
-    mtime->nsec = statbuf.st_mtimespec.tv_nsec;
-    return ErrorNone;
-#else
-#error unimplemented
 #endif
 }
 

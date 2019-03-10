@@ -132,13 +132,23 @@ static const char *const_or_var_string(bool is_const) {
     return is_const ? "const" : "var";
 }
 
-const char *container_string(ContainerKind kind) {
-    switch (kind) {
-        case ContainerKindEnum: return "enum";
-        case ContainerKindStruct: return "struct";
-        case ContainerKindUnion: return "union";
+static const char *thread_local_string(Token *tok) {
+    return (tok == nullptr) ? "" : "threadlocal ";
+}
+
+static const char *token_to_ptr_len_str(Token *tok) {
+    assert(tok != nullptr);
+    switch (tok->id) {
+        case TokenIdStar:
+        case TokenIdStarStar:
+            return "*";
+        case TokenIdBracketStarBracket:
+            return "[*]";
+        case TokenIdBracketStarCBracket:
+            return "[*c]";
+        default:
+            zig_unreachable();
     }
-    zig_unreachable();
 }
 
 static const char *node_type_str(NodeType node_type) {
@@ -233,8 +243,8 @@ static const char *node_type_str(NodeType node_type) {
             return "ErrorType";
         case NodeTypeIfErrorExpr:
             return "IfErrorExpr";
-        case NodeTypeTestExpr:
-            return "TestExpr";
+        case NodeTypeIfOptional:
+            return "IfOptional";
         case NodeTypeErrorSetDecl:
             return "ErrorSetDecl";
         case NodeTypeCancel:
@@ -307,7 +317,7 @@ static bool is_digit(uint8_t c) {
 
 static bool is_printable(uint8_t c) {
     static const uint8_t printables[] =
-        " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.~`!@#$%^&*()_-+=\\{}[];'\"?/<>,";
+        " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.~`!@#$%^&*()_-+=\\{}[];'\"?/<>,:";
     for (size_t i = 0; i < array_length(printables); i += 1) {
         if (c == printables[i]) return true;
     }
@@ -318,9 +328,7 @@ static void string_literal_escape(Buf *source, Buf *dest) {
     buf_resize(dest, 0);
     for (size_t i = 0; i < buf_len(source); i += 1) {
         uint8_t c = *((uint8_t*)buf_ptr(source) + i);
-        if (is_printable(c)) {
-            buf_append_char(dest, c);
-        } else if (c == '\'') {
+        if (c == '\'') {
             buf_append_str(dest, "\\'");
         } else if (c == '"') {
             buf_append_str(dest, "\\\"");
@@ -340,6 +348,8 @@ static void string_literal_escape(Buf *source, Buf *dest) {
             buf_append_str(dest, "\\t");
         } else if (c == '\v') {
             buf_append_str(dest, "\\v");
+        } else if (is_printable(c)) {
+            buf_append_char(dest, c);
         } else {
             buf_appendf(dest, "\\x%x", (int)c);
         }
@@ -387,7 +397,7 @@ static bool statement_terminates_without_semicolon(AstNode *node) {
             if (node->data.if_err_expr.else_node)
                 return statement_terminates_without_semicolon(node->data.if_err_expr.else_node);
             return node->data.if_err_expr.then_node->type == NodeTypeBlock;
-        case NodeTypeTestExpr:
+        case NodeTypeIfOptional:
             if (node->data.test_expr.else_node)
                 return statement_terminates_without_semicolon(node->data.test_expr.else_node);
             return node->data.test_expr.then_node->type == NodeTypeBlock;
@@ -459,6 +469,9 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                     if (arg_i + 1 < arg_count) {
                         fprintf(ar->f, ", ");
                     }
+                }
+                if (node->data.fn_proto.is_var_args) {
+                    fprintf(ar->f, ", ...");
                 }
                 fprintf(ar->f, ")");
                 if (node->data.fn_proto.align_expr) {
@@ -554,8 +567,9 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
             {
                 const char *pub_str = visib_mod_string(node->data.variable_declaration.visib_mod);
                 const char *extern_str = extern_string(node->data.variable_declaration.is_extern);
+                const char *thread_local_str = thread_local_string(node->data.variable_declaration.threadlocal_tok);
                 const char *const_or_var = const_or_var_string(node->data.variable_declaration.is_const);
-                fprintf(ar->f, "%s%s%s ", pub_str, extern_str, const_or_var);
+                fprintf(ar->f, "%s%s%s%s ", pub_str, extern_str, thread_local_str, const_or_var);
                 print_symbol(ar, node->data.variable_declaration.symbol);
 
                 if (node->data.variable_declaration.type) {
@@ -639,13 +653,8 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
         case NodeTypePointerType:
             {
                 if (!grouped) fprintf(ar->f, "(");
-                const char *star = "[*]";
-                if (node->data.pointer_type.star_token != nullptr &&
-                    (node->data.pointer_type.star_token->id == TokenIdStar || node->data.pointer_type.star_token->id == TokenIdStarStar))
-                {
-                    star = "*";
-                }
-                fprintf(ar->f, "%s", star);
+                const char *ptr_len_str = token_to_ptr_len_str(node->data.pointer_type.star_token);
+                fprintf(ar->f, "%s", ptr_len_str);
                 if (node->data.pointer_type.align_expr != nullptr) {
                     fprintf(ar->f, "align(");
                     render_node_grouped(ar, node->data.pointer_type.align_expr);
@@ -974,7 +983,7 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                 }
                 break;
             }
-        case NodeTypeTestExpr:
+        case NodeTypeIfOptional:
             {
                 fprintf(ar->f, "if (");
                 render_node_grouped(ar, node->data.test_expr.target_node);

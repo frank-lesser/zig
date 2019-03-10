@@ -145,10 +145,6 @@ fn constructLinkerArgsElf(ctx: *Context) !void {
     //    lj->args.append("-T");
     //    lj->args.append(g->linker_script);
     //}
-
-    //if (g->no_rosegment_workaround) {
-    //    lj->args.append("--no-rosegment");
-    //}
     try ctx.args.append(c"--gc-sections");
 
     //lj->args.append("-m");
@@ -315,7 +311,7 @@ fn constructLinkerArgsElf(ctx: *Context) !void {
 }
 
 fn addPathJoin(ctx: *Context, dirname: []const u8, basename: []const u8) !void {
-    const full_path = try std.os.path.join(&ctx.arena.allocator, dirname, basename);
+    const full_path = try std.os.path.join(&ctx.arena.allocator, [][]const u8{ dirname, basename });
     const full_path_with_null = try std.cstr.addNullByte(&ctx.arena.allocator, full_path);
     try ctx.args.append(full_path_with_null.ptr);
 }
@@ -330,7 +326,7 @@ fn constructLinkerArgsCoff(ctx: *Context) !void {
     switch (ctx.comp.target.getArch()) {
         builtin.Arch.i386 => try ctx.args.append(c"-MACHINE:X86"),
         builtin.Arch.x86_64 => try ctx.args.append(c"-MACHINE:X64"),
-        builtin.Arch.aarch64v8 => try ctx.args.append(c"-MACHINE:ARM"),
+        builtin.Arch.aarch64 => try ctx.args.append(c"-MACHINE:ARM"),
         else => return error.UnsupportedLinkArchitecture,
     }
 
@@ -556,7 +552,7 @@ fn constructLinkerArgsMachO(ctx: *Context) !void {
                 }
             },
             DarwinPlatform.Kind.IPhoneOS => {
-                if (ctx.comp.target.getArch() == builtin.Arch.aarch64v8) {
+                if (ctx.comp.target.getArch() == builtin.Arch.aarch64) {
                     // iOS does not need any crt1 files for arm64
                 } else if (platform.versionLessThan(3, 1)) {
                     try ctx.args.append(c"-lcrt1.o");

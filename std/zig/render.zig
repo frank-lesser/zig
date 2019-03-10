@@ -1,4 +1,4 @@
-const std = @import("../index.zig");
+const std = @import("../std.zig");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const mem = std.mem;
@@ -340,7 +340,6 @@ fn renderExpression(
         ast.Node.Id.InfixOp => {
             const infix_op_node = @fieldParentPtr(ast.Node.InfixOp, "base", base);
 
-            const op_token = tree.tokens.at(infix_op_node.op_token);
             const op_space = switch (infix_op_node.op) {
                 ast.Node.InfixOp.Op.Period, ast.Node.InfixOp.Op.ErrorUnion, ast.Node.InfixOp.Op.Range => Space.None,
                 else => Space.Space,
@@ -353,7 +352,9 @@ fn renderExpression(
             };
 
             try renderToken(tree, stream, infix_op_node.op_token, indent, start_col, after_op_space);
-            if (after_op_space == Space.Newline) {
+            if (after_op_space == Space.Newline and
+                tree.tokens.at(tree.nextToken(infix_op_node.op_token)).id != Token.Id.MultilineStringLiteralLine)
+            {
                 try stream.writeByteNTimes(' ', indent + indent_delta);
                 start_col.* = indent + indent_delta;
             }
@@ -1706,6 +1707,9 @@ fn renderVarDecl(
         try renderToken(tree, stream, comptime_token, indent, start_col, Space.Space); // comptime
     }
 
+    if (var_decl.thread_local_token) |thread_local_token| {
+        try renderToken(tree, stream, thread_local_token, indent, start_col, Space.Space); // threadlocal
+    }
     try renderToken(tree, stream, var_decl.mut_token, indent, start_col, Space.Space); // var
 
     const name_space = if (var_decl.type_node == null and (var_decl.align_node != null or

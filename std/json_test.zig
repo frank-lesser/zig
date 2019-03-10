@@ -3,18 +3,18 @@
 // Tests are taken from https://github.com/nst/JSONTestSuite
 // Read also http://seriot.ch/parsing_json.php for a good overview.
 
-const std = @import("index.zig");
+const std = @import("std.zig");
 
 fn ok(comptime s: []const u8) void {
-    std.debug.assert(std.json.validate(s));
+    std.testing.expect(std.json.validate(s));
 }
 
 fn err(comptime s: []const u8) void {
-    std.debug.assert(!std.json.validate(s));
+    std.testing.expect(!std.json.validate(s));
 }
 
 fn any(comptime s: []const u8) void {
-    std.debug.assert(true);
+    std.testing.expect(true);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

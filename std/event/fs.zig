@@ -1,7 +1,8 @@
 const builtin = @import("builtin");
-const std = @import("../index.zig");
+const std = @import("../std.zig");
 const event = std.event;
 const assert = std.debug.assert;
+const testing = std.testing;
 const os = std.os;
 const mem = std.mem;
 const posix = os.posix;
@@ -84,6 +85,7 @@ pub async fn pwritev(loop: *Loop, fd: os.FileHandle, data: []const []const u8, o
         builtin.Os.macosx,
         builtin.Os.linux,
         builtin.Os.freebsd,
+        builtin.Os.netbsd,
         => {
             const iovecs = try loop.allocator.alloc(os.posix.iovec_const, data.len);
             defer loop.allocator.free(iovecs);
@@ -221,6 +223,7 @@ pub async fn preadv(loop: *Loop, fd: os.FileHandle, data: []const []u8, offset: 
         builtin.Os.macosx,
         builtin.Os.linux,
         builtin.Os.freebsd,
+        builtin.Os.netbsd,
         => {
             const iovecs = try loop.allocator.alloc(os.posix.iovec, data.len);
             defer loop.allocator.free(iovecs);
@@ -401,7 +404,7 @@ pub async fn openPosix(
 
 pub async fn openRead(loop: *Loop, path: []const u8) os.File.OpenError!os.FileHandle {
     switch (builtin.os) {
-        builtin.Os.macosx, builtin.Os.linux, builtin.Os.freebsd => {
+        builtin.Os.macosx, builtin.Os.linux, builtin.Os.freebsd, builtin.Os.netbsd => {
             const flags = posix.O_LARGEFILE | posix.O_RDONLY | posix.O_CLOEXEC;
             return await (async openPosix(loop, path, flags, os.File.default_mode) catch unreachable);
         },
@@ -430,6 +433,7 @@ pub async fn openWriteMode(loop: *Loop, path: []const u8, mode: os.File.Mode) os
         builtin.Os.macosx,
         builtin.Os.linux,
         builtin.Os.freebsd,
+        builtin.Os.netbsd,
         => {
             const flags = posix.O_LARGEFILE | posix.O_WRONLY | posix.O_CREAT | posix.O_CLOEXEC | posix.O_TRUNC;
             return await (async openPosix(loop, path, flags, os.File.default_mode) catch unreachable);
@@ -452,7 +456,7 @@ pub async fn openReadWrite(
     mode: os.File.Mode,
 ) os.File.OpenError!os.FileHandle {
     switch (builtin.os) {
-        builtin.Os.macosx, builtin.Os.linux, builtin.Os.freebsd => {
+        builtin.Os.macosx, builtin.Os.linux, builtin.Os.freebsd, builtin.Os.netbsd => {
             const flags = posix.O_LARGEFILE | posix.O_RDWR | posix.O_CREAT | posix.O_CLOEXEC;
             return await (async openPosix(loop, path, flags, mode) catch unreachable);
         },
@@ -480,7 +484,7 @@ pub const CloseOperation = struct {
     os_data: OsData,
 
     const OsData = switch (builtin.os) {
-        builtin.Os.linux, builtin.Os.macosx, builtin.Os.freebsd => OsDataPosix,
+        builtin.Os.linux, builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => OsDataPosix,
 
         builtin.Os.windows => struct {
             handle: ?os.FileHandle,
@@ -495,11 +499,11 @@ pub const CloseOperation = struct {
     };
 
     pub fn start(loop: *Loop) (error{OutOfMemory}!*CloseOperation) {
-        const self = try loop.allocator.createOne(CloseOperation);
+        const self = try loop.allocator.create(CloseOperation);
         self.* = CloseOperation{
             .loop = loop,
             .os_data = switch (builtin.os) {
-                builtin.Os.linux, builtin.Os.macosx, builtin.Os.freebsd => initOsDataPosix(self),
+                builtin.Os.linux, builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => initOsDataPosix(self),
                 builtin.Os.windows => OsData{ .handle = null },
                 else => @compileError("Unsupported OS"),
             },
@@ -529,6 +533,7 @@ pub const CloseOperation = struct {
             builtin.Os.linux,
             builtin.Os.macosx,
             builtin.Os.freebsd,
+            builtin.Os.netbsd,
             => {
                 if (self.os_data.have_fd) {
                     self.loop.posixFsRequest(&self.os_data.close_req_node);
@@ -551,6 +556,7 @@ pub const CloseOperation = struct {
             builtin.Os.linux,
             builtin.Os.macosx,
             builtin.Os.freebsd,
+            builtin.Os.netbsd,
             => {
                 self.os_data.close_req_node.data.msg.Close.fd = handle;
                 self.os_data.have_fd = true;
@@ -568,6 +574,7 @@ pub const CloseOperation = struct {
             builtin.Os.linux,
             builtin.Os.macosx,
             builtin.Os.freebsd,
+            builtin.Os.netbsd,
             => {
                 self.os_data.have_fd = false;
             },
@@ -583,6 +590,7 @@ pub const CloseOperation = struct {
             builtin.Os.linux,
             builtin.Os.macosx,
             builtin.Os.freebsd,
+            builtin.Os.netbsd,
             => {
                 assert(self.os_data.have_fd);
                 return self.os_data.close_req_node.data.msg.Close.fd;
@@ -607,6 +615,7 @@ pub async fn writeFileMode(loop: *Loop, path: []const u8, contents: []const u8, 
         builtin.Os.linux,
         builtin.Os.macosx,
         builtin.Os.freebsd,
+        builtin.Os.netbsd,
         => return await (async writeFileModeThread(loop, path, contents, mode) catch unreachable),
         builtin.Os.windows => return await (async writeFileWindows(loop, path, contents) catch unreachable),
         else => @compileError("Unsupported OS"),
@@ -712,7 +721,7 @@ pub fn Watch(comptime V: type) type {
         os_data: OsData,
 
         const OsData = switch (builtin.os) {
-            builtin.Os.macosx, builtin.Os.freebsd => struct {
+            builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => struct {
                 file_table: FileTable,
                 table_lock: event.Lock,
 
@@ -787,7 +796,7 @@ pub fn Watch(comptime V: type) type {
                 },
 
                 builtin.Os.windows => {
-                    const self = try loop.allocator.createOne(Self);
+                    const self = try loop.allocator.create(Self);
                     errdefer loop.allocator.destroy(self);
                     self.* = Self{
                         .channel = channel,
@@ -801,8 +810,8 @@ pub fn Watch(comptime V: type) type {
                     return self;
                 },
 
-                builtin.Os.macosx, builtin.Os.freebsd => {
-                    const self = try loop.allocator.createOne(Self);
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
+                    const self = try loop.allocator.create(Self);
                     errdefer loop.allocator.destroy(self);
 
                     self.* = Self{
@@ -821,7 +830,7 @@ pub fn Watch(comptime V: type) type {
         /// All addFile calls and removeFile calls must have completed.
         pub fn destroy(self: *Self) void {
             switch (builtin.os) {
-                builtin.Os.macosx, builtin.Os.freebsd => {
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => {
                     // TODO we need to cancel the coroutines before destroying the lock
                     self.os_data.table_lock.deinit();
                     var it = self.os_data.file_table.iterator();
@@ -863,7 +872,7 @@ pub fn Watch(comptime V: type) type {
 
         pub async fn addFile(self: *Self, file_path: []const u8, value: V) !?V {
             switch (builtin.os) {
-                builtin.Os.macosx, builtin.Os.freebsd => return await (async addFileKEvent(self, file_path, value) catch unreachable),
+                builtin.Os.macosx, builtin.Os.freebsd, builtin.Os.netbsd => return await (async addFileKEvent(self, file_path, value) catch unreachable),
                 builtin.Os.linux => return await (async addFileLinux(self, file_path, value) catch unreachable),
                 builtin.Os.windows => return await (async addFileWindows(self, file_path, value) catch unreachable),
                 else => @compileError("Unsupported OS"),
@@ -871,7 +880,7 @@ pub fn Watch(comptime V: type) type {
         }
 
         async fn addFileKEvent(self: *Self, file_path: []const u8, value: V) !?V {
-            const resolved_path = try os.path.resolve(self.channel.loop.allocator, file_path);
+            const resolved_path = try os.path.resolve(self.channel.loop.allocator, [][]const u8{file_path});
             var resolved_path_consumed = false;
             defer if (!resolved_path_consumed) self.channel.loop.allocator.free(resolved_path);
 
@@ -1068,7 +1077,7 @@ pub fn Watch(comptime V: type) type {
                 }
             } else {
                 errdefer _ = self.os_data.dir_table.remove(dirname);
-                const dir = try self.channel.loop.allocator.createOne(OsData.Dir);
+                const dir = try self.channel.loop.allocator.create(OsData.Dir);
                 errdefer self.channel.loop.allocator.destroy(dir);
 
                 dir.* = OsData.Dir{
@@ -1307,39 +1316,36 @@ pub fn Watch(comptime V: type) type {
 
 const test_tmp_dir = "std_event_fs_test";
 
-test "write a file, watch it, write it again" {
-    if (builtin.os == builtin.Os.windows) {
-        // TODO this test is disabled on windows until the coroutine rewrite is finished.
-        // https://github.com/ziglang/zig/issues/1363
-        return error.SkipZigTest;
-    }
-    var da = std.heap.DirectAllocator.init();
-    defer da.deinit();
-
-    const allocator = &da.allocator;
-
-    // TODO move this into event loop too
-    try os.makePath(allocator, test_tmp_dir);
-    defer os.deleteTree(allocator, test_tmp_dir) catch {};
-
-    var loop: Loop = undefined;
-    try loop.initMultiThreaded(allocator);
-    defer loop.deinit();
-
-    var result: anyerror!void = error.ResultNeverWritten;
-    const handle = try async<allocator> testFsWatchCantFail(&loop, &result);
-    defer cancel handle;
-
-    loop.run();
-    return result;
-}
+// TODO this test is disabled until the coroutine rewrite is finished.
+//test "write a file, watch it, write it again" {
+//    return error.SkipZigTest;
+//    var da = std.heap.DirectAllocator.init();
+//    defer da.deinit();
+//
+//    const allocator = &da.allocator;
+//
+//    // TODO move this into event loop too
+//    try os.makePath(allocator, test_tmp_dir);
+//    defer os.deleteTree(allocator, test_tmp_dir) catch {};
+//
+//    var loop: Loop = undefined;
+//    try loop.initMultiThreaded(allocator);
+//    defer loop.deinit();
+//
+//    var result: anyerror!void = error.ResultNeverWritten;
+//    const handle = try async<allocator> testFsWatchCantFail(&loop, &result);
+//    defer cancel handle;
+//
+//    loop.run();
+//    return result;
+//}
 
 async fn testFsWatchCantFail(loop: *Loop, result: *(anyerror!void)) void {
     result.* = await (async testFsWatch(loop) catch unreachable);
 }
 
 async fn testFsWatch(loop: *Loop) !void {
-    const file_path = try os.path.join(loop.allocator, test_tmp_dir, "file.txt");
+    const file_path = try os.path.join(loop.allocator, [][]const u8{ test_tmp_dir, "file.txt" });
     defer loop.allocator.free(file_path);
 
     const contents =
@@ -1352,13 +1358,13 @@ async fn testFsWatch(loop: *Loop) !void {
     try await try async writeFile(loop, file_path, contents);
 
     const read_contents = try await try async readFile(loop, file_path, 1024 * 1024);
-    assert(mem.eql(u8, read_contents, contents));
+    testing.expectEqualSlices(u8, contents, read_contents);
 
     // now watch the file
     var watch = try Watch(void).create(loop, 0);
     defer watch.destroy();
 
-    assert((try await try async watch.addFile(file_path, {})) == null);
+    testing.expect((try await try async watch.addFile(file_path, {})) == null);
 
     const ev = try async watch.channel.get();
     var ev_consumed = false;
@@ -1378,10 +1384,10 @@ async fn testFsWatch(loop: *Loop) !void {
         WatchEventId.Delete => @panic("wrong event"),
     }
     const contents_updated = try await try async readFile(loop, file_path, 1024 * 1024);
-    assert(mem.eql(u8, contents_updated,
+    testing.expectEqualSlices(u8,
         \\line 1
         \\lorem ipsum
-    ));
+    , contents_updated);
 
     // TODO test deleting the file and then re-adding it. we should get events for both
 }

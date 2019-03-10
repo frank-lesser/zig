@@ -191,6 +191,9 @@ ZIG_EXTERN_C struct ZigLLVMDISubprogram *ZigLLVMCreateFunction(struct ZigLLVMDIB
         unsigned lineno, struct ZigLLVMDIType *fn_di_type, bool is_local_to_unit, bool is_definition,
         unsigned scope_line, unsigned flags, bool is_optimized, struct ZigLLVMDISubprogram *decl_subprogram);
 
+ZIG_EXTERN_C struct ZigLLVMDIType *ZigLLVMDIBuilderCreateVectorType(struct ZigLLVMDIBuilder *dibuilder,
+        uint64_t SizeInBits, uint32_t AlignInBits, struct ZigLLVMDIType *Ty, uint32_t elem_count);
+
 ZIG_EXTERN_C void ZigLLVMFnSetSubprogram(LLVMValueRef fn, struct ZigLLVMDISubprogram *subprogram);
 
 ZIG_EXTERN_C void ZigLLVMDIBuilderFinalize(struct ZigLLVMDIBuilder *dibuilder);
@@ -212,7 +215,7 @@ ZIG_EXTERN_C void ZigLLVMParseCommandLineOptions(size_t argc, const char *const 
 
 
 // copied from include/llvm/ADT/Triple.h
-
+// synchronize with target.cpp::arch_list
 enum ZigLLVM_ArchType {
     ZigLLVM_UnknownArch,
 
@@ -270,6 +273,7 @@ enum ZigLLVM_ArchType {
     ZigLLVM_LastArchType = ZigLLVM_renderscript64
 };
 
+// synchronize with lists in target.cpp
 enum ZigLLVM_SubArchType {
     ZigLLVM_NoSubArch,
 
@@ -401,7 +405,7 @@ ZIG_EXTERN_C const char *ZigLLVMGetArchTypeName(enum ZigLLVM_ArchType arch);
 ZIG_EXTERN_C const char *ZigLLVMGetSubArchTypeName(enum ZigLLVM_SubArchType sub_arch);
 ZIG_EXTERN_C const char *ZigLLVMGetVendorTypeName(enum ZigLLVM_VendorType vendor);
 ZIG_EXTERN_C const char *ZigLLVMGetOSTypeName(enum ZigLLVM_OSType os);
-ZIG_EXTERN_C const char *ZigLLVMGetEnvironmentTypeName(enum ZigLLVM_EnvironmentType env_type);
+ZIG_EXTERN_C const char *ZigLLVMGetEnvironmentTypeName(enum ZigLLVM_EnvironmentType abi);
 
 ZIG_EXTERN_C bool ZigLLDLink(enum ZigLLVM_ObjectFormatType oformat, const char **args, size_t arg_count,
         void (*append_diagnostic)(void *, const char *, size_t), void *context);
