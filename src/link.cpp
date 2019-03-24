@@ -10,7 +10,7 @@
 #include "codegen.hpp"
 #include "analyze.hpp"
 #include "compiler.hpp"
-
+#include "install_files.h"
 
 struct LinkJob {
     CodeGen *codegen;
@@ -35,7 +35,7 @@ static CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, Ou
     child_gen->llvm_argv = parent_gen->llvm_argv;
 
     codegen_set_strip(child_gen, parent_gen->strip_debug_symbols);
-    child_gen->disable_pic = parent_gen->disable_pic;
+    child_gen->want_pic = parent_gen->have_pic ? WantPICEnabled : WantPICDisabled;
     child_gen->valgrind_support = ValgrindSupportDisabled;
 
     codegen_set_errmsg_color(child_gen, parent_gen->err_color);
@@ -48,17 +48,20 @@ static CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, Ou
     return child_gen;
 }
 
-
-static bool target_is_glibc(CodeGen *g) {
-    return g->zig_target->os == OsLinux && target_abi_is_gnu(g->zig_target->abi);
-}
-
 static const char *build_libc_object(CodeGen *parent_gen, const char *name, CFile *c_file) {
     CodeGen *child_gen = create_child_codegen(parent_gen, nullptr, OutTypeObj, nullptr);
     codegen_set_out_name(child_gen, buf_create_from_str(name));
     ZigList<CFile *> c_source_files = {0};
     c_source_files.append(c_file);
     child_gen->c_source_files = c_source_files;
+    codegen_build_and_link(child_gen);
+    return buf_ptr(&child_gen->output_file_path);
+}
+
+static const char *build_asm_object(CodeGen *parent_gen, const char *name, Buf *file) {
+    CodeGen *child_gen = create_child_codegen(parent_gen, nullptr, OutTypeObj, nullptr);
+    codegen_set_out_name(child_gen, buf_create_from_str(name));
+    codegen_add_assembly(child_gen, file);
     codegen_build_and_link(child_gen);
     return buf_ptr(&child_gen->output_file_path);
 }
@@ -85,7 +88,7 @@ static const char *build_dummy_so(CodeGen *parent, const char *name, size_t majo
     CodeGen *child_gen = create_child_codegen(parent, glibc_dummy_root_src, OutTypeLib, nullptr);
     codegen_set_out_name(child_gen, buf_create_from_str(name));
     codegen_set_lib_version(child_gen, major_version, 0, 0);
-    child_gen->is_static = false;
+    child_gen->is_dynamic = true;
     child_gen->is_dummy_so = true;
     codegen_build_and_link(child_gen);
     return buf_ptr(&child_gen->output_file_path);
@@ -94,7 +97,6 @@ static const char *build_dummy_so(CodeGen *parent, const char *name, size_t majo
 static const char *build_libunwind(CodeGen *parent) {
     CodeGen *child_gen = create_child_codegen(parent, nullptr, OutTypeLib, nullptr);
     codegen_set_out_name(child_gen, buf_create_from_str("unwind"));
-    child_gen->is_static = true;
     LinkLib *new_link_lib = codegen_add_link_lib(child_gen, buf_create_from_str("c"));
     new_link_lib->provided_explicitly = false;
     enum SrcKind {
@@ -318,6 +320,13 @@ static void glibc_add_include_dirs(CodeGen *parent, CFile *c_file) {
 
     c_file->args.append("-I");
     c_file->args.append(path_from_libc(parent, "include" OS_SEP "generic-glibc"));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-linux-any",
+                    buf_ptr(parent->zig_lib_dir), target_arch_name(parent->zig_target->arch))));
+
+    c_file->args.append("-I");
+    c_file->args.append(path_from_libc(parent, "include" OS_SEP "any-linux-any"));
 }
 
 static const char *glibc_start_asm_path(CodeGen *parent, const char *file) {
@@ -335,9 +344,7 @@ static const char *glibc_start_asm_path(CodeGen *parent, const char *file) {
     buf_resize(&result, 0);
     buf_append_buf(&result, parent->zig_lib_dir);
     buf_append_str(&result, OS_SEP "libc" OS_SEP "glibc" OS_SEP "sysdeps" OS_SEP);
-    if (arch == ZigLLVM_nios2) {
-        buf_append_str(&result, "nios2");
-    } else if (is_sparc) {
+    if (is_sparc) {
         if (is_64) {
             buf_append_str(&result, "sparc" OS_SEP "sparc64");
         } else {
@@ -368,8 +375,227 @@ static const char *glibc_start_asm_path(CodeGen *parent, const char *file) {
     return buf_ptr(&result);
 }
 
+static const char *musl_arch_name(const ZigTarget *target) {
+    switch (target->arch) {
+        case ZigLLVM_aarch64:
+        case ZigLLVM_aarch64_be:
+            return "aarch64";
+        case ZigLLVM_arm:
+        case ZigLLVM_armeb:
+            return "arm";
+        case ZigLLVM_mips:
+        case ZigLLVM_mipsel:
+            return "mips";
+        case ZigLLVM_mips64el:
+        case ZigLLVM_mips64:
+            return "mips64";
+        case ZigLLVM_ppc:
+            return "powerpc";
+        case ZigLLVM_ppc64:
+        case ZigLLVM_ppc64le:
+            return "powerpc64";
+        case ZigLLVM_systemz:
+            return "s390x";
+        case ZigLLVM_x86:
+            return "i386";
+        case ZigLLVM_x86_64:
+            return "x86_64";
+        default:
+            zig_unreachable();
+    }
+}
+
+static Buf *musl_start_asm_path(CodeGen *parent, const char *file) {
+    return buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "crt" OS_SEP "%s" OS_SEP "%s",
+        buf_ptr(parent->zig_lib_dir), musl_arch_name(parent->zig_target), file);
+}
+
+static void musl_add_cc_args(CodeGen *parent, CFile *c_file) {
+    c_file->args.append("-std=c99");
+    c_file->args.append("-ffreestanding");
+    // Musl adds these args to builds with gcc but clang does not support them. 
+    //c_file->args.append("-fexcess-precision=standard");
+    //c_file->args.append("-frounding-math");
+    c_file->args.append("-Wa,--noexecstack");
+    c_file->args.append("-D_XOPEN_SOURCE=700");
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "arch" OS_SEP "%s",
+            buf_ptr(parent->zig_lib_dir), musl_arch_name(parent->zig_target))));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "arch" OS_SEP "generic",
+            buf_ptr(parent->zig_lib_dir))));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "src" OS_SEP "internal",
+            buf_ptr(parent->zig_lib_dir))));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "src" OS_SEP "include",
+            buf_ptr(parent->zig_lib_dir))));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf(
+            "%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-%s-%s",
+        buf_ptr(parent->zig_lib_dir),
+        target_arch_name(parent->zig_target->arch),
+        target_os_name(parent->zig_target->os),
+        target_abi_name(parent->zig_target->abi))));
+
+    c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "generic-musl",
+            buf_ptr(parent->zig_lib_dir))));
+
+    c_file->args.append("-Os");
+    c_file->args.append("-fomit-frame-pointer");
+    c_file->args.append("-fno-unwind-tables");
+    c_file->args.append("-fno-asynchronous-unwind-tables");
+    c_file->args.append("-ffunction-sections");
+    c_file->args.append("-fdata-sections");
+}
+
+static const char *musl_arch_names[] = {
+    "aarch64",
+    "arm",
+    "generic",
+    "i386",
+    "m68k",
+    "microblaze",
+    "mips",
+    "mips64",
+    "mipsn32",
+    "or1k",
+    "powerpc",
+    "powerpc64",
+    "s390x",
+    "sh",
+    "x32",
+    "x86_64",
+};
+
+static bool is_musl_arch_name(const char *name) {
+    for (size_t i = 0; i < array_length(musl_arch_names); i += 1) {
+        if (strcmp(name, musl_arch_names[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static const char *build_musl(CodeGen *parent) {
+    CodeGen *child_gen = create_child_codegen(parent, nullptr, OutTypeLib, nullptr);
+    codegen_set_out_name(child_gen, buf_create_from_str("c"));
+
+    // When there is a src/<arch>/foo.* then it should substitute for src/foo.*
+    // Even a .s file can substitute for a .c file.
+
+    enum MuslSrc {
+        MuslSrcAsm,
+        MuslSrcNormal,
+        MuslSrcO3,
+    };
+
+    const char *target_musl_arch_name = musl_arch_name(parent->zig_target);
+
+    HashMap<Buf *, MuslSrc, buf_hash, buf_eql_buf> source_table = {};
+    source_table.init(1800);
+
+    for (size_t i = 0; i < array_length(ZIG_MUSL_SRC_FILES); i += 1) {
+        Buf *src_file = buf_create_from_str(ZIG_MUSL_SRC_FILES[i]);
+
+        MuslSrc src_kind;
+        if (buf_ends_with_str(src_file, ".c")) {
+            assert(buf_starts_with_str(src_file, "musl/src/"));
+            bool want_O3 = buf_starts_with_str(src_file, "musl/src/malloc/") ||
+                buf_starts_with_str(src_file, "musl/src/string/") ||
+                buf_starts_with_str(src_file, "musl/src/internal/");
+            src_kind = want_O3 ? MuslSrcO3 : MuslSrcNormal;
+        } else if (buf_ends_with_str(src_file, ".s") || buf_ends_with_str(src_file, ".S")) {
+            src_kind = MuslSrcAsm;
+        } else {
+            continue;
+        }
+        if (ZIG_OS_SEP_CHAR != '/') {
+            buf_replace(src_file, '/', ZIG_OS_SEP_CHAR);
+        }
+        source_table.put_unique(src_file, src_kind);
+    }
+
+    ZigList<CFile *> c_source_files = {0};
+
+    Buf dirname = BUF_INIT;
+    Buf basename = BUF_INIT;
+    Buf noextbasename = BUF_INIT;
+    Buf dirbasename = BUF_INIT;
+    Buf before_arch_dir = BUF_INIT;
+    Buf override_c = BUF_INIT;
+    Buf override_s = BUF_INIT;
+    Buf override_S = BUF_INIT;
+
+    auto source_it = source_table.entry_iterator();
+    for (;;) {
+        auto *entry = source_it.next();
+        if (!entry) break;
+
+        Buf *src_file = entry->key;
+        MuslSrc src_kind = entry->value;
+
+        os_path_split(src_file, &dirname, &basename);
+        os_path_extname(&basename, &noextbasename, nullptr);
+        os_path_split(&dirname, &before_arch_dir, &dirbasename);
+        if (is_musl_arch_name(buf_ptr(&dirbasename))) {
+            // We find these by explicitly looking for overrides.
+            continue;
+        }
+        // Look for an arch specific override.
+        buf_resize(&override_c, 0);
+        buf_resize(&override_s, 0);
+        buf_resize(&override_S, 0);
+
+        buf_appendf(&override_c, "%s" OS_SEP "%s" OS_SEP "%s.c",
+                buf_ptr(&dirname), target_musl_arch_name, buf_ptr(&noextbasename));
+        buf_appendf(&override_s, "%s" OS_SEP "%s" OS_SEP "%s.s",
+                buf_ptr(&dirname), target_musl_arch_name, buf_ptr(&noextbasename));
+        buf_appendf(&override_S, "%s" OS_SEP "%s" OS_SEP "%s.S",
+                buf_ptr(&dirname), target_musl_arch_name, buf_ptr(&noextbasename));
+
+        if (source_table.maybe_get(&override_c) != nullptr) {
+            src_file = &override_c;
+            src_kind = (src_kind == MuslSrcAsm) ? MuslSrcNormal : src_kind;
+        } else if (source_table.maybe_get(&override_s) != nullptr) {
+            src_file = &override_s;
+            src_kind = MuslSrcAsm;
+        } else if (source_table.maybe_get(&override_S) != nullptr) {
+            src_file = &override_S;
+            src_kind = MuslSrcAsm;
+        }
+
+        Buf *full_path = buf_sprintf("%s" OS_SEP "libc" OS_SEP "%s",
+                buf_ptr(parent->zig_lib_dir), buf_ptr(src_file));
+
+        if (src_kind == MuslSrcAsm) {
+            codegen_add_assembly(child_gen, full_path);
+        } else {
+            CFile *c_file = allocate<CFile>(1);
+            c_file->source_path = buf_ptr(full_path);
+            musl_add_cc_args(parent, c_file);
+            c_file->args.append("-Qunused-arguments");
+            c_file->args.append("-w"); // disable all warnings
+            if (src_kind == MuslSrcO3) {
+                c_file->args.append("-O3");
+            }
+            c_source_files.append(c_file);
+        }
+    }
+
+    child_gen->c_source_files = c_source_files;
+    codegen_build_and_link(child_gen);
+    return buf_ptr(&child_gen->output_file_path);
+}
+
+
 static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
-    if (parent->libc == nullptr && target_is_glibc(parent)) {
+    if (parent->libc == nullptr && target_is_glibc(parent->zig_target)) {
         if (strcmp(file, "crti.o") == 0) {
             CFile *c_file = allocate<CFile>(1);
             c_file->source_path = glibc_start_asm_path(parent, "crti.S");
@@ -438,7 +664,6 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
         } else if (strcmp(file, "libc_nonshared.a") == 0) {
             CodeGen *child_gen = create_child_codegen(parent, nullptr, OutTypeLib, nullptr);
             codegen_set_out_name(child_gen, buf_create_from_str("c_nonshared"));
-            child_gen->is_static = true;
             {
                 CFile *c_file = allocate<CFile>(1);
                 c_file->source_path = path_from_libc(parent, "glibc" OS_SEP "csu" OS_SEP "elf-init.c");
@@ -516,6 +741,29 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
         } else {
             zig_unreachable();
         }
+    } else if (parent->libc == nullptr && target_is_musl(parent->zig_target)) {
+        if (strcmp(file, "crti.o") == 0) {
+            return build_asm_object(parent, "crti", musl_start_asm_path(parent, "crti.s"));
+        } else if (strcmp(file, "crtn.o") == 0) {
+            return build_asm_object(parent, "crtn", musl_start_asm_path(parent, "crtn.s"));
+        } else if (strcmp(file, "crt1.o") == 0) {
+            CFile *c_file = allocate<CFile>(1);
+            c_file->source_path = path_from_libc(parent, "musl" OS_SEP "crt" OS_SEP "crt1.c");
+            musl_add_cc_args(parent, c_file);
+            c_file->args.append("-fno-stack-protector");
+            c_file->args.append("-DCRT");
+            return build_libc_object(parent, "crt1", c_file);
+        } else if (strcmp(file, "Scrt1.o") == 0) {
+            CFile *c_file = allocate<CFile>(1);
+            c_file->source_path = path_from_libc(parent, "musl" OS_SEP "crt" OS_SEP "Scrt1.c");
+            musl_add_cc_args(parent, c_file);
+            c_file->args.append("-fPIC");
+            c_file->args.append("-fno-stack-protector");
+            c_file->args.append("-DCRT");
+            return build_libc_object(parent, "Scrt1", c_file);
+        } else {
+            zig_unreachable();
+        }
     } else {
         assert(parent->libc != nullptr);
         Buf *out_buf = buf_alloc();
@@ -537,7 +785,6 @@ static Buf *build_a_raw(CodeGen *parent_gen, const char *aname, Buf *full_path) 
 
     CodeGen *child_gen = create_child_codegen(parent_gen, full_path, child_out_type,
             parent_gen->libc);
-    child_gen->is_static = true;
     codegen_set_out_name(child_gen, buf_create_from_str(aname));
 
     // This is so that compiler_rt and builtin libraries know whether they
@@ -629,6 +876,10 @@ static const char *getLDMOption(const ZigTarget *t) {
                 return "elf_x86_64_fbsd";
             }
             return "elf_x86_64";
+        case ZigLLVM_riscv32:
+            return "elf32lriscv";
+        case ZigLLVM_riscv64:
+            return "elf64lriscv";
         default:
             zig_unreachable();
     }
@@ -662,9 +913,9 @@ static void construct_linker_job_elf(LinkJob *lj) {
     lj->args.append(getLDMOption(g->zig_target));
 
     bool is_lib = g->out_type == OutTypeLib;
-    bool is_dyn_lib = !g->is_static && is_lib;
+    bool is_dyn_lib = g->is_dynamic && is_lib;
     Buf *soname = nullptr;
-    if (g->is_static) {
+    if (!g->have_dynamic_link) {
         if (g->zig_target->arch == ZigLLVM_arm || g->zig_target->arch == ZigLLVM_armeb ||
             g->zig_target->arch == ZigLLVM_thumb || g->zig_target->arch == ZigLLVM_thumbeb)
         {
@@ -686,7 +937,7 @@ static void construct_linker_job_elf(LinkJob *lj) {
         const char *crt1o;
         if (g->zig_target->os == OsNetBSD) {
             crt1o = "crt0.o";
-        } else if (g->is_static) {
+        } else if (!g->have_dynamic_link) {
             crt1o = "crt1.o";
         } else {
             crt1o = "Scrt1.o";
@@ -732,12 +983,11 @@ static void construct_linker_job_elf(LinkJob *lj) {
             lj->args.append(buf_ptr(&g->libc->crt_dir));
         }
 
-        if (!g->is_static) {
+        if (g->have_dynamic_link && (is_dyn_lib || g->out_type == OutTypeExe)) {
             assert(g->dynamic_linker_path != nullptr);
             lj->args.append("-dynamic-linker");
             lj->args.append(buf_ptr(g->dynamic_linker_path));
         }
-
     }
 
     if (is_dyn_lib) {
@@ -750,16 +1000,14 @@ static void construct_linker_job_elf(LinkJob *lj) {
         lj->args.append((const char *)buf_ptr(g->link_objects.at(i)));
     }
 
-    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && !g->is_static)) {
-        if (g->libc_link_lib == nullptr && !g->is_dummy_so) {
+    if (!g->is_dummy_so && (g->out_type == OutTypeExe || is_dyn_lib)) {
+        if (g->libc_link_lib == nullptr) {
             Buf *builtin_a_path = build_a(g, "builtin");
             lj->args.append(buf_ptr(builtin_a_path));
         }
 
-        if (!g->is_dummy_so) {
-            Buf *compiler_rt_o_path = build_compiler_rt(g);
-            lj->args.append(buf_ptr(compiler_rt_o_path));
-        }
+        Buf *compiler_rt_o_path = build_compiler_rt(g);
+        lj->args.append(buf_ptr(compiler_rt_o_path));
     }
 
     for (size_t i = 0; i < g->link_libs_list.length; i += 1) {
@@ -768,17 +1016,9 @@ static void construct_linker_job_elf(LinkJob *lj) {
             // libc is linked specially
             continue;
         }
-        if (g->libc == nullptr && target_is_glibc(g)) {
+        if (g->libc == nullptr && target_is_libc_lib_name(g->zig_target, buf_ptr(link_lib->name))) {
             // these libraries are always linked below when targeting glibc
-            if (buf_eql_str(link_lib->name, "m")) {
-                continue;
-            } else if (buf_eql_str(link_lib->name, "pthread")) {
-                continue;
-            } else if (buf_eql_str(link_lib->name, "dl")) {
-                continue;
-            } else if (buf_eql_str(link_lib->name, "rt")) {
-                continue;
-            }
+            continue;
         }
         Buf *arg;
         if (buf_starts_with_str(link_lib->name, "/") || buf_ends_with_str(link_lib->name, ".a") ||
@@ -794,25 +1034,27 @@ static void construct_linker_job_elf(LinkJob *lj) {
 
     // libc dep
     if (g->libc_link_lib != nullptr) {
-        if (g->is_static) {
-            lj->args.append("--start-group");
-            lj->args.append("-lgcc");
-            lj->args.append("-lgcc_eh");
-            lj->args.append("-lc");
-            lj->args.append("-lm");
-            lj->args.append("--end-group");
-        } else if (g->libc != nullptr) {
-            lj->args.append("-lgcc");
-            lj->args.append("--as-needed");
-            lj->args.append("-lgcc_s");
-            lj->args.append("--no-as-needed");
-            lj->args.append("-lc");
-            lj->args.append("-lm");
-            lj->args.append("-lgcc");
-            lj->args.append("--as-needed");
-            lj->args.append("-lgcc_s");
-            lj->args.append("--no-as-needed");
-        } else if (target_is_glibc(g)) {
+        if (g->libc != nullptr) {
+            if (!g->have_dynamic_link) {
+                lj->args.append("--start-group");
+                lj->args.append("-lgcc");
+                lj->args.append("-lgcc_eh");
+                lj->args.append("-lc");
+                lj->args.append("-lm");
+                lj->args.append("--end-group");
+            } else {
+                lj->args.append("-lgcc");
+                lj->args.append("--as-needed");
+                lj->args.append("-lgcc_s");
+                lj->args.append("--no-as-needed");
+                lj->args.append("-lc");
+                lj->args.append("-lm");
+                lj->args.append("-lgcc");
+                lj->args.append("--as-needed");
+                lj->args.append("-lgcc_s");
+                lj->args.append("--no-as-needed");
+            }
+        } else if (target_is_glibc(g->zig_target)) {
             lj->args.append(build_libunwind(g));
             lj->args.append(build_dummy_so(g, "c", 6));
             lj->args.append(build_dummy_so(g, "m", 6));
@@ -820,6 +1062,9 @@ static void construct_linker_job_elf(LinkJob *lj) {
             lj->args.append(build_dummy_so(g, "dl", 2));
             lj->args.append(build_dummy_so(g, "rt", 1));
             lj->args.append(get_libc_crt_file(g, "libc_nonshared.a"));
+        } else if (target_is_musl(g->zig_target)) {
+            lj->args.append(build_libunwind(g));
+            lj->args.append(build_musl(g));
         } else {
             zig_unreachable();
         }
@@ -891,10 +1136,12 @@ static void add_nt_link_args(LinkJob *lj, bool is_library) {
     CodeGen *g = lj->codegen;
 
     if (lj->link_in_crt) {
-        const char *lib_str = g->is_static ? "lib" : "";
+        // TODO: https://github.com/ziglang/zig/issues/2064
+        bool is_dynamic = true; // g->is_dynamic;
+        const char *lib_str = is_dynamic ? "" : "lib";
         const char *d_str = (g->build_mode == BuildModeDebug) ? "d" : "";
 
-        if (g->is_static) {
+        if (!is_dynamic) {
             Buf *cmt_lib_name = buf_sprintf("libcmt%s.lib", d_str);
             lj->args.append(buf_ptr(cmt_lib_name));
         } else {
@@ -912,8 +1159,9 @@ static void add_nt_link_args(LinkJob *lj, bool is_library) {
         //https://msdn.microsoft.com/en-us/library/bb531344.aspx
         lj->args.append("legacy_stdio_definitions.lib");
 
-        // msvcrt depends on kernel32
+        // msvcrt depends on kernel32 and ntdll
         lj->args.append("kernel32.lib");
+        lj->args.append("ntdll.lib");
     } else {
         lj->args.append("/NODEFAULTLIB");
         if (!is_library) {
@@ -998,7 +1246,7 @@ static void construct_linker_job_coff(LinkJob *lj) {
         lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", buf_ptr(&g->libc->crt_dir))));
     }
 
-    if (is_library && !g->is_static) {
+    if (is_library && g->is_dynamic) {
         lj->args.append("-DLL");
     }
 
@@ -1011,7 +1259,7 @@ static void construct_linker_job_coff(LinkJob *lj) {
         lj->args.append((const char *)buf_ptr(g->link_objects.at(i)));
     }
 
-    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && !g->is_static)) {
+    if (g->out_type == OutTypeExe || (g->out_type == OutTypeLib && g->is_dynamic)) {
         if (g->libc_link_lib == nullptr && !g->is_dummy_so) {
             Buf *builtin_a_path = build_a(g, "builtin");
             lj->args.append(buf_ptr(builtin_a_path));
@@ -1190,8 +1438,8 @@ static void construct_linker_job_macho(LinkJob *lj) {
     }
 
     bool is_lib = g->out_type == OutTypeLib;
-    bool is_dyn_lib = !g->is_static && is_lib;
-    if (g->is_static) {
+    bool is_dyn_lib = g->is_dynamic && is_lib;
+    if (is_lib && !g->is_dynamic) {
         lj->args.append("-static");
     } else {
         lj->args.append("-dynamic");
@@ -1242,11 +1490,7 @@ static void construct_linker_job_macho(LinkJob *lj) {
 
 
     if (g->out_type == OutTypeExe) {
-        if (g->is_static) {
-            lj->args.append("-no_pie");
-        } else {
-            lj->args.append("-pie");
-        }
+        lj->args.append("-pie");
     }
 
     lj->args.append("-o");
@@ -1285,15 +1529,15 @@ static void construct_linker_job_macho(LinkJob *lj) {
     if (g->zig_target->is_native) {
         for (size_t lib_i = 0; lib_i < g->link_libs_list.length; lib_i += 1) {
             LinkLib *link_lib = g->link_libs_list.at(lib_i);
-            if (buf_eql_str(link_lib->name, "c")) {
+            if (target_is_libc_lib_name(g->zig_target, buf_ptr(link_lib->name))) {
+                // handled by libSystem
                 continue;
+            }
+            if (strchr(buf_ptr(link_lib->name), '/') == nullptr) {
+                Buf *arg = buf_sprintf("-l%s", buf_ptr(link_lib->name));
+                lj->args.append(buf_ptr(arg));
             } else {
-                if (strchr(buf_ptr(link_lib->name), '/') == nullptr) {
-                    Buf *arg = buf_sprintf("-l%s", buf_ptr(link_lib->name));
-                    lj->args.append(buf_ptr(arg));
-                } else {
-                    lj->args.append(buf_ptr(link_lib->name));
-                }
+                lj->args.append(buf_ptr(link_lib->name));
             }
         }
         // on Darwin, libSystem has libc in it, but also you have to use it
@@ -1362,7 +1606,7 @@ void codegen_link(CodeGen *g) {
         lj.args.append("-r");
     }
 
-    if (g->out_type == OutTypeLib && g->is_static) {
+    if (g->out_type == OutTypeLib && !g->is_dynamic) {
         ZigList<const char *> file_names = {};
         for (size_t i = 0; i < g->link_objects.length; i += 1) {
             file_names.append((const char *)buf_ptr(g->link_objects.at(i)));

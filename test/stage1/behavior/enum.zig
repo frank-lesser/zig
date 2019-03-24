@@ -892,3 +892,24 @@ test "tag name with assigned enum values" {
     var b = LocalFoo.B;
     expect(mem.eql(u8, @tagName(b), "B"));
 }
+
+test "enum literal equality" {
+    const x = .hi;
+    const y = .ok;
+    const z = .hi;
+
+    expect(x != y);
+    expect(x == z);
+}
+
+test "enum literal cast to enum" {
+    const Color = enum {
+        Auto,
+        Off,
+        On,
+    };
+
+    var color1: Color = .Auto;
+    var color2 = Color.Auto;
+    expect(color1 == color2);
+}

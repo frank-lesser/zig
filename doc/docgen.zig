@@ -274,7 +274,7 @@ const Code = struct {
     is_inline: bool,
     mode: builtin.Mode,
     link_objects: []const []const u8,
-    target_windows: bool,
+    target_str: ?[]const u8,
     link_libc: bool,
 
     const Id = union(enum) {
@@ -491,7 +491,7 @@ fn genToc(allocator: *mem.Allocator, tokenizer: *Tokenizer) !Toc {
                     var mode = builtin.Mode.Debug;
                     var link_objects = std.ArrayList([]const u8).init(allocator);
                     defer link_objects.deinit();
-                    var target_windows = false;
+                    var target_str: ?[]const u8 = null;
                     var link_libc = false;
 
                     const source_token = while (true) {
@@ -506,7 +506,9 @@ fn genToc(allocator: *mem.Allocator, tokenizer: *Tokenizer) !Toc {
                             const obj_tok = try eatToken(tokenizer, Token.Id.TagContent);
                             try link_objects.append(tokenizer.buffer[obj_tok.start..obj_tok.end]);
                         } else if (mem.eql(u8, end_tag_name, "target_windows")) {
-                            target_windows = true;
+                            target_str = "x86_64-windows";
+                        } else if (mem.eql(u8, end_tag_name, "target_linux_x86_64")) {
+                            target_str = "x86_64-linux";
                         } else if (mem.eql(u8, end_tag_name, "link_libc")) {
                             link_libc = true;
                         } else if (mem.eql(u8, end_tag_name, "code_end")) {
@@ -526,7 +528,7 @@ fn genToc(allocator: *mem.Allocator, tokenizer: *Tokenizer) !Toc {
                             .is_inline = is_inline,
                             .mode = mode,
                             .link_objects = link_objects.toOwnedSlice(),
-                            .target_windows = target_windows,
+                            .target_str = target_str,
                             .link_libc = link_libc,
                         },
                     });
@@ -707,7 +709,7 @@ const builtin_types = [][]const u8{
     "f16", "f32", "f64", "f128", "c_longdouble", "c_short",
     "c_ushort", "c_int", "c_uint", "c_long", "c_ulong", "c_longlong",
     "c_ulonglong", "c_char", "c_void", "void", "bool", "isize",
-    "usize", "noreturn", "type", "error", "comptime_int", "comptime_float",
+    "usize", "noreturn", "type", "anyerror", "comptime_int", "comptime_float",
 };
 
 fn isType(name: []const u8) bool {
@@ -795,7 +797,6 @@ fn tokenizeAndPrintRaw(docgen_tokenizer: *Tokenizer, out: var, source_token: Tok
             std.zig.Token.Id.Keyword_null,
             std.zig.Token.Id.Keyword_true,
             std.zig.Token.Id.Keyword_false,
-            std.zig.Token.Id.Keyword_this,
             => {
                 try out.write("<span class=\"tok-null\">");
                 try writeEscaped(out, src[token.start..token.end]);
@@ -999,7 +1000,7 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                 try io.writeFile(tmp_source_file_name, trimmed_raw_source);
 
                 switch (code.id) {
-                    Code.Id.Exe => |expected_outcome| {
+                    Code.Id.Exe => |expected_outcome| code_block: {
                         const name_plus_bin_ext = try std.fmt.allocPrint(allocator, "{}{}", code.name, exe_ext);
                         const tmp_bin_file_name = try os.path.join(
                             allocator,
@@ -1047,7 +1048,19 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                             try build_args.append("c");
                             try out.print(" --library c");
                         }
+                        if (code.target_str) |triple| {
+                            try build_args.appendSlice([][]const u8{ "-target", triple });
+                        }
                         _ = exec(allocator, &env_map, build_args.toSliceConst()) catch return parseError(tokenizer, code.source_token, "example failed to compile");
+
+                        if (code.target_str) |triple| {
+                            if (mem.startsWith(u8, triple, "x86_64-linux") and
+                                (builtin.os != builtin.Os.linux or builtin.arch != builtin.Arch.x86_64))
+                            {
+                                // skip execution
+                                break :code_block;
+                            }
+                        }
 
                         const run_args = [][]const u8{tmp_bin_file_name};
 
@@ -1089,8 +1102,6 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                             tmp_source_file_name,
                             "--output-dir",
                             tmp_dir_name,
-                            "--cache",
-                            "off",
                         });
                         try out.print("<pre><code class=\"shell\">$ zig test {}.zig", code.name);
                         switch (code.mode) {
@@ -1108,8 +1119,8 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                                 try out.print(" --release-small");
                             },
                         }
-                        if (code.target_windows) {
-                            try test_args.appendSlice([][]const u8{ "-target", "x86_64-windows" });
+                        if (code.target_str) |triple| {
+                            try test_args.appendSlice([][]const u8{ "-target", triple });
                         }
                         const result = exec(allocator, &env_map, test_args.toSliceConst()) catch return parseError(tokenizer, code.source_token, "test failed");
                         const escaped_stderr = try escapeHtml(allocator, result.stderr);
@@ -1128,8 +1139,6 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                             tmp_source_file_name,
                             "--output-dir",
                             tmp_dir_name,
-                            "--cache",
-                            "off",
                         });
                         try out.print("<pre><code class=\"shell\">$ zig test {}.zig", code.name);
                         switch (code.mode) {
@@ -1187,14 +1196,22 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                             tmp_source_file_name,
                             "--output-dir",
                             tmp_dir_name,
-                            "--cache",
-                            "off",
                         });
+                        var mode_arg: []const u8 = "";
                         switch (code.mode) {
                             builtin.Mode.Debug => {},
-                            builtin.Mode.ReleaseSafe => try test_args.append("--release-safe"),
-                            builtin.Mode.ReleaseFast => try test_args.append("--release-fast"),
-                            builtin.Mode.ReleaseSmall => try test_args.append("--release-small"),
+                            builtin.Mode.ReleaseSafe => {
+                                try test_args.append("--release-safe");
+                                mode_arg = " --release-safe";
+                            },
+                            builtin.Mode.ReleaseFast => {
+                                try test_args.append("--release-fast");
+                                mode_arg = " --release-fast";
+                            },
+                            builtin.Mode.ReleaseSmall => {
+                                try test_args.append("--release-small");
+                                mode_arg = " --release-small";
+                            },
                         }
 
                         const result = try os.ChildProcess.exec(allocator, test_args.toSliceConst(), null, &env_map, max_doc_file_size);
@@ -1224,7 +1241,12 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                         }
                         const escaped_stderr = try escapeHtml(allocator, result.stderr);
                         const colored_stderr = try termColor(allocator, escaped_stderr);
-                        try out.print("<pre><code class=\"shell\">$ zig test {}.zig\n{}</code></pre>\n", code.name, colored_stderr);
+                        try out.print(
+                            "<pre><code class=\"shell\">$ zig test {}.zig{}\n{}</code></pre>\n",
+                            code.name,
+                            mode_arg,
+                            colored_stderr,
+                        );
                     },
                     Code.Id.Obj => |maybe_error_match| {
                         const name_plus_obj_ext = try std.fmt.allocPrint(allocator, "{}{}", code.name, obj_ext);

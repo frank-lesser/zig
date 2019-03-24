@@ -1151,7 +1151,6 @@ pub const Builder = struct {
             ast.Node.Id.BoolLiteral => return error.Unimplemented,
             ast.Node.Id.NullLiteral => return error.Unimplemented,
             ast.Node.Id.UndefinedLiteral => return error.Unimplemented,
-            ast.Node.Id.ThisLiteral => return error.Unimplemented,
             ast.Node.Id.Unreachable => return error.Unimplemented,
             ast.Node.Id.Identifier => {
                 const identifier = @fieldParentPtr(ast.Node.Identifier, "base", node);
@@ -1187,6 +1186,7 @@ pub const Builder = struct {
             ast.Node.Id.AsyncAttribute => return error.Unimplemented,
             ast.Node.Id.ParamDecl => return error.Unimplemented,
             ast.Node.Id.FieldInitializer => return error.Unimplemented,
+            ast.Node.Id.EnumLiteral => return error.Unimplemented,
         }
     }
 
@@ -1365,7 +1365,7 @@ pub const Builder = struct {
 
         if (str_token[0] == 'c') {
             // first we add a null
-            buf = try irb.comp.gpa().realloc(u8, buf, buf.len + 1);
+            buf = try irb.comp.gpa().realloc(buf, buf.len + 1);
             buf[buf.len - 1] = 0;
 
             // next make an array value
@@ -1454,7 +1454,7 @@ pub const Builder = struct {
                 child_scope = decl_var.params.variable.child_scope;
             } else if (!is_continuation_unreachable) {
                 // this statement's value must be void
-                _ = irb.build(
+                _ = try irb.build(
                     Inst.CheckVoidStmt,
                     child_scope,
                     Span{
@@ -1888,7 +1888,7 @@ pub const Builder = struct {
     }
 
     fn genAsyncReturn(irb: *Builder, scope: *Scope, span: Span, result: *Inst, is_gen: bool) !*Inst {
-        _ = irb.buildGen(
+        _ = try irb.buildGen(
             Inst.AddImplicitReturnType,
             scope,
             span,

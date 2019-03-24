@@ -259,6 +259,8 @@ static const char *node_type_str(NodeType node_type) {
             return "PromiseType";
         case NodeTypePointerType:
             return "PointerType";
+        case NodeTypeEnumLiteral:
+            return "EnumLiteral";
     }
     zig_unreachable();
 }
@@ -862,8 +864,8 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
         case NodeTypeAsmExpr:
             {
                 AstNodeAsmExpr *asm_expr = &node->data.asm_expr;
-                const char *volatile_str = asm_expr->is_volatile ? " volatile" : "";
-                fprintf(ar->f, "asm%s (\"%s\"\n", volatile_str, buf_ptr(asm_expr->asm_template));
+                const char *volatile_str = (asm_expr->volatile_token != nullptr) ? " volatile" : "";
+                fprintf(ar->f, "asm%s (\"%s\"\n", volatile_str, buf_ptr(&asm_expr->asm_template->data.str_lit.str));
                 print_indent(ar);
                 fprintf(ar->f, ": ");
                 for (size_t i = 0; i < asm_expr->output_list.length; i += 1) {
@@ -1152,6 +1154,11 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                 if (node->data.suspend.block != nullptr) {
                     render_node_grouped(ar, node->data.suspend.block);
                 }
+                break;
+            }
+        case NodeTypeEnumLiteral:
+            {
+                fprintf(ar->f, ".%s", buf_ptr(&node->data.enum_literal.identifier->data.str_lit.str));
                 break;
             }
         case NodeTypeParamDecl:

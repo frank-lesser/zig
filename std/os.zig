@@ -807,14 +807,14 @@ pub fn getEnvVarOwned(allocator: *mem.Allocator, key: []const u8) GetEnvVarOwned
                 return switch (err) {
                     windows.ERROR.ENVVAR_NOT_FOUND => error.EnvironmentVariableNotFound,
                     else => {
-                        _ = unexpectedErrorWindows(err);
+                        unexpectedErrorWindows(err) catch {};
                         return error.EnvironmentVariableNotFound;
                     },
                 };
             }
 
             if (result > buf.len) {
-                buf = try allocator.realloc(u16, buf, result);
+                buf = try allocator.realloc(buf, result);
                 continue;
             }
 
@@ -877,9 +877,9 @@ pub fn getCwd(out_buffer: *[MAX_PATH_BYTES]u8) GetCwdError![]u8 {
 
 test "os.getCwd" {
     // at least call it so it gets compiled
-    _ = getCwdAlloc(debug.global_allocator);
+    _ = getCwdAlloc(debug.global_allocator) catch undefined;
     var buf: [MAX_PATH_BYTES]u8 = undefined;
-    _ = getCwd(&buf);
+    _ = getCwd(&buf) catch undefined;
 }
 
 pub const SymLinkError = PosixSymLinkError || WindowsSymLinkError;
@@ -1648,7 +1648,7 @@ pub const Dir = struct {
                         switch (err) {
                             posix.EBADF, posix.EFAULT, posix.ENOTDIR => unreachable,
                             posix.EINVAL => {
-                                self.handle.buf = try self.allocator.realloc(u8, self.handle.buf, self.handle.buf.len * 2);
+                                self.handle.buf = try self.allocator.realloc(self.handle.buf, self.handle.buf.len * 2);
                                 continue;
                             },
                             else => return unexpectedErrorPosix(err),
@@ -1730,7 +1730,7 @@ pub const Dir = struct {
                         switch (err) {
                             posix.EBADF, posix.EFAULT, posix.ENOTDIR => unreachable,
                             posix.EINVAL => {
-                                self.handle.buf = try self.allocator.realloc(u8, self.handle.buf, self.handle.buf.len * 2);
+                                self.handle.buf = try self.allocator.realloc(self.handle.buf, self.handle.buf.len * 2);
                                 continue;
                             },
                             else => return unexpectedErrorPosix(err),
@@ -1784,7 +1784,7 @@ pub const Dir = struct {
                         switch (err) {
                             posix.EBADF, posix.EFAULT, posix.ENOTDIR => unreachable,
                             posix.EINVAL => {
-                                self.handle.buf = try self.allocator.realloc(u8, self.handle.buf, self.handle.buf.len * 2);
+                                self.handle.buf = try self.allocator.realloc(self.handle.buf, self.handle.buf.len * 2);
                                 continue;
                             },
                             else => return unexpectedErrorPosix(err),
@@ -3279,7 +3279,7 @@ pub fn cpuCount(fallback_allocator: *mem.Allocator) CpuCountError!usize {
                             }
                             return sum;
                         } else {
-                            set = try allocator.realloc(usize, set, set.len * 2);
+                            set = try allocator.realloc(set, set.len * 2);
                             continue;
                         }
                     },

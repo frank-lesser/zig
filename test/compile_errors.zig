@@ -3,6 +3,75 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "discarding error value",
+        \\export fn entry() void {
+        \\    _ = foo();
+        \\}
+        \\fn foo() !void {
+        \\    return error.OutOfMemory;
+        \\}
+    ,
+        "tmp.zig:2:7: error: error is discarded",
+    );
+
+    cases.add(
+        "volatile on global assembly",
+        \\comptime {
+        \\    asm volatile ("");
+        \\}
+    ,
+        "tmp.zig:2:9: error: volatile is meaningless on global assembly",
+    );
+
+    cases.add(
+        "invalid multiple dereferences",
+        \\export fn a() void {
+        \\    var box = Box{ .field = 0 };
+        \\    box.*.field = 1;
+        \\}
+        \\export fn b() void {
+        \\    var box = Box{ .field = 0 };
+        \\    var boxPtr = &box;
+        \\    boxPtr.*.*.field = 1;
+        \\}
+        \\pub const Box = struct {
+        \\    field: i32,
+        \\};
+    ,
+        "tmp.zig:3:8: error: attempt to dereference non-pointer type 'Box'",
+        "tmp.zig:8:13: error: attempt to dereference non-pointer type 'Box'",
+    );
+
+    cases.add(
+        "usingnamespace with wrong type",
+        \\use void;
+    ,
+        "tmp.zig:1:1: error: expected struct, found 'void'",
+    );
+
+    cases.add(
+        "ignored expression in while continuation",
+        \\export fn a() void {
+        \\    while (true) : (bad()) {}
+        \\}
+        \\export fn b() void {
+        \\    var x: anyerror!i32 = 1234;
+        \\    while (x) |_| : (bad()) {} else |_| {}
+        \\}
+        \\export fn c() void {
+        \\    var x: ?i32 = 1234;
+        \\    while (x) |_| : (bad()) {}
+        \\}
+        \\fn bad() anyerror!void {
+        \\    return error.Bad;
+        \\}
+    ,
+        "tmp.zig:2:24: error: expression value is ignored",
+        "tmp.zig:6:25: error: expression value is ignored",
+        "tmp.zig:10:25: error: expression value is ignored",
+    );
+
+    cases.add(
         "import outside package path",
         \\comptime{
         \\    _ = @import("../a.zig");
@@ -134,7 +203,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\const InvalidToken = struct {};
         \\const ExpectedVarDeclOrFn = struct {};
     ,
-        "tmp.zig:4:9: error: not an enum type",
+        "tmp.zig:4:9: error: expected type '@TagType(Error)', found 'type'",
     );
 
     cases.addTest(
@@ -384,7 +453,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    var ptr: [*c]u8 = x;
         \\}
     ,
-        "tmp.zig:2:33: error: integer value 71615590737044764481 cannot be implicitly casted to type 'usize'",
+        "tmp.zig:2:33: error: integer value 18446744073709551617 cannot be implicitly casted to type 'usize'",
         "tmp.zig:6:23: error: integer type 'u65' too big for implicit @intToPtr to type '[*c]u8'",
     );
 
@@ -4717,7 +4786,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
         "float literal too large error",
         \\comptime {
-        \\    const a = 0x1.0p16384;
+        \\    const a = 0x1.0p18495;
         \\}
     ,
         "tmp.zig:2:15: error: float literal out of range of any type",
@@ -4726,7 +4795,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
         "float literal too small error (denormal)",
         \\comptime {
-        \\    const a = 0x1.0p-16384;
+        \\    const a = 0x1.0p-19000;
         \\}
     ,
         "tmp.zig:2:15: error: float literal out of range of any type",

@@ -11,14 +11,12 @@ pub fn addCases(cases: *tests.BuildExamplesContext) void {
     cases.addBuildFile("example/shared_library/build.zig");
     cases.addBuildFile("example/mix_o_files/build.zig");
     cases.addBuildFile("test/standalone/static_c_lib/build.zig");
-    if (builtin.os != builtin.Os.macosx) {
-        // TODO https://github.com/ziglang/zig/issues/1126
-        cases.addBuildFile("test/standalone/issue_339/build.zig");
-    }
+    cases.addBuildFile("test/standalone/issue_339/build.zig");
     cases.addBuildFile("test/standalone/issue_794/build.zig");
     cases.addBuildFile("test/standalone/pkg_import/build.zig");
     cases.addBuildFile("test/standalone/use_alias/build.zig");
     cases.addBuildFile("test/standalone/brace_expansion/build.zig");
+    cases.addBuildFile("test/standalone/empty_env/build.zig");
     if (false) {
         // TODO this test is disabled because it is failing on the CI server's linux. when this is fixed
         // enable it for at least linux
@@ -27,10 +25,7 @@ pub fn addCases(cases: *tests.BuildExamplesContext) void {
         cases.addBuildFile("test/standalone/load_dynamic_library/build.zig");
     }
 
-    if (!is_windows // TODO support compiling C files on windows with zig build system
-        and builtin.arch == builtin.Arch.x86_64 // TODO add C ABI support for other architectures
-        and builtin.os != builtin.Os.macosx // TODO macosx C ABI test failures
-    ) {
+    if (builtin.arch == builtin.Arch.x86_64) { // TODO add C ABI support for other architectures
         cases.addBuildFile("test/stage1/c_abi/build.zig");
     }
 }

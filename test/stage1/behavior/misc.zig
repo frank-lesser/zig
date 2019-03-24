@@ -688,9 +688,19 @@ fn getNull() ?*i32 {
 }
 
 test "thread local variable" {
+    if (!builtin.position_independent_code and !builtin.link_libc) {
+        // TODO https://github.com/ziglang/zig/issues/2063
+        return error.SkipZigTest;
+    }
+
     const S = struct {
         threadlocal var t: i32 = 1234;
     };
     S.t += 1;
     expect(S.t == 1235);
+}
+
+test "unicode escape in character literal" {
+    var a: u24 = '\U01f4a9';
+    expect(a == 128169);
 }

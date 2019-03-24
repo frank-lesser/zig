@@ -24,7 +24,6 @@ pub const cstr = @import("cstr.zig");
 pub const debug = @import("debug.zig");
 pub const dwarf = @import("dwarf.zig");
 pub const elf = @import("elf.zig");
-pub const empty_import = @import("empty.zig");
 pub const event = @import("event.zig");
 pub const fmt = @import("fmt.zig");
 pub const hash = @import("hash.zig");
@@ -43,8 +42,10 @@ pub const pdb = @import("pdb.zig");
 pub const rand = @import("rand.zig");
 pub const rb = @import("rb.zig");
 pub const sort = @import("sort.zig");
+pub const ascii = @import("ascii.zig");
 pub const testing = @import("testing.zig");
 pub const unicode = @import("unicode.zig");
+pub const valgrind = @import("valgrind.zig");
 pub const zig = @import("zig.zig");
 
 test "std" {
@@ -71,7 +72,6 @@ test "std" {
     _ = @import("dwarf.zig");
     _ = @import("dynamic_library.zig");
     _ = @import("elf.zig");
-    _ = @import("empty.zig");
     _ = @import("event.zig");
     _ = @import("fmt.zig");
     _ = @import("hash.zig");
@@ -91,5 +91,6 @@ test "std" {
     _ = @import("sort.zig");
     _ = @import("testing.zig");
     _ = @import("unicode.zig");
+    _ = @import("valgrind.zig");
     _ = @import("zig.zig");
 }

@@ -317,6 +317,7 @@ struct ConstExprValue {
         ConstArrayValue x_array;
         ConstPtrValue x_ptr;
         ConstArgTuple x_arg_tuple;
+        Buf *x_enum_literal;
 
         // populated if special == ConstValSpecialRuntime
         RuntimeHintErrorUnion rh_error_union;
@@ -468,6 +469,7 @@ enum NodeType {
     NodeTypeAwaitExpr,
     NodeTypeSuspend,
     NodeTypePromiseType,
+    NodeTypeEnumLiteral,
 };
 
 enum CallingConvention {
@@ -800,9 +802,8 @@ struct AsmToken {
 };
 
 struct AstNodeAsmExpr {
-    bool is_volatile;
-    Buf *asm_template;
-    ZigList<AsmToken> token_list;
+    Token *volatile_token;
+    Token *asm_template;
     ZigList<AsmOutput*> output_list;
     ZigList<AsmInput*> input_list;
     ZigList<Buf*> clobber_list;
@@ -846,7 +847,7 @@ struct AstNodeStringLiteral {
 };
 
 struct AstNodeCharLiteral {
-    uint8_t value;
+    uint32_t value;
 };
 
 struct AstNodeFloatLiteral {
@@ -930,6 +931,11 @@ struct AstNodePromiseType {
     AstNode *payload_type; // can be NULL
 };
 
+struct AstNodeEnumLiteral {
+    Token *period;
+    Token *identifier;
+};
+
 struct AstNode {
     enum NodeType type;
     size_t line;
@@ -990,6 +996,7 @@ struct AstNode {
         AstNodeAwaitExpr await_expr;
         AstNodeSuspend suspend;
         AstNodePromiseType promise_type;
+        AstNodeEnumLiteral enum_literal;
     } data;
 };
 
@@ -1253,6 +1260,7 @@ enum ZigTypeId {
     ZigTypeIdOpaque,
     ZigTypeIdPromise,
     ZigTypeIdVector,
+    ZigTypeIdEnumLiteral,
 };
 
 enum OnePossibleValue {
@@ -1616,6 +1624,12 @@ enum ValgrindSupport {
     ValgrindSupportEnabled,
 };
 
+enum WantPIC {
+    WantPICAuto,
+    WantPICDisabled,
+    WantPICEnabled,
+};
+
 struct CFile {
     ZigList<const char *> args;
     const char *source_path;
@@ -1736,6 +1750,7 @@ struct CodeGen {
         ZigType *entry_global_error_set;
         ZigType *entry_arg_tuple;
         ZigType *entry_promise;
+        ZigType *entry_enum_literal;
     } builtin_types;
     ZigType *align_amt_type;
     ZigType *stack_trace_type;
@@ -1791,6 +1806,8 @@ struct CodeGen {
     bool have_dllmain_crt_startup;
     bool have_pub_panic;
     bool have_err_ret_tracing;
+    bool have_pic;
+    bool have_dynamic_link; // this is whether the final thing will be dynamically linked. see also is_dynamic
     bool c_want_stdint;
     bool c_want_stdbool;
     bool verbose_tokenize;
@@ -1834,13 +1851,13 @@ struct CodeGen {
     const ZigTarget *zig_target;
     TargetSubsystem subsystem;
     ValgrindSupport valgrind_support;
-    bool is_static;
+    WantPIC want_pic;
+    bool is_dynamic; // shared library rather than static library. dynamic musl rather than static musl.
     bool strip_debug_symbols;
     bool is_test_build;
     bool is_single_threaded;
     bool linker_rdynamic;
     bool each_lib_rpath;
-    bool disable_pic;
     bool is_dummy_so;
     bool disable_gen_h;
 
@@ -2161,6 +2178,7 @@ enum IrInstructionId {
     IrInstructionIdArrayType,
     IrInstructionIdPromiseType,
     IrInstructionIdSliceType,
+    IrInstructionIdGlobalAsm,
     IrInstructionIdAsm,
     IrInstructionIdSizeOf,
     IrInstructionIdTestNonNull,
@@ -2669,10 +2687,18 @@ struct IrInstructionSliceType {
     bool allow_zero;
 };
 
+struct IrInstructionGlobalAsm {
+    IrInstruction base;
+
+    Buf *asm_code;
+};
+
 struct IrInstructionAsm {
     IrInstruction base;
 
-    // Most information on inline assembly comes from the source node.
+    Buf *asm_template;
+    AsmToken *token_list;
+    size_t token_list_len;
     IrInstruction **input_list;
     IrInstruction **output_types;
     ZigVar **output_vars;
@@ -3348,7 +3374,7 @@ struct IrInstructionCoroPromise {
 struct IrInstructionCoroAllocHelper {
     IrInstruction base;
 
-    IrInstruction *alloc_fn;
+    IrInstruction *realloc_fn;
     IrInstruction *coro_size;
 };
 
@@ -3473,8 +3499,8 @@ static const size_t stack_trace_ptr_count = 32;
 #define RETURN_ADDRESSES_FIELD_NAME "return_addresses"
 #define ERR_RET_TRACE_FIELD_NAME "err_ret_trace"
 #define RESULT_FIELD_NAME "result"
-#define ASYNC_ALLOC_FIELD_NAME "allocFn"
-#define ASYNC_FREE_FIELD_NAME "freeFn"
+#define ASYNC_REALLOC_FIELD_NAME "reallocFn"
+#define ASYNC_SHRINK_FIELD_NAME "shrinkFn"
 #define ATOMIC_STATE_FIELD_NAME "atomic_state"
 // these point to data belonging to the awaiter
 #define ERR_RET_TRACE_PTR_FIELD_NAME "err_ret_trace_ptr"

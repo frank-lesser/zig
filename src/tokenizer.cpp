@@ -293,87 +293,11 @@ static void cancel_token(Tokenize *t) {
 }
 
 static void end_float_token(Tokenize *t) {
-    if (t->radix == 10) {
-        uint8_t *ptr_buf = (uint8_t*)buf_ptr(t->buf) + t->cur_tok->start_pos;
-        size_t buf_len = t->cur_tok->end_pos - t->cur_tok->start_pos;
-        if (bigfloat_init_buf_base10(&t->cur_tok->data.float_lit.bigfloat, ptr_buf, buf_len)) {
-            t->cur_tok->data.float_lit.overflow = true;
-        }
-        return;
-    }
-
-    BigInt int_max;
-    bigint_init_unsigned(&int_max, INT_MAX);
-
-    if (bigint_cmp(&t->specified_exponent, &int_max) != CmpLT) {
+    uint8_t *ptr_buf = (uint8_t*)buf_ptr(t->buf) + t->cur_tok->start_pos;
+    size_t buf_len = t->cur_tok->end_pos - t->cur_tok->start_pos;
+    if (bigfloat_init_buf(&t->cur_tok->data.float_lit.bigfloat, ptr_buf, buf_len)) {
         t->cur_tok->data.float_lit.overflow = true;
-        return;
     }
-
-    if (!bigint_fits_in_bits(&t->specified_exponent, 128, true)) {
-        t->cur_tok->data.float_lit.overflow = true;
-        return;
-    }
-
-    int64_t specified_exponent = bigint_as_signed(&t->specified_exponent);
-    if (t->is_exp_negative) {
-        specified_exponent = -specified_exponent;
-    }
-    t->exponent_in_bin_or_dec = (int)(t->exponent_in_bin_or_dec + specified_exponent);
-
-    if (!bigint_fits_in_bits(&t->significand, 128, false)) {
-        t->cur_tok->data.float_lit.overflow = true;
-        return;
-    }
-
-    // A SoftFloat-3d float128 is represented internally as a standard
-    // quad-precision float with 15bit exponent and 113bit fractional.
-    union { uint64_t repr[2]; float128_t actual; } f_bits;
-
-    if (bigint_cmp_zero(&t->significand) == CmpEQ) {
-        f_bits.repr[0] = 0;
-        f_bits.repr[1] = 0;
-    } else {
-        // normalize the significand
-        if (t->radix == 10) {
-            zig_panic("TODO: decimal floats");
-        } else {
-            int significand_magnitude_in_bin = 127 - bigint_clz(&t->significand, 128);
-            t->exponent_in_bin_or_dec += significand_magnitude_in_bin;
-            if (!(-16382 <= t->exponent_in_bin_or_dec && t->exponent_in_bin_or_dec <= 16383)) {
-                t->cur_tok->data.float_lit.overflow = true;
-                return;
-            }
-
-            uint64_t sig_bits[2] = {0, 0};
-            bigint_write_twos_complement(&t->significand, (uint8_t*) sig_bits, 128, false);
-
-            const uint64_t shift = 112 - significand_magnitude_in_bin;
-            const uint64_t exp_shift = 48;
-            // Mask the sign bit to 0 since always non-negative lex
-            const uint64_t exp_mask = 0xffffull << exp_shift;
-
-            // must be special-cased to avoid undefined behavior on shift == 64
-            if (shift == 128) {
-                f_bits.repr[0] = 0;
-                f_bits.repr[1] = sig_bits[0];
-            } else if (shift == 0) {
-                f_bits.repr[0] = sig_bits[0];
-                f_bits.repr[1] = sig_bits[1];
-            } else if (shift >= 64) {
-                f_bits.repr[0] = 0;
-                f_bits.repr[1] = sig_bits[0] << (shift - 64);
-            } else {
-                f_bits.repr[0] = sig_bits[0] << shift;
-                f_bits.repr[1] = (sig_bits[1] << shift) | (sig_bits[0] >> (64 - shift));
-            }
-
-            f_bits.repr[1] &= ~exp_mask;
-            f_bits.repr[1] |= (uint64_t)(t->exponent_in_bin_or_dec + 16383) << exp_shift;
-        }
-    }
-
-    bigfloat_init_128(&t->cur_tok->data.float_lit.bigfloat, f_bits.actual);
 }
 
 static void end_token(Tokenize *t) {
@@ -1179,11 +1103,15 @@ void tokenize(Buf *buf, Tokenization *out) {
 
                     if (t.char_code_index >= t.char_code_end) {
                         if (t.unicode) {
-                            if (t.char_code <= 0x7f) {
+                            if (t.char_code > 0x10ffff) {
+                                tokenize_error(&t, "unicode value out of range: %x", t.char_code);
+                            }
+                            if (t.cur_tok->id == TokenIdCharLiteral) {
+                                t.cur_tok->data.char_lit.c = t.char_code;
+                                t.state = TokenizeStateCharLiteralEnd;
+                            } else if (t.char_code <= 0x7f) {
                                 // 00000000 00000000 00000000 0xxxxxxx
                                 handle_string_escape(&t, (uint8_t)t.char_code);
-                            } else if (t.cur_tok->id == TokenIdCharLiteral) {
-                                tokenize_error(&t, "unicode value too large for character literal: %x", t.char_code);
                             } else if (t.char_code <= 0x7ff) {
                                 // 00000000 00000000 00000xxx xx000000
                                 handle_string_escape(&t, (uint8_t)(0xc0 | (t.char_code >> 6)));
@@ -1205,14 +1133,9 @@ void tokenize(Buf *buf, Tokenization *out) {
                                 handle_string_escape(&t, (uint8_t)(0x80 | ((t.char_code >> 6) & 0x3f)));
                                 // 00000000 00000000 00000000 00xxxxxx
                                 handle_string_escape(&t, (uint8_t)(0x80 | (t.char_code & 0x3f)));
-                            } else {
-                                tokenize_error(&t, "unicode value out of range: %x", t.char_code);
                             }
                         } else {
-                            if (t.cur_tok->id == TokenIdCharLiteral && t.char_code > UINT8_MAX) {
-                                tokenize_error(&t, "value too large for character literal: '%x'",
-                                        t.char_code);
-                            }
+                            assert(t.char_code <= 255);
                             handle_string_escape(&t, (uint8_t)t.char_code);
                         }
                     }
@@ -1267,10 +1190,16 @@ void tokenize(Buf *buf, Tokenization *out) {
             case TokenizeStateNumber:
                 {
                     if (c == '.') {
+                        if (t.radix != 16 && t.radix != 10) {
+                            invalid_char_error(&t, c);
+                        }
                         t.state = TokenizeStateNumberDot;
                         break;
                     }
                     if (is_exponent_signifier(c, t.radix)) {
+                        if (t.radix != 16 && t.radix != 10) {
+                            invalid_char_error(&t, c);
+                        }
                         t.state = TokenizeStateFloatExponentUnsigned;
                         assert(t.cur_tok->id == TokenIdIntLiteral);
                         bigint_init_bigint(&t.significand, &t.cur_tok->data.int_lit.bigint);

@@ -52,7 +52,6 @@ pub const Token = struct {
         Keyword{ .bytes = "suspend", .id = Id.Keyword_suspend },
         Keyword{ .bytes = "switch", .id = Id.Keyword_switch },
         Keyword{ .bytes = "test", .id = Id.Keyword_test },
-        Keyword{ .bytes = "this", .id = Id.Keyword_this },
         Keyword{ .bytes = "threadlocal", .id = Id.Keyword_threadlocal },
         Keyword{ .bytes = "true", .id = Id.Keyword_true },
         Keyword{ .bytes = "try", .id = Id.Keyword_try },
@@ -183,7 +182,6 @@ pub const Token = struct {
         Keyword_suspend,
         Keyword_switch,
         Keyword_test,
-        Keyword_this,
         Keyword_threadlocal,
         Keyword_true,
         Keyword_try,
@@ -238,8 +236,7 @@ pub const Tokenizer = struct {
         MultilineStringLiteralLine,
         CharLiteral,
         CharLiteralBackslash,
-        CharLiteralEscape1,
-        CharLiteralEscape2,
+        CharLiteralHexEscape,
         CharLiteralEnd,
         Backslash,
         Equal,
@@ -295,6 +292,8 @@ pub const Tokenizer = struct {
             .start = self.index,
             .end = undefined,
         };
+        var seen_escape_digits: usize = undefined;
+        var expected_escape_digits: usize = undefined;
         while (self.index < self.buffer.len) : (self.index += 1) {
             const c = self.buffer[self.index];
             switch (state) {
@@ -660,26 +659,31 @@ pub const Tokenizer = struct {
                         break;
                     },
                     'x' => {
-                        state = State.CharLiteralEscape1;
+                        state = State.CharLiteralHexEscape;
+                        seen_escape_digits = 0;
+                        expected_escape_digits = 2;
+                    },
+                    'u' => {
+                        state = State.CharLiteralHexEscape;
+                        seen_escape_digits = 0;
+                        expected_escape_digits = 4;
+                    },
+                    'U' => {
+                        state = State.CharLiteralHexEscape;
+                        seen_escape_digits = 0;
+                        expected_escape_digits = 6;
                     },
                     else => {
                         state = State.CharLiteralEnd;
                     },
                 },
 
-                State.CharLiteralEscape1 => switch (c) {
+                State.CharLiteralHexEscape => switch (c) {
                     '0'...'9', 'a'...'z', 'A'...'F' => {
-                        state = State.CharLiteralEscape2;
-                    },
-                    else => {
-                        result.id = Token.Id.Invalid;
-                        break;
-                    },
-                },
-
-                State.CharLiteralEscape2 => switch (c) {
-                    '0'...'9', 'a'...'z', 'A'...'F' => {
-                        state = State.CharLiteralEnd;
+                        seen_escape_digits += 1;
+                        if (seen_escape_digits == expected_escape_digits) {
+                            state = State.CharLiteralEnd;
+                        }
                     },
                     else => {
                         result.id = Token.Id.Invalid;
@@ -1047,8 +1051,7 @@ pub const Tokenizer = struct {
                 State.Backslash,
                 State.CharLiteral,
                 State.CharLiteralBackslash,
-                State.CharLiteralEscape1,
-                State.CharLiteralEscape2,
+                State.CharLiteralHexEscape,
                 State.CharLiteralEnd,
                 State.StringLiteralBackslash,
                 State.LBracketStar,

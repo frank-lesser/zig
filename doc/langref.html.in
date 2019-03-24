@@ -501,7 +501,16 @@ pub fn main() void {
       </div>
       {#see_also|Optionals|undefined#}
       {#header_close#}
-      {#header_open|String Literals#}
+      {#header_open|String Literals and Character Literals#}
+      <p>
+      String literals are UTF-8 encoded byte arrays.
+      </p>
+      <p>
+      Character literals have type {#syntax#}comptime_int{#endsyntax#}, the same as
+      {#link|Integer Literals#}. All {#link|Escape Sequences#} are valid in both string literals
+      and character literals. Once https://github.com/ziglang/zig/issues/2097 is implemented,
+      character literals will be allowed to have a single UTF-8 encoded codepoint.
+      </p>
       {#code_begin|test#}
 const assert = @import("std").debug.assert;
 const mem = @import("std").mem;
@@ -513,6 +522,7 @@ test "string literals" {
     assert(normal_bytes.len == 5);
     assert(normal_bytes[1] == 'e');
     assert('e' == '\x65');
+    assert('\U01f4a9' == 128169);
     assert(mem.eql(u8, "hello", "h\x65llo"));
 
     // A C string literal is a null terminated pointer.
@@ -521,7 +531,7 @@ test "string literals" {
     assert(null_terminated_bytes[5] == 0);
 }
       {#code_end#}
-      {#see_also|Arrays|Zig Test#}
+      {#see_also|Arrays|Zig Test|Source Encoding#}
       {#header_open|Escape Sequences#}
       <div class="table-wrapper">
       <table>
@@ -729,8 +739,13 @@ fn divide(a: i32, b: i32) i32 {
       </ul>
       {#header_open|Float Literals#}
       <p>
-      Float literals have type {#syntax#}comptime_float{#endsyntax#} which is guaranteed to hold at least all possible values
-      that the largest other floating point type can hold. Float literals {#link|implicitly cast|Implicit Casts#} to any other type.
+      Float literals have type {#syntax#}comptime_float{#endsyntax#} which is guaranteed to have
+      the same precision and operations of the largest other floating point type, which is
+      {#syntax#}f128{#endsyntax#}.
+      </p>
+      <p>
+      Float literals {#link|implicitly cast|Implicit Casts#} to any floating point type,
+      and to any {#link|integer|Integers#} type when there is no fractional component.
       </p>
       {#code_begin|syntax#}
 const floating_point = 123.0E+77;
@@ -740,6 +755,17 @@ const yet_another = 123.0e+77;
 const hex_floating_point = 0x103.70p-5;
 const another_hex_float = 0x103.70;
 const yet_another_hex_float = 0x103.70P-5;
+      {#code_end#}
+      <p>
+      There is no syntax for NaN, infinity, or negative infinity. For these special values,
+      one must use the standard library:
+      </p>
+      {#code_begin|syntax#}
+const std = @import("std");
+
+const inf = std.math.inf(f32);
+const negative_inf = -std.math.inf(f64);
+const nan = std.math.nan(f128);
       {#code_end#}
       {#header_close#}
       {#header_open|Floating Point Operations#}
@@ -1370,7 +1396,7 @@ mem.eql(u8, pattern, "ababab"){#endsyntax#}</pre>
           <td>
             <pre>{#syntax#}const x: u32 = 1234;
 const ptr = &x;
-x.* == 1234{#endsyntax#}</pre>
+ptr.* == 1234{#endsyntax#}</pre>
           </td>
         </tr>
         <tr>
@@ -1384,7 +1410,7 @@ x.* == 1234{#endsyntax#}</pre>
           <td>
             <pre>{#syntax#}const x: u32 = 1234;
 const ptr = &x;
-x.* == 1234{#endsyntax#}</pre>
+ptr.* == 1234{#endsyntax#}</pre>
           </td>
         </tr>
         <tr>
@@ -1603,7 +1629,7 @@ test "address of syntax" {
     const x: i32 = 1234;
     const x_ptr = &x;
 
-    // Deference a pointer:
+    // Dereference a pointer:
     assert(x_ptr.* == 1234);
 
     // When you get the address of a const variable, you get a const pointer to a single item.
@@ -3320,8 +3346,8 @@ fn deferErrorExample(is_error: bool) !void {
 }
 
 test "errdefer unwinding" {
-    _ = deferErrorExample(false);
-    _ = deferErrorExample(true);
+    deferErrorExample(false) catch {};
+    deferErrorExample(true) catch {};
 }
       {#code_end#}
       {#see_also|Errors#}
@@ -4352,42 +4378,191 @@ test "float widening" {
 }
       {#code_end#}
       {#header_close#}
-      {#header_open|Implicit Cast: Arrays#}
-      <p>TODO: [N]T to []const T</p>
-      <p>TODO: *const [N]T to []const T</p>
-      <p>TODO: [N]T to *const []const T</p>
-      <p>TODO: [N]T to ?[]const T</p>
-      <p>TODO: *[N]T to []T</p>
-      <p>TODO: *[N]T to [*]T</p>
-      <p>TODO: *[N]T to ?[*]T</p>
-      <p>TODO: *T to *[1]T</p>
-      <p>TODO: [N]T to E![]const T</p>
+      {#header_open|Implicit Cast: Arrays and Pointers#}
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+// This cast exists primarily so that string literals can be
+// passed to functions that accept const slices. However
+// it is probably going to be removed from the language when
+// https://github.com/ziglang/zig/issues/265 is implemented.
+test "[N]T to []const T" {
+    var x1: []const u8 = "hello";
+    var x2: []const u8 = [5]u8{ 'h', 'e', 'l', 'l', 111 };
+    assert(std.mem.eql(u8, x1, x2));
+
+    var y: []const f32 = [2]f32{ 1.2, 3.4 };
+    assert(y[0] == 1.2);
+}
+
+// Likewise, it works when the destination type is an error union.
+test "[N]T to E![]const T" {
+    var x1: anyerror![]const u8 = "hello";
+    var x2: anyerror![]const u8 = [5]u8{ 'h', 'e', 'l', 'l', 111 };
+    assert(std.mem.eql(u8, try x1, try x2));
+
+    var y: anyerror![]const f32 = [2]f32{ 1.2, 3.4 };
+    assert((try y)[0] == 1.2);
+}
+
+// Likewise, it works when the destination type is an optional.
+test "[N]T to ?[]const T" {
+    var x1: ?[]const u8 = "hello";
+    var x2: ?[]const u8 = [5]u8{ 'h', 'e', 'l', 'l', 111 };
+    assert(std.mem.eql(u8, x1.?, x2.?));
+
+    var y: ?[]const f32 = [2]f32{ 1.2, 3.4 };
+    assert(y.?[0] == 1.2);
+}
+
+// In this cast, the array length becomes the slice length.
+test "*[N]T to []T" {
+    var buf: [5]u8 = "hello";
+    const x: []u8 = &buf;
+    assert(std.mem.eql(u8, x, "hello"));
+
+    const buf2 = [2]f32{ 1.2, 3.4 };
+    const x2: []const f32 = &buf2;
+    assert(std.mem.eql(f32, x2, [2]f32{ 1.2, 3.4 }));
+}
+
+// Single-item pointers to arrays can be implicitly casted to
+// unknown length pointers.
+test "*[N]T to [*]T" {
+    var buf: [5]u8 = "hello";
+    const x: [*]u8 = &buf;
+    assert(x[4] == 'o');
+    // x[5] would be an uncaught out of bounds pointer dereference!
+}
+
+// Likewise, it works when the destination type is an optional.
+test "*[N]T to ?[*]T" {
+    var buf: [5]u8 = "hello";
+    const x: ?[*]u8 = &buf;
+    assert(x.?[4] == 'o');
+}
+
+// Single-item pointers can be cast to len-1 single-item arrays.
+test "*T to *[1]T" {
+    var x: i32 = 1234;
+    const y: *[1]i32 = &x;
+    const z: [*]i32 = y;
+    assert(z[0] == 1234);
+}
+      {#code_end#}
+      {#see_also|C Pointers#}
       {#header_close#}
       {#header_open|Implicit Cast: Optionals#}
-      <p>TODO: T to ?T</p>
-      <p>TODO: T to E!?T</p>
-      <p>TODO: null to ?T</p>
+      <p>
+      The payload type of {#link|Optionals#}, as well as {#link|null#}, implicitly cast to the optional type.
+      </p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "implicit casting to optionals" {
+    const x: ?i32 = 1234;
+    const y: ?i32 = null;
+
+    assert(x.? == 1234);
+    assert(y == null);
+}
+      {#code_end#}
+      <p>It works nested inside the {#link|Error Union Type#}, too:</p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "implicit casting to optionals wrapped in error union" {
+    const x: anyerror!?i32 = 1234;
+    const y: anyerror!?i32 = null;
+
+    assert((try x).? == 1234);
+    assert((try y) == null);
+}
+      {#code_end#}
       {#header_close#}
-      {#header_open|Implicit Cast: T to E!T#}
-      <p>TODO</p>
+      {#header_open|Implicit Cast: Error Unions#}
+      <p>The the payload type of an {#link|Error Union Type#} as well as the {#link|Error Set Type#}
+      implicitly cast to the error union type:
+      </p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "implicit casting to error unions" {
+    const x: anyerror!i32 = 1234;
+    const y: anyerror!i32 = error.Failure;
+
+    assert((try x) == 1234);
+    std.testing.expectError(error.Failure, y);
+}
+      {#code_end#}
       {#header_close#}
-      {#header_open|Implicit Cast: E to E!T#}
-      <p>TODO</p>
+      {#header_open|Implicit Cast: Compile-Time Known Numbers#}
+      <p>When a number is {#link|comptime#}-known to be representable in the destination type,
+      it may be implicitly casted:
+      </p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "implicit casting large integer type to smaller one when value is comptime known to fit" {
+    const x: u64 = 255;
+    const y: u8 = x;
+    assert(y == 255);
+}
+      {#code_end#}
       {#header_close#}
-      {#header_open|Implicit Cast: compile-time known numbers#}
-      <p>TODO</p>
+      {#header_open|Implicit Cast: unions and enums#}
+      <p>Tagged unions can be implicitly cast to enums, and enums can be implicitly casted to tagged unions
+      when they are {#link|comptime#}-known to be a field of the union that has only one possible value, such as
+      {#link|void#}:
+      </p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+const E = enum {
+    One,
+    Two,
+    Three,
+};
+
+const U = union(E) {
+    One: i32,
+    Two: f32,
+    Three,
+};
+
+test "implicit casting between unions and enums" {
+    var u = U{ .Two = 12.34 };
+    var e: E = u;
+    assert(e == E.Two);
+
+    const three = E.Three;
+    var another_u: U = three;
+    assert(another_u == E.Three);
+}
+      {#code_end#}
+      {#see_also|union|enum#}
       {#header_close#}
-      {#header_open|Implicit Cast: union to enum#}
-      <p>TODO</p>
-      {#header_close#}
-      {#header_open|Implicit Cast: enum to union#}
-      <p>TODO</p>
-      {#header_close#}
-      {#header_open|Implicit Cast: T to *T when @sizeOf(T) == 0#}
-      <p>TODO</p>
+      {#header_open|Implicit Cast: Zero Bit Types#}
+      <p>{#link|Zero Bit Types#} may be implicitly casted to single-item {#link|Pointers#},
+      regardless of const.</p>
+      <p>TODO document the reasoning for this</p>
+      <p>TODO document whether vice versa should work and why</p>
+      {#code_begin|test#}
+test "implicit casting of zero bit types" {
+    var x: void = {};
+    var y: *void = x;
+    //var z: void = y; // TODO
+}
+      {#code_end#}
       {#header_close#}
       {#header_open|Implicit Cast: undefined#}
-      <p>TODO</p>
+      <p>{#link|undefined#} can be cast to any type.</p>
       {#header_close#}
       {#header_close#}
 
@@ -4519,6 +4694,13 @@ fn peerTypeEmptyArrayAndSliceAndError(a: bool, slice: []u8) anyerror![]u8 {
     }
 
     return slice[0..1];
+}
+
+test "peer type resolution: *const T and ?*T" {
+    const a = @intToPtr(*const usize, 0x123456789);
+    const b = @intToPtr(?*usize, 0x123456789);
+    assert(a == b);
+    assert(b == a);
 }
       {#code_end#}
       {#header_close#}
@@ -5247,11 +5429,196 @@ pub fn main() void {
       {#see_also|inline while|inline for#}
       {#header_close#}
       {#header_open|Assembly#}
-      <p>TODO: example of inline assembly</p>
-      <p>TODO: example of module level assembly</p>
-      <p>TODO: example of using inline assembly return value</p>
-      <p>TODO: example of using inline assembly assigning values to variables</p>
+      <p>
+      For some use cases, it may be necessary to directly control the machine code generated
+      by Zig programs, rather than relying on Zig's code generation. For these cases, one
+      can use inline assembly. Here is an example of implementing Hello, World on x86_64 Linux
+      using inline assembly:
+      </p>
+      {#code_begin|exe#}
+      {#target_linux_x86_64#}
+pub fn main() noreturn {
+    const msg = "hello world\n";
+    _ = syscall3(SYS_write, STDOUT_FILENO, @ptrToInt(&msg), msg.len);
+    _ = syscall1(SYS_exit, 0);
+    unreachable;
+}
+
+pub const SYS_write = 1;
+pub const SYS_exit = 60;
+
+pub const STDOUT_FILENO = 1;
+
+pub fn syscall1(number: usize, arg1: usize) usize {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> usize)
+        : [number] "{rax}" (number),
+          [arg1] "{rdi}" (arg1)
+        : "rcx", "r11"
+    );
+}
+
+pub fn syscall3(number: usize, arg1: usize, arg2: usize, arg3: usize) usize {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> usize)
+        : [number] "{rax}" (number),
+          [arg1] "{rdi}" (arg1),
+          [arg2] "{rsi}" (arg2),
+          [arg3] "{rdx}" (arg3)
+        : "rcx", "r11"
+    );
+}
+      {#code_end#}
+      <p>
+      Dissecting the syntax:
+      </p>
+      <pre>{#syntax#}// Inline assembly is an expression which returns a value.
+// the `asm` keyword begins the expression.
+_ = asm
+// `volatile` is an optional modifier that tells Zig this
+// inline assembly expression has side-effects. Without
+// `volatile`, Zig is allowed to delete the inline assembly
+// code if the result is unused.
+volatile (
+// Next is a comptime string which is the assembly code.
+// Inside this string one may use `%[ret]`, `%[number]`,
+// or `%[arg1]` where a register is expected, to specify
+// the register that Zig uses for the argument or return value,
+// if the register constraint strings are used. However in
+// the below code, this is not used. A literal `%` can be
+// obtained by escaping it with a double percent: `%%`.
+// Often multiline string syntax comes in handy here.
+    \\syscall
+// Next is the output. It is possible in the future Zig will
+// support multiple outputs, depending on how
+// https://github.com/ziglang/zig/issues/215 is resolved.
+// It is allowed for there to be no outputs, in which case
+// this colon would be directly followed by the colon for the inputs.
+    :
+// This specifies the name to be used in `%[ret]` syntax in
+// the above assembly string. This example does not use it,
+// but the syntax is mandatory.
+    [ret]
+// Next is the output constraint string. This feature is still
+// considered unstable in Zig, and so LLVM/GCC documentation
+// must be used to understand the semantics.
+// http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string
+// https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html
+// In this example, the constraint string means "the result value of
+// this inline assembly instruction is whatever is in $rax".
+    "={rax}"
+// Next is either a value binding, or `->` and then a type. The
+// type is the result type of the inline assembly expression.
+// If it is a value binding, then `%[ret]` syntax would be used
+// to refer to the register bound to the value.
+    (-> usize)
+// Next is the list of inputs.
+// The constraint for these inputs means, "when the assembly code is
+// executed, $rax shall have the value of `number` and $rdi shall have
+// the value of `arg1`". Any number of input parameters is allowed,
+// including none.
+    : [number] "{rax}" (number),
+        [arg1] "{rdi}" (arg1)
+// Next is the list of clobbers. These declare a set of registers whose
+// values will not be preserved by the execution of this assembly code. 
+// These do not include output or input registers. The special clobber
+// value of "memory" means that the assembly writes to arbitrary undeclared
+// memory locations - not only the memory pointed to by a declared indirect
+// output. In this example we list $rcx and $r11 because it is known the
+// kernel syscall does not preserve these registers.
+    : "rcx", "r11"
+);{#endsyntax#}</pre>
+      <p>
+      For i386 and x86_64 targets, the syntax is AT&amp;T syntax, rather than the more
+      popular Intel syntax. This is due to technical constraints; assembly parsing is
+      provided by LLVM and its support for Intel syntax is buggy and not well tested.
+      </p>
+      <p>
+      Some day Zig may have its own assembler. This would allow it to integrate more seamlessly
+      into the language, as well as be compatible with the popular NASM syntax. This documentation
+      section will be updated before 1.0.0 is released, with a conclusive statement about the status
+      of AT&amp;T vs Intel/NASM syntax.
+      </p>
+      {#header_open|Output Constraints#}
+      <p>
+      Output constraints are still considered to be unstable in Zig, and 
+      so
+      <a href="http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
+      and
+      <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html">GCC documentation</a>
+      must be used to understand the semantics.
+      </p>
+      <p>
+      Note that some breaking changes to output constraints are planned with
+      <a href="https://github.com/ziglang/zig/issues/215">issue #215</a>.
+      </p>
       {#header_close#}
+
+      {#header_open|Input Constraints#}
+      <p>
+      Input constraints are still considered to be unstable in Zig, and 
+      so
+      <a href="http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
+      and
+      <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html">GCC documentation</a>
+      must be used to understand the semantics.
+      </p>
+      <p>
+      Note that some breaking changes to input constraints are planned with
+      <a href="https://github.com/ziglang/zig/issues/215">issue #215</a>.
+      </p>
+      {#header_close#}
+
+      {#header_open|Clobbers#}
+      <p>
+      Clobbers are the set of registers whose values will not be preserved by the execution of
+      the assembly code. These do not include output or input registers. The special clobber
+      value of {#syntax#}"memory"{#endsyntax#} means that the assembly causes writes to
+      arbitrary undeclared memory locations - not only the memory pointed to by a declared
+      indirect output. 
+      </p>
+      <p>
+      Failure to declare the full set of clobbers for a given inline assembly
+      expression is unchecked {#link|Undefined Behavior#}.
+      </p>
+      {#header_close#}
+
+      {#header_open|Global Assembly#}
+      <p>
+      When an assembly expression occurs in a top level {#link|comptime#} block, this is
+      <strong>global assembly</strong>.
+      </p>
+      <p>
+      This kind of assembly has different rules than inline assembly. First, {#syntax#}volatile{#endsyntax#}
+      is not valid because all global assembly is unconditionally included.
+      Second, there are no inputs, outputs, or clobbers. All global assembly is concatenated
+      verbatim into one long string and assembled together. There are no template substitution rules regarding
+      <code>%</code> as there are in inline assembly expressions.
+      </p>
+      {#code_begin|test|global-asm#}
+      {#target_linux_x86_64#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+comptime {
+    asm (
+        \\.global my_func;
+        \\.type my_func, @function;
+        \\my_func:
+        \\  lea (%rdi,%rsi,1),%eax
+        \\  retq
+    );
+}
+
+extern fn my_func(a: i32, b: i32) i32;
+
+test "global assembly" {
+    assert(my_func(12, 34) == 46);
+}
+      {#code_end#}
+      {#header_close#}
+      {#header_close#}
+
       {#header_open|Atomics#}
       <p>TODO: @fence()</p>
       <p>TODO: @atomic rmw</p>
@@ -5741,10 +6108,11 @@ comptime {
       {#see_also|Import from C Header File|@cInclude|@cImport|@cUndef|void#}
       {#header_close#}
       {#header_open|@cImport#}
-      <pre>{#syntax#}@cImport(expression) (namespace){#endsyntax#}</pre>
+      <pre>{#syntax#}@cImport(expression) type{#endsyntax#}</pre>
       <p>
-      This function parses C code and imports the functions, types, variables, and
-      compatible macro definitions into the result namespace.
+      This function parses C code and imports the functions, types, variables,
+      and compatible macro definitions into a new empty struct type, and then
+      returns that type.
       </p>
       <p>
       {#syntax#}expression{#endsyntax#} is interpreted at compile time. The builtin functions
@@ -6066,6 +6434,35 @@ test "main" {
       <p>
       Creates a symbol in the output object file.
       </p>
+      <p>
+      This function can be called from a {#link|comptime#} block to conditionally export symbols.
+      When {#syntax#}target{#endsyntax#} is a function with the C calling convention and
+      {#syntax#}linkage{#endsyntax#} is {#syntax#}Strong{#endsyntax#}, this is equivalent to
+      the {#syntax#}export{#endsyntax#} keyword used on a function:
+      </p>
+      {#code_begin|obj#}
+const builtin = @import("builtin");
+
+comptime {
+    @export("foo", internalName, builtin.GlobalLinkage.Strong);
+}
+
+extern fn internalName() void {}
+      {#code_end#}
+      <p>This is equivalent to:</p>
+      {#code_begin|obj#}
+export fn foo() void {}
+      {#code_end#}
+      <p>Note that even when using {#syntax#}export{#endsyntax#}, {#syntax#}@"foo"{#endsyntax#} syntax can
+      be used to choose any string for the symbol name:</p>
+      {#code_begin|obj#}
+export fn @"A function name that is a complete sentence."() void {}
+      {#code_end#}
+      <p>
+      When looking at the resulting object, you can see the symbol is used verbatim:
+      </p>
+      <pre>00000000000001f0 T A function name that is a complete sentence.</pre>
+      {#see_also|Exporting a C Library#}
       {#header_close#}
 
       {#header_open|@fence#}
@@ -6142,14 +6539,22 @@ test "main" {
       {#header_close#}
 
       {#header_open|@import#}
-      <pre>{#syntax#}@import(comptime path: []u8) (namespace){#endsyntax#}</pre>
+      <pre>{#syntax#}@import(comptime path: []u8) type{#endsyntax#}</pre>
       <p>
-      This function finds a zig file corresponding to {#syntax#}path{#endsyntax#} and imports all the
-      public top level declarations into the resulting namespace.
+      This function finds a zig file corresponding to {#syntax#}path{#endsyntax#} and adds it to the build,
+      if it is not already added.
+      </p>
+      <p>
+      Zig source files are implicitly structs, with a name equal to the file's basename with the extension
+      truncated. {#syntax#}@import{#endsyntax#} returns the struct type corresponding to the file.
+      </p>
+      <p>
+      Declarations which have the {#syntax#}pub{#endsyntax#} keyword may be referenced from a different
+      source file than the one they are declared in.
       </p>
       <p>
       {#syntax#}path{#endsyntax#} can be a relative or absolute path, or it can be the name of a package.
-          If it is a relative path, it is relative to the file that contains the {#syntax#}@import{#endsyntax#}
+      If it is a relative path, it is relative to the file that contains the {#syntax#}@import{#endsyntax#}
       function call.
       </p>
       <p>
@@ -6157,7 +6562,9 @@ test "main" {
       </p>
       <ul>
           <li>{#syntax#}@import("std"){#endsyntax#} - Zig Standard Library</li>
-          <li>{#syntax#}@import("builtin"){#endsyntax#} - Compiler-provided types and variables</li>
+          <li>{#syntax#}@import("builtin"){#endsyntax#} - Compiler-provided types and variables.
+              The command <code>zig builtin</code> outputs the source to stdout for reference.
+          </li>
       </ul>
       {#see_also|Compile Variables|@embedFile#}
       {#header_close#}
@@ -6591,8 +6998,32 @@ pub const FloatMode = enum {
       {#header_open|@setRuntimeSafety#}
       <pre>{#syntax#}@setRuntimeSafety(safety_on: bool){#endsyntax#}</pre>
       <p>
-      Sets whether runtime safety checks are on for the scope that contains the function call.
+      Sets whether runtime safety checks are enabled for the scope that contains the function call.
       </p>
+      {#code_begin|test_safety|integer overflow#}
+      {#code_release_fast#}
+test "@setRuntimeSafety" {
+    // The builtin applies to the scope that it is called in. So here, integer overflow
+    // will not be caught in ReleaseFast and ReleaseSmall modes:
+    // var x: u8 = 255;
+    // x += 1; // undefined behavior in ReleaseFast/ReleaseSmall modes.
+    {
+        // However this block has safety enabled, so safety checks happen here,
+        // even in ReleaseFast and ReleaseSmall modes.
+        @setRuntimeSafety(true);
+        var x: u8 = 255;
+        x += 1;
+
+        {
+            // The value can be overridden at any scope. So here integer overflow
+            // would not be caught in any build mode.
+            @setRuntimeSafety(false);
+            // var x: u8 = 255;
+            // x += 1; // undefined behavior in all build modes.
+        }
+    }
+}
+      {#code_end#}
 
       {#header_close#}
 
@@ -7715,13 +8146,261 @@ pub fn main() void {
 
       {#header_close#}
       {#header_open|Memory#}
-      <p>TODO: explain no default allocator in zig</p>
-      <p>TODO: show how to use the allocator interface</p>
-      <p>TODO: mention debug allocator</p>
-      <p>TODO: importance of checking for allocation failure</p>
-      <p>TODO: mention overcommit and the OOM Killer</p>
-      <p>TODO: mention recursion</p>
-      {#see_also|Pointers#}
+      <p>
+      The Zig language performs no memory management on behalf of the programmer. This is
+      why Zig has no runtime, and why Zig code works seamlessly in so many environments,
+      including real-time software, operating system kernels, embedded devices, and
+      low latency servers. As a consequence, Zig programmers must always be able to answer
+      the question:
+      </p>
+      <p>{#link|Where are the bytes?#}</p>
+      <p>
+      Like Zig, the C programming language has manual memory management. However, unlike Zig,
+      C has a default allocator - <code>malloc</code>, <code>realloc</code>, and <code>free</code>.
+      When linking against libc, Zig exposes this allocator with {#syntax#}std.heap.c_allocator{#endsyntax#}.
+      However, by convention, there is no default allocator in Zig. Instead, functions which need to
+      allocate accept an {#syntax#}*Allocator{#endsyntax#} parameter. Likewise, data structures such as
+      {#syntax#}std.ArrayList{#endsyntax#} accept an {#syntax#}*Allocator{#endsyntax#} parameter in
+      their initialization functions:
+      </p>
+      {#code_begin|test|allocator#}
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
+
+test "using an allocator" {
+    var buffer: [100]u8 = undefined;
+    const allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    const result = try concat(allocator, "foo", "bar");
+    assert(std.mem.eql(u8, "foobar", result));
+}
+
+fn concat(allocator: *Allocator, a: []const u8, b: []const u8) ![]u8 {
+    const result = try allocator.alloc(u8, a.len + b.len);
+    std.mem.copy(u8, result, a);
+    std.mem.copy(u8, result[a.len..], b);
+    return result;
+}
+      {#code_end#}
+      <p>
+      In the above example, 100 bytes of stack memory are used to initialize a
+      {#syntax#}FixedBufferAllocator{#endsyntax#}, which is then passed to a function.
+      As a convenience there is a global {#syntax#}FixedBufferAllocator{#endsyntax#}
+      available for quick tests at {#syntax#}std.debug.global_allocator{#endsyntax#},
+      however it is deprecated and should be avoided in favor of directly using a
+      {#syntax#}FixedBufferAllocator{#endsyntax#} as in the example above.
+      </p>
+      <p>
+      Currently Zig has no general purpose allocator, but there is
+      <a href="https://github.com/andrewrk/zig-general-purpose-allocator/">one under active development</a>.
+      Once it is merged into the Zig standard library it will become available to import
+      with {#syntax#}std.heap.default_allocator{#endsyntax#}. However, it will still be recommended to
+      follow the {#link|Choosing an Allocator#} guide.
+      </p>
+
+      {#header_open|Choosing an Allocator#}
+      <p>What allocator to use depends on a number of factors. Here is a flow chart to help you decide:
+      </p>
+      <ol>
+          <li>
+              Are you making a library? In this case, best to accept an {#syntax#}*Allocator{#endsyntax#}
+              as a parameter and allow your library's users to decide what allocator to use.
+          </li>
+          <li>Are you linking libc? In this case, {#syntax#}std.heap.c_allocator{#endsyntax#} is likely
+              the right choice, at least for your main allocator.</li>
+          <li>
+              Is the maximum number of bytes that you will need bounded by a number known at
+              {#link|comptime#}? In this case, use {#syntax#}std.heap.FixedBufferAllocator{#endsyntax#} or
+              {#syntax#}std.heap.ThreadSafeFixedBufferAllocator{#endsyntax#} depending on whether you need
+              thread-safety or not.
+          </li>
+          <li>
+              Is your program a command line application which runs from start to end without any fundamental
+              cyclical pattern (such as a video game main loop, or a web server request handler),
+              such that it would make sense to free everything at once at the end?
+              In this case, it is recommended to follow this pattern:
+              {#code_begin|exe|cli_allocation#}
+const std = @import("std");
+
+pub fn main() !void {
+    var direct_allocator = std.heap.DirectAllocator.init();
+    defer direct_allocator.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(&direct_allocator.allocator);
+    defer arena.deinit();
+
+    const allocator = &arena.allocator;
+
+    const ptr = try allocator.create(i32);
+    std.debug.warn("ptr={*}\n", ptr);
+}
+              {#code_end#}
+              When using this kind of allocator, there is no need to free anything manually. Everything
+              gets freed at once with the call to {#syntax#}arena.deinit(){#endsyntax#}.
+          </li>
+          <li>
+              Are the allocations part of a cyclical pattern such as a video game main loop, or a web
+              server request handler? If the allocations can all be freed at once, at the end of the cycle,
+              for example once the video game frame has been fully rendered, or the web server request has
+              been served, then {#syntax#}std.heap.ArenaAllocator{#endsyntax#} is a great candidate. As
+              demonstrated in the previous bullet point, this allows you to free entire arenas at once.
+              Note also that if an upper bound of memory can be established, then
+              {#syntax#}std.heap.FixedBufferAllocator{#endsyntax#} can be used as a further optimization.
+          </li>
+          <li>
+              Are you writing a test, and you want to make sure {#syntax#}error.OutOfMemory{#endsyntax#}
+              is handled correctly? In this case, use {#syntax#}std.debug.FailingAllocator{#endsyntax#}.
+          </li>
+          <li>
+              Finally, if none of the above apply, you need a general purpose allocator. Zig does not
+              yet have a general purpose allocator in the standard library,
+              <a href="https://github.com/andrewrk/zig-general-purpose-allocator/">but one is being actively developed</a>.
+              You can also consider {#link|Implementing an Allocator#}.
+          </li>
+      </ol>
+      {#header_close#}
+
+      {#header_open|Where are the bytes?#}
+      <p>String literals such as {#syntax#}"foo"{#endsyntax#} are in the global constant data section.
+      This is why it is an error to pass a string literal to a mutable slice, like this:
+      </p>
+      {#code_begin|test_err|expected type '[]u8'#}
+fn foo(s: []u8) void {}
+
+test "string literal to mutable slice" {
+    foo("hello");
+}
+      {#code_end#}
+      <p>However if you make the slice constant, then it works:</p>
+      {#code_begin|test|strlit#}
+fn foo(s: []const u8) void {}
+
+test "string literal to constant slice" {
+    foo("hello");
+}
+      {#code_end#}
+      <p>
+      Just like string literals, `const` declarations, when the value is known at {#link|comptime#},
+      are stored in the global constant data section. Also {#link|Compile Time Variables#} are stored
+      in the global constant data section.
+      </p>
+      <p>
+      `var` declarations inside functions are stored in the function's stack frame. Once a function returns,
+      any {#link|Pointers#} to variables in the function's stack frame become invalid references, and
+      dereferencing them becomes unchecked {#link|Undefined Behavior#}.
+      </p>
+      <p>
+      `var` declarations at the top level or in {#link|struct#} declarations are stored in the global
+      data section.
+      </p>
+      <p>
+      The location of memory allocated with {#syntax#}allocator.alloc{#endsyntax#} or
+      {#syntax#}allocator.create{#endsyntax#} is determined by the allocator's implementation.
+      </p>
+      </p>TODO: thread local variables</p>
+      {#header_close#}
+
+      {#header_open|Implementing an Allocator#}
+      <p>Zig programmers can implement their own allocators by fulfilling the Allocator interface.
+      In order to do this one must read carefully the documentation comments in std/mem.zig and
+      then supply a {#syntax#}reallocFn{#endsyntax#} and a {#syntax#}shrinkFn{#endsyntax#}.
+      </p>
+      <p>
+      There are many example allocators to look at for inspiration. Look at std/heap.zig and
+      at this
+      <a href="https://github.com/andrewrk/zig-general-purpose-allocator/">work-in-progress general purpose allocator</a>.
+      TODO: once <a href="https://github.com/ziglang/zig/issues/21">#21</a> is done, link to the docs
+      here.
+      </p>
+      {#header_close#}
+
+      {#header_open|Heap Allocation Failure#}
+      <p>
+      Many programming languages choose to handle the possibility of heap allocation failure by
+      unconditionally crashing. By convention, Zig programmers do not consider this to be a
+      satisfactory solution. Instead, {#syntax#}error.OutOfMemory{#endsyntax#} represents
+      heap allocation failure, and Zig libraries return this error code whenever heap allocation
+      failure prevented an operation from completing successfully.
+      </p>
+      <p>
+      Some have argued that because some operating systems such as Linux have memory overcommit enabled by
+      default, it is pointless to handle heap allocation failure. There are many problems with this reasoning:
+      </p>
+      <ul>
+          <li>Only some operating systems have an overcommit feature.
+              <ul>
+                  <li>Linux has it enabled by default, but it is configurable.</li>
+                  <li>Windows does not overcommit.</li>
+                  <li>Embedded systems do not have overcommit.</li>
+                  <li>Hobby operating systems may or may not have overcommit.</li>
+              </ul>
+          </li>
+          <li>
+              For real-time systems, not only is there no overcommit, but typically the maximum amount
+              of memory per application is determined ahead of time.
+          </li>
+          <li>
+              When writing a library, one of the main goals is code reuse. By making code handle
+              allocation failure correctly, a library becomes eligible to be reused in
+              more contexts.
+          </li>
+          <li>
+              Although some software has grown to depend on overcommit being enabled, its existence
+              is the source of countless user experience disasters. When a system with overcommit enabled,
+              such as Linux on default settings, comes close to memory exhaustion, the system locks up
+              and becomes unusable. At this point, the OOM Killer selects an application to kill
+              based on heuristics. This non-deterministic decision often results in an important process
+              being killed, and often fails to return the system back to working order.
+          </li>
+      </ul>
+      {#header_close#}
+
+      {#header_open|Recursion#}
+      <p>
+      Recursion is a fundamental tool in modeling software. However it has an often-overlooked problem:
+      unbounded memory allocation.
+      </p>
+      <p>
+      Recursion is an area of active experimentation in Zig and so the documentation here is not final.
+      You can read a
+      <a href="https://ziglang.org/download/0.3.0/release-notes.html#recursion">summary of recursion status in the 0.3.0 release notes</a>.
+      </p>
+      <p>
+      The short summary is that currently recursion works normally as you would expect. Although Zig code
+      is not yet protected from stack overflow, it is planned that a future version of Zig will provide
+      such protection, with some degree of cooperation from Zig code required.
+      </p>
+      {#header_close#}
+
+      {#header_open|Lifetime and Ownership#}
+      <p>
+      It is the Zig programmer's responsibility to ensure that a {#link|pointer|Pointers#} is not
+      accessed when the memory pointed to is no longer available. Note that a {#link|slice|Slices#}
+      is a form of pointer, in that it references other memory.
+      </p>
+      <p>
+      In order to prevent bugs, there are some helpful conventions to follow when dealing with pointers.
+      In general, when a function returns a pointer, the documentation for the function should explain
+      who "owns" the pointer. This concept helps the programmer decide when it is appropriate, if ever,
+      to free the pointer.
+      </p>
+      <p>
+      For example, the function's documentation may say "caller owns the returned memory", in which case
+      the code that calls the function must have a plan for when to free that memory. Probably in this situation,
+      the function will accept an {#syntax#}*Allocator{#endsyntax#} parameter.
+      </p>
+      <p>
+      Sometimes the lifetime of a pointer may be more complicated. For example, when using
+      {#syntax#}std.ArrayList(T).toSlice(){#endsyntax#}, the returned slice has a lifetime that remains
+      valid until the next time the list is resized, such as by appending new elements.
+      </p>
+      <p>
+      The API documentation for functions and data structures should take great care to explain
+      the ownership and lifetime semantics of pointers. Ownership determines whose responsibility it
+      is to free the memory referenced by the pointer, and lifetime determines the point at which
+      the memory becomes inaccessible (lest {#link|Undefined Behavior#} occur).
+      </p>
+      {#header_close#}
 
       {#header_close#}
       {#header_open|Compile Variables#}
@@ -7750,11 +8429,78 @@ const separator = if (builtin.os == builtin.Os.windows) '\\' else '/';
       <p>TODO: using comptime { _ = @import() }</p>
       {#header_close#}
       {#header_open|Zig Test#}
-      <p>TODO: basic usage</p>
-      <p>TODO: lazy analysis</p>
-      <p>TODO: --test-filter</p>
-      <p>TODO: --test-name-prefix</p>
-      <p>TODO: testing in releasefast and releasesafe mode. assert still works</p>
+      <p>
+      <code>zig test</code> is a tool that can be used to quickly build and run Zig code
+      to make sure behavior meets expectations. {#syntax#}@import("builtin").is_test{#endsyntax#}
+      is available for code to detect whether the current build is a test build.
+      </p>
+      {#code_begin|test|detect_test#}
+const std = @import("std");
+const builtin = @import("builtin");
+const assert = std.debug.assert;
+
+test "builtin.is_test" {
+    assert(builtin.is_test);
+}
+      {#code_end#}
+      <p>
+      Zig has lazy top level declaration analysis, which means that if a function is not called,
+      or otherwise used, it is not analyzed. This means that there may be an undiscovered
+      compile error in a function because it is never called.
+      </p>
+      {#code_begin|test|unused_fn#}
+fn unused() i32 {
+    return "wrong return type";
+}
+test "unused function" { }
+      {#code_end#}
+      <p>
+      Note that, while in {#link|Debug#} and {#link|ReleaseSafe#} modes, {#link|unreachable#} emits a
+      call to {#link|@panic#}, in {#link|ReleaseFast#} and {#link|ReleaseSmall#} modes, it is really
+      undefined behavior. The implementation of {#syntax#}std.debug.assert{#endsyntax#} is as
+      simple as:
+      </p>
+      {#code_begin|syntax#}
+pub fn assert(ok: bool) void {
+    if (!ok) unreachable;
+}
+      {#code_end#}
+      <p>
+      This means that when testing in ReleaseFast or ReleaseSmall mode, {#syntax#}assert{#endsyntax#}
+      is not sufficient to check the result of a computation:
+      </p>
+      {#code_begin|test|assert#}
+      {#code_release_fast#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "assert in release fast mode" {
+    assert(false);
+}
+      {#code_end#}
+      <p>Note that although the above example shows the test passing, this is invoking
+      unchecked {#link|Undefined Behavior#}. This documentation is showing only one possible
+      outcome of this test.</p>
+      <p>
+      Better practice for checking the output when testing is to use {#syntax#}std.testing.expect{#endsyntax#}:
+      </p>
+      {#code_begin|test_err|test failure#}
+      {#code_release_fast#}
+const std = @import("std");
+const expect = std.testing.expect;
+
+test "assert in release fast mode" {
+    expect(false);
+}
+      {#code_end#}
+      <p>See the rest of the {#syntax#}std.testing{#endsyntax#} namespace for more available functions.</p>
+      <p>
+      <code>zig test</code> has a few command line parameters which affect the compilation. See
+      <code>zig --help</code> for a full list. The most interesting one is <code>--test-filter [text]</code>.
+      This makes the test build only include tests whose name contains the supplied filter text.
+      Again, thanks to lazy analysis, this can allow you to narrow a build to only a few functions in
+      isolation.
+      </p>
       {#header_close#}
       {#header_open|Zig Build System#}
       <p>TODO: explain purpose, it's supposed to replace make/cmake</p>
@@ -7801,7 +8547,7 @@ pub fn main() void {
     );
 }
       {#code_end#}
-      {#see_also|String Literals#}
+      {#see_also|String Literals and Character Literals#}
       {#header_close#}
 
       {#header_open|Import from C Header File#}
@@ -7925,6 +8671,7 @@ pub fn build(b: *Builder) void {
 $ ./test
 $ echo $?
 0</code></pre>
+      {#see_also|export#}
       {#header_close#}
       {#header_open|Mixing Object Files#}
       <p>
@@ -7998,28 +8745,68 @@ all your base are belong to us</code></pre>
       </p>
       <pre><code class="shell">$ zig targets
 Architectures:
-  armv8_2a
-  armv8_1a
-  armv8
-  armv8r
-  armv8m_baseline
-  armv8m_mainline
-  armv7
-  armv7em
-  armv7m
-  armv7s
-  armv7k
-  armv7ve
-  armv6
-  armv6m
-  armv6k
-  armv6t2
-  armv5
-  armv5te
-  armv4t
+  arm
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
+    v7
+    v7em
+    v7m
+    v7s
+    v7k
+    v7ve
+    v6
+    v6m
+    v6k
+    v6t2
+    v5
+    v5te
+    v4t
   armeb
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
+    v7
+    v7em
+    v7m
+    v7s
+    v7k
+    v7ve
+    v6
+    v6m
+    v6k
+    v6t2
+    v5
+    v5te
+    v4t
   aarch64
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
   aarch64_be
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
   avr
   bpfel
   bpfeb
@@ -8029,7 +8816,6 @@ Architectures:
   mips64
   mips64el
   msp430
-  nios2
   powerpc
   powerpc64
   powerpc64le
@@ -8041,32 +8827,58 @@ Architectures:
   sparcv9
   sparcel
   s390x
-  tce
-  tcele
   thumb
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
+    v7
+    v7em
+    v7m
+    v7s
+    v7k
+    v7ve
+    v6
+    v6m
+    v6k
+    v6t2
+    v5
+    v5te
+    v4t
   thumbeb
+    v8_4a
+    v8_3a
+    v8_2a
+    v8_1a
+    v8
+    v8r
+    v8m_baseline
+    v8m_mainline
+    v7
+    v7em
+    v7m
+    v7s
+    v7k
+    v7ve
+    v6
+    v6m
+    v6k
+    v6t2
+    v5
+    v5te
+    v4t
   i386
   x86_64 (native)
   xcore
   nvptx
   nvptx64
-  le32
-  le64
-  amdil
-  amdil64
-  hsail
-  hsail64
-  spir
-  spir64
-  kalimbav3
-  kalimbav4
-  kalimbav5
-  shave
   lanai
   wasm32
   wasm64
-  renderscript32
-  renderscript64
 
 Operating Systems:
   freestanding
@@ -8089,7 +8901,6 @@ Operating Systems:
   rtems
   nacl
   cnk
-  bitrig
   aix
   cuda
   nvcl
@@ -8100,11 +8911,14 @@ Operating Systems:
   watchos
   mesa3d
   contiki
+  amdpal
   zen
+  uefi
 
-Environments:
-  unknown
+C ABIs:
+  none
   gnu (native)
+  gnuabin32
   gnuabi64
   gnueabi
   gnueabihf
@@ -8119,9 +8933,51 @@ Environments:
   msvc
   itanium
   cygnus
-  amdopencl
   coreclr
-  opencl</code></pre>
+  simulator
+
+Available libcs:
+  aarch64_be-linux-gnu
+  aarch64_be-linux-musl
+  aarch64-linux-gnu
+  aarch64-linux-musleabi
+  armeb-linux-gnueabi
+  armeb-linux-gnueabihf
+  armeb-linux-musleabi
+  armeb-linux-musleabihf
+  arm-linux-gnueabi
+  arm-linux-gnueabihf
+  arm-linux-musleabi
+  arm-linux-musleabihf
+  i386-linux-gnu
+  i386-linux-musl
+  mips64el-linux-gnuabi64
+  mips64el-linux-gnuabin32
+  mips64el-linux-musl
+  mips64-linux-gnuabi64
+  mips64-linux-gnuabin32
+  mips64-linux-musl
+  mipsel-linux-gnu
+  mipsel-linux-musl
+  mips-linux-gnu
+  mips-linux-musl
+  nios2-linux-gnu
+  powerpc64le-linux-gnu
+  powerpc64le-linux-musl
+  powerpc64-linux-gnu
+  powerpc64-linux-musl
+  powerpc-linux-gnu
+  powerpc-linux-musl
+  riscv32-linux-musl
+  riscv64-linux-gnu
+  riscv64-linux-musl
+  s390x-linux-gnu
+  s390x-linux-musl
+  sparc-linux-gnu
+  sparcv9-linux-gnu
+  x86_64-linux-gnu
+  x86_64-linux-gnux32
+  x86_64-linux-musl</code></pre>
       <p>
       The Zig Standard Library ({#syntax#}@import("std"){#endsyntax#}) has architecture, environment, and operating system
       abstractions, and thus takes additional work to support more platforms.
@@ -8254,6 +9110,19 @@ fn readU32Be() u32 {}
       <p>The codepoint U+000a (LF) (which is encoded as the single-byte value 0x0a) is the line terminator character. This character always terminates a line of zig source code (except possbly the last line of the file).</p>
       <p>For some discussion on the rationale behind these design decisions, see <a href="https://github.com/ziglang/zig/issues/663">issue #663</a></p>
       {#header_close#}
+
+      {#header_open|Keyword Reference#}
+      <p>
+      TODO the rest of the keywords. Most of these can just be links to the relevant section.
+      </p>
+      {#header_open|Keyword: pub#}
+      <p>The {#syntax#}pub{#endsyntax#} in front of a top level declaration makes the
+      declaration available to reference from a different file than the one it is declared in.</p>
+      <p><a href="https://github.com/ziglang/zig/issues/2059">TODO delete pub syntax for fields, or make it do something.</a></p>
+      {#see_also|@import#}
+      {#header_close#}
+      {#header_close#}
+
       {#header_open|Grammar#}
       <pre><code>Root &lt;- skip ContainerMembers eof
 
@@ -8345,7 +9214,8 @@ PrimaryExpr
      / KEYWORD_continue BreakLabel?
      / KEYWORD_resume Expr
      / KEYWORD_return Expr?
-     / LabeledExpr
+     / BlockLabel? LoopExpr
+     / Block
      / CurlySuffixExpr
 
 IfExpr &lt;- IfPrefix Expr (KEYWORD_else Payload? Expr)?
@@ -8359,8 +9229,6 @@ LoopExpr &lt;- KEYWORD_inline? (ForExpr / WhileExpr)
 ForExpr &lt;- ForPrefix Expr (KEYWORD_else Expr)?
 
 WhileExpr &lt;- WhilePrefix Expr (KEYWORD_else Payload? Expr)?
-
-CurlySuffixExpr &lt;- TypeExpr InitList?
 
 InitList
     &lt;- LBRACE FieldInit (COMMA FieldInit)* COMMA? RBRACE

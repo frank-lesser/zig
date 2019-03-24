@@ -880,10 +880,6 @@ fn renderExpression(
             const null_literal = @fieldParentPtr(ast.Node.NullLiteral, "base", base);
             return renderToken(tree, stream, null_literal.token, indent, start_col, space);
         },
-        ast.Node.Id.ThisLiteral => {
-            const this_literal = @fieldParentPtr(ast.Node.ThisLiteral, "base", base);
-            return renderToken(tree, stream, this_literal.token, indent, start_col, space);
-        },
         ast.Node.Id.Unreachable => {
             const unreachable_node = @fieldParentPtr(ast.Node.Unreachable, "base", base);
             return renderToken(tree, stream, unreachable_node.token, indent, start_col, space);
@@ -1669,6 +1665,13 @@ fn renderExpression(
             }
 
             return renderToken(tree, stream, asm_output.lastToken(), indent, start_col, space); // )
+        },
+
+        ast.Node.Id.EnumLiteral => {
+            const enum_literal = @fieldParentPtr(ast.Node.EnumLiteral, "base", base);
+
+            try renderToken(tree, stream, enum_literal.dot, indent, start_col, Space.None); // .
+            return renderToken(tree, stream, enum_literal.name, indent, start_col, space); // name
         },
 
         ast.Node.Id.StructField,

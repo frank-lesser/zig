@@ -158,7 +158,6 @@ pub fn addGenHTests(b: *build.Builder, test_filter: ?[]const u8) *build.Step {
         .step = b.step("test-gen-h", "Run the C header file generation tests"),
         .test_index = 0,
         .test_filter = test_filter,
-        .counter = 0,
     };
 
     gen_h.addCases(cases);
@@ -317,11 +316,13 @@ pub const CompareOutputContext = struct {
                 Term.Exited => |code| {
                     if (code != 0) {
                         warn("Process {} exited with error code {}\n", full_exe_path, code);
+                        printInvocation(args.toSliceConst());
                         return error.TestFailed;
                     }
                 },
                 else => {
                     warn("Process {} terminated unexpectedly\n", full_exe_path);
+                    printInvocation(args.toSliceConst());
                     return error.TestFailed;
                 },
             }
@@ -682,11 +683,13 @@ pub const CompileErrorContext = struct {
             switch (term) {
                 Term.Exited => |code| {
                     if (code == 0) {
+                        printInvocation(zig_args.toSliceConst());
                         return error.CompilationIncorrectlySucceeded;
                     }
                 },
                 else => {
                     warn("Process {} terminated unexpectedly\n", b.zig_exe);
+                    printInvocation(zig_args.toSliceConst());
                     return error.TestFailed;
                 },
             }
@@ -752,13 +755,6 @@ pub const CompileErrorContext = struct {
             warn("OK\n");
         }
     };
-
-    fn printInvocation(args: []const []const u8) void {
-        for (args) |arg| {
-            warn("{} ", arg);
-        }
-        warn("\n");
-    }
 
     pub fn create(self: *CompileErrorContext, name: []const u8, source: []const u8, expected_lines: ...) *TestCase {
         const tc = self.b.allocator.create(TestCase) catch unreachable;
@@ -1019,6 +1015,7 @@ pub const TranslateCContext = struct {
                     \\============================================
                     \\
                 , stderr);
+                printInvocation(zig_args.toSliceConst());
                 return error.TestFailed;
             }
 
@@ -1032,6 +1029,7 @@ pub const TranslateCContext = struct {
                         \\{}
                         \\
                     , expected_line, stdout);
+                    printInvocation(zig_args.toSliceConst());
                     return error.TestFailed;
                 }
             }
@@ -1105,7 +1103,6 @@ pub const GenHContext = struct {
     step: *build.Step,
     test_index: usize,
     test_filter: ?[]const u8,
-    counter: usize,
 
     const TestCase = struct {
         name: []const u8,
@@ -1208,11 +1205,7 @@ pub const GenHContext = struct {
     }
 
     pub fn add(self: *GenHContext, name: []const u8, source: []const u8, expected_lines: ...) void {
-        // MacOS appears to not be returning nanoseconds in fstat mtime,
-        // which causes fast test executions to think the file contents are unchanged.
-        const modified_name = self.b.fmt("test-{}.zig", self.counter);
-        self.counter += 1;
-        const tc = self.create(modified_name, name, source, expected_lines);
+        const tc = self.create("test.zig", name, source, expected_lines);
         self.addCase(tc);
     }
 
@@ -1246,3 +1239,10 @@ pub const GenHContext = struct {
         self.step.dependOn(&cmp_h.step);
     }
 };
+
+fn printInvocation(args: []const []const u8) void {
+    for (args) |arg| {
+        warn("{} ", arg);
+    }
+    warn("\n");
+}

@@ -296,13 +296,13 @@ pub const Node = struct {
         // Primary expressions
         IntegerLiteral,
         FloatLiteral,
+        EnumLiteral,
         StringLiteral,
         MultilineStringLiteral,
         CharLiteral,
         BoolLiteral,
         NullLiteral,
         UndefinedLiteral,
-        ThisLiteral,
         Unreachable,
         Identifier,
         GroupedExpression,
@@ -1850,6 +1850,24 @@ pub const Node = struct {
         }
     };
 
+    pub const EnumLiteral = struct {
+        base: Node,
+        dot: TokenIndex,
+        name: TokenIndex,
+
+        pub fn iterate(self: *EnumLiteral, index: usize) ?*Node {
+            return null;
+        }
+
+        pub fn firstToken(self: *const EnumLiteral) TokenIndex {
+            return self.dot;
+        }
+
+        pub fn lastToken(self: *const EnumLiteral) TokenIndex {
+            return self.name;
+        }
+    };
+
     pub const FloatLiteral = struct {
         base: Node,
         token: TokenIndex,
@@ -1993,23 +2011,6 @@ pub const Node = struct {
         }
 
         pub fn lastToken(self: *const UndefinedLiteral) TokenIndex {
-            return self.token;
-        }
-    };
-
-    pub const ThisLiteral = struct {
-        base: Node,
-        token: TokenIndex,
-
-        pub fn iterate(self: *ThisLiteral, index: usize) ?*Node {
-            return null;
-        }
-
-        pub fn firstToken(self: *const ThisLiteral) TokenIndex {
-            return self.token;
-        }
-
-        pub fn lastToken(self: *const ThisLiteral) TokenIndex {
             return self.token;
         }
     };
