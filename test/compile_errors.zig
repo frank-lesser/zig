@@ -3,6 +3,29 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "@ptrToInt 0 to non optional pointer",
+        \\export fn entry() void {
+        \\    var b = @intToPtr(*i32, 0);
+        \\}
+    ,
+        "tmp.zig:2:13: error: pointer type '*i32' does not allow address zero",
+    );
+
+    cases.add(
+        "cast enum literal to enum but it doesn't match",
+        \\const Foo = enum {
+        \\    a,
+        \\    b,
+        \\};
+        \\export fn entry() void {
+        \\    const x: Foo = .c;
+        \\}
+    ,
+        "tmp.zig:6:20: error: enum 'Foo' has no field named 'c'",
+        "tmp.zig:1:13: note: 'Foo' declared here",
+    );
+
+    cases.add(
         "discarding error value",
         \\export fn entry() void {
         \\    _ = foo();
