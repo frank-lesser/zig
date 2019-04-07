@@ -2048,9 +2048,9 @@ Error os_file_overwrite(OsFile file, Buf *contents) {
     return ErrorNone;
 #else
     if (lseek(file, 0, SEEK_SET) == -1)
-        return ErrorFileSystem;
+        return ErrorUnexpectedSeekFailure;
     if (ftruncate(file, 0) == -1)
-        return ErrorFileSystem;
+        return ErrorUnexpectedFileTruncationFailure;
     for (;;) {
         if (write(file, buf_ptr(contents), buf_len(contents)) == -1) {
             switch (errno) {
@@ -2060,8 +2060,20 @@ Error os_file_overwrite(OsFile file, Buf *contents) {
                     zig_unreachable();
                 case EBADF:
                     zig_unreachable();
-                default:
+                case EFAULT:
+                    zig_unreachable();
+                case EDQUOT:
+                    return ErrorDiskQuota;
+                case ENOSPC:
+                    return ErrorDiskSpace;
+                case EFBIG:
+                    return ErrorFileTooBig;
+                case EIO:
                     return ErrorFileSystem;
+                case EPERM:
+                    return ErrorAccess;
+                default:
+                    return ErrorUnexpectedWriteFailure;
             }
         }
         return ErrorNone;
@@ -2076,3 +2088,21 @@ void os_file_close(OsFile file) {
     close(file);
 #endif
 }
+
+#ifdef ZIG_OS_LINUX
+const char *possible_ld_names[] = {
+#if defined(ZIG_ARCH_X86_64)
+    "ld-linux-x86-64.so.2",
+    "ld-musl-x86_64.so.1",
+#elif defined(ZIG_ARCH_ARM64)
+    "ld-linux-aarch64.so.1",
+    "ld-musl-aarch64.so.1",
+#elif defined(ZIG_ARCH_ARM)
+    "ld-linux-armhf.so.3",
+    "ld-musl-armhf.so.1",
+    "ld-linux.so.3",
+    "ld-musl-arm.so.1",
+#endif
+    NULL,
+};
+#endif

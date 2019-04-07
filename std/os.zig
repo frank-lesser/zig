@@ -213,7 +213,14 @@ pub fn exit(status: u8) noreturn {
         c.exit(status);
     }
     switch (builtin.os) {
-        Os.linux, Os.macosx, Os.ios, Os.freebsd, Os.netbsd => {
+        Os.linux => {
+            if (builtin.single_threaded) {
+                linux.exit(status);
+            } else {
+                linux.exit_group(status);
+            }
+        },
+        Os.macosx, Os.ios, Os.freebsd, Os.netbsd => {
             posix.exit(status);
         },
         Os.windows => {
@@ -2927,7 +2934,6 @@ pub const Thread = struct {
             handle: Thread.Handle,
             mmap_addr: usize,
             mmap_len: usize,
-            tls_end_addr: usize,
         },
         builtin.Os.windows => struct {
             handle: Thread.Handle,
@@ -2953,6 +2959,10 @@ pub const Thread = struct {
 
     /// Returns the handle of this thread.
     /// On Linux and POSIX, this is the same as Id.
+    /// On Linux, it is possible that the thread spawned with `spawnThread`
+    /// finishes executing entirely before the clone syscall completes. In this
+    /// case, this function will return 0 rather than the no-longer-existing thread's
+    /// pid.
     pub fn handle(self: Thread) Handle {
         return self.data.handle;
     }
@@ -2971,7 +2981,7 @@ pub const Thread = struct {
         } else switch (builtin.os) {
             builtin.Os.linux => {
                 while (true) {
-                    const pid_value = @atomicLoad(i32, &self.data.handle, builtin.AtomicOrder.SeqCst);
+                    const pid_value = @atomicLoad(i32, &self.data.handle, .SeqCst);
                     if (pid_value == 0) break;
                     const rc = linux.futex_wait(&self.data.handle, linux.FUTEX_WAIT, pid_value, null);
                     switch (linux.getErrno(rc)) {
@@ -3136,6 +3146,8 @@ pub fn spawnThread(context: var, comptime startFn: var) SpawnThreadError!*Thread
                 l = mem.alignForward(l, tls_phdr.p_align);
                 tls_start_offset = l;
                 l += tls_phdr.p_memsz;
+                // the fs register address
+                l += @sizeOf(usize);
             }
         }
         break :blk l;
@@ -3178,8 +3190,8 @@ pub fn spawnThread(context: var, comptime startFn: var) SpawnThreadError!*Thread
         var newtls: usize = undefined;
         if (linux_tls_phdr) |tls_phdr| {
             @memcpy(@intToPtr([*]u8, mmap_addr + tls_start_offset), linux_tls_img_src, tls_phdr.p_filesz);
-            thread_ptr.data.tls_end_addr = mmap_addr + mmap_len;
-            newtls = @ptrToInt(&thread_ptr.data.tls_end_addr);
+            newtls = mmap_addr + mmap_len - @sizeOf(usize);
+            @intToPtr(*usize, newtls).* = newtls;
             flags |= posix.CLONE_SETTLS;
         }
         const rc = posix.clone(MainFuncs.linuxThreadMain, mmap_addr + stack_end_offset, flags, arg, &thread_ptr.data.handle, newtls, &thread_ptr.data.handle);

@@ -75,6 +75,27 @@ test "zig fmt: correctly move doc comments on struct fields" {
     );
 }
 
+test "zig fmt: doc comments on param decl" {
+    try testCanonical(
+        \\pub const Allocator = struct {
+        \\    shrinkFn: fn (
+        \\        self: *Allocator,
+        \\        /// Guaranteed to be the same as what was returned from most recent call to
+        \\        /// `allocFn`, `reallocFn`, or `shrinkFn`.
+        \\        old_mem: []u8,
+        \\        /// Guaranteed to be the same as what was returned from most recent call to
+        \\        /// `allocFn`, `reallocFn`, or `shrinkFn`.
+        \\        old_alignment: u29,
+        \\        /// Guaranteed to be less than or equal to `old_mem.len`.
+        \\        new_byte_count: usize,
+        \\        /// Guaranteed to be less than or equal to `old_alignment`.
+        \\        new_alignment: u29,
+        \\    ) []u8,
+        \\};
+        \\
+    );
+}
+
 test "zig fmt: preserve space between async fn definitions" {
     try testCanonical(
         \\async fn a() void {}
@@ -333,6 +354,15 @@ test "zig fmt: fn decl with trailing comma" {
     );
 }
 
+test "zig fmt: var_args with trailing comma" {
+    try testCanonical(
+        \\pub fn add(
+        \\    a: ...,
+        \\) void {}
+        \\
+    );
+}
+
 test "zig fmt: enum decl with no trailing comma" {
     try testTransform(
         \\const StrLitKind = enum {Normal, C};
@@ -367,6 +397,50 @@ test "zig fmt: struct literal no trailing comma" {
         \\const a = foo{
         \\    .x = 1,
         \\    .y = 2,
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: struct literal containing a multiline expression" {
+    try testTransform(
+        \\const a = A{ .x = if (f1()) 10 else 20 };
+        \\const a = A{ .x = if (f1()) 10 else 20, };
+        \\const a = A{ .x = if (f1())
+        \\    10 else 20 };
+        \\const a = A{ .x = if (f1()) 10 else 20, .y = f2() + 100 };
+        \\const a = A{ .x = if (f1()) 10 else 20, .y = f2() + 100, };
+        \\const a = A{ .x = if (f1())
+        \\    10 else 20};
+        \\const a = A{ .x = switch(g) {0 => "ok", else => "no"} };
+        \\
+    ,
+        \\const a = A{ .x = if (f1()) 10 else 20 };
+        \\const a = A{
+        \\    .x = if (f1()) 10 else 20,
+        \\};
+        \\const a = A{
+        \\    .x = if (f1())
+        \\        10
+        \\    else
+        \\        20,
+        \\};
+        \\const a = A{ .x = if (f1()) 10 else 20, .y = f2() + 100 };
+        \\const a = A{
+        \\    .x = if (f1()) 10 else 20,
+        \\    .y = f2() + 100,
+        \\};
+        \\const a = A{
+        \\    .x = if (f1())
+        \\        10
+        \\    else
+        \\        20,
+        \\};
+        \\const a = A{
+        \\    .x = switch (g) {
+        \\        0 => "ok",
+        \\        else => "no",
+        \\    },
         \\};
         \\
     );
@@ -449,6 +523,34 @@ test "zig fmt: array literal with hint" {
     );
 }
 
+test "zig fmt: array literal veritical column alignment" {
+    try testTransform(
+        \\const a = []u8{
+        \\    1000, 200,
+        \\    30, 4,
+        \\    50000, 60
+        \\};
+        \\const a = []u8{0,   1, 2, 3, 40,
+        \\    4,5,600,7,
+        \\           80,
+        \\    9, 10, 11, 0, 13, 14, 15};
+        \\
+    ,
+        \\const a = []u8{
+        \\    1000,  200,
+        \\    30,    4,
+        \\    50000, 60,
+        \\};
+        \\const a = []u8{
+        \\    0,  1,  2,   3, 40,
+        \\    4,  5,  600, 7, 80,
+        \\    9,  10, 11,  0, 13,
+        \\    14, 15,
+        \\};
+        \\
+    );
+}
+
 test "zig fmt: multiline string with backslash at end of line" {
     try testCanonical(
         \\comptime {
@@ -491,6 +593,25 @@ test "zig fmt: trailing comma on fn call" {
     );
 }
 
+test "zig fmt: multi line arguments without last comma" {
+    try testTransform(
+        \\pub fn foo(
+        \\    a: usize,
+        \\    b: usize,
+        \\    c: usize,
+        \\    d: usize
+        \\) usize {
+        \\    return a + b + c + d;
+        \\}
+        \\
+    ,
+        \\pub fn foo(a: usize, b: usize, c: usize, d: usize) usize {
+        \\    return a + b + c + d;
+        \\}
+        \\
+    );
+}
+
 test "zig fmt: empty block with only comment" {
     try testCanonical(
         \\comptime {
@@ -513,6 +634,18 @@ test "zig fmt: no trailing comma on struct decl" {
         \\    s: u32,
         \\    t: u32,
         \\};
+        \\
+    );
+}
+
+test "zig fmt: extra newlines at the end" {
+    try testTransform(
+        \\const a = b;
+        \\
+        \\
+        \\
+    ,
+        \\const a = b;
         \\
     );
 }
@@ -916,6 +1049,19 @@ test "zig fmt: line comments in struct initializer" {
         \\        .a = b,
         \\
         \\        // end
+        \\    };
+        \\}
+        \\
+    );
+}
+
+test "zig fmt: first line comment in struct initializer" {
+    try testCanonical(
+        \\pub async fn acquire(self: *Self) HeldLock {
+        \\    return HeldLock{
+        \\        // TODO guaranteed allocation elision
+        \\        .held = await (async self.lock.acquire() catch unreachable),
+        \\        .value = &self.private_data,
         \\    };
         \\}
         \\
@@ -1619,6 +1765,10 @@ test "zig fmt: switch" {
 test "zig fmt: while" {
     try testCanonical(
         \\test "while" {
+        \\    while (10 < 1) unreachable;
+        \\
+        \\    while (10 < 1) unreachable else unreachable;
+        \\
         \\    while (10 < 1) {
         \\        unreachable;
         \\    }
@@ -1685,9 +1835,35 @@ test "zig fmt: while" {
 test "zig fmt: for" {
     try testCanonical(
         \\test "for" {
+        \\    for (a) continue;
+        \\
+        \\    for (a)
+        \\        continue;
+        \\
+        \\    for (a) {
+        \\        continue;
+        \\    }
+        \\
         \\    for (a) |v| {
         \\        continue;
         \\    }
+        \\
+        \\    for (a) |v| continue;
+        \\
+        \\    for (a) |v| continue else return;
+        \\
+        \\    for (a) |v| {
+        \\        continue;
+        \\    } else return;
+        \\
+        \\    for (a) |v| continue else {
+        \\        return;
+        \\    }
+        \\
+        \\    for (a) |v|
+        \\        continue
+        \\    else
+        \\        return;
         \\
         \\    for (a) |v|
         \\        continue;
@@ -1702,6 +1878,17 @@ test "zig fmt: for" {
         \\    for (a) |v, i|
         \\        continue;
         \\
+        \\    for (a) |b| switch (b) {
+        \\        c => {},
+        \\        d => {},
+        \\    };
+        \\
+        \\    for (a) |b|
+        \\        switch (b) {
+        \\            c => {},
+        \\            d => {},
+        \\        };
+        \\
         \\    const res = for (a) |v, i| {
         \\        break v;
         \\    } else {
@@ -1713,6 +1900,21 @@ test "zig fmt: for" {
         \\        num += v;
         \\        num += i;
         \\    }
+        \\}
+        \\
+    );
+
+    try testTransform(
+        \\test "fix for" {
+        \\    for (a) |x|
+        \\        f(x) else continue;
+        \\}
+        \\
+    ,
+        \\test "fix for" {
+        \\    for (a) |x|
+        \\        f(x)
+        \\    else continue;
         \\}
         \\
     );

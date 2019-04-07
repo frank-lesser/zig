@@ -302,6 +302,7 @@ set(EMBEDDED_SOFTFLOAT_SOURCES
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_add.c"
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_div.c"
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_eq.c"
+    "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_isSignalingNaN.c"
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_lt.c"
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_mul.c"
     "${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/f16_rem.c"
@@ -631,6 +632,8 @@ set(ZIG_STD_FILES
     "special/compiler_rt/aulldiv.zig"
     "special/compiler_rt/aullrem.zig"
     "special/compiler_rt/comparetf2.zig"
+    "special/compiler_rt/divsf3.zig"
+    "special/compiler_rt/divdf3.zig"
     "special/compiler_rt/divti3.zig"
     "special/compiler_rt/extendXfYf2.zig"
     "special/compiler_rt/fixdfdi.zig"
@@ -661,9 +664,11 @@ set(ZIG_STD_FILES
     "special/compiler_rt/floatuntidf.zig"
     "special/compiler_rt/floatuntisf.zig"
     "special/compiler_rt/floatuntitf.zig"
-    "special/compiler_rt/muloti4.zig"
+    "special/compiler_rt/modti3.zig"
     "special/compiler_rt/mulXf3.zig"
+    "special/compiler_rt/muloti4.zig"
     "special/compiler_rt/multi3.zig"
+    "special/compiler_rt/negXf2.zig"
     "special/compiler_rt/popcountdi2.zig"
     "special/compiler_rt/truncXfYf2.zig"
     "special/compiler_rt/udivmod.zig"
@@ -6607,9 +6612,7 @@ endif()
 set(OPTIMIZED_C_FLAGS "-std=c99 -O3")
 
 set(EXE_LDFLAGS " ")
-if(MINGW)
-    set(EXE_LDFLAGS "-static -static-libgcc -static-libstdc++")
-elseif(MSVC)
+if(MSVC)
     set(EXE_LDFLAGS "/STACK:16777216")
 elseif(ZIG_STATIC)
     if(APPLE)

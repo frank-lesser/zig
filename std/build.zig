@@ -943,6 +943,7 @@ pub const LibExeObjStep = struct {
     exec_cmd_args: ?[]const ?[]const u8,
     name_prefix: []const u8,
     filter: ?[]const u8,
+    single_threaded: bool,
 
     root_src: ?[]const u8,
     out_h_filename: []const u8,
@@ -1045,6 +1046,7 @@ pub const LibExeObjStep = struct {
             .disable_gen_h = false,
             .output_dir = null,
             .need_system_paths = false,
+            .single_threaded = false,
         };
         self.computeOutFileNames();
         return self;
@@ -1205,6 +1207,10 @@ pub const LibExeObjStep = struct {
 
     pub fn setMainPkgPath(self: *LibExeObjStep, dir_path: []const u8) void {
         self.main_pkg_path = dir_path;
+    }
+
+    pub fn setDisableGenH(self: *LibExeObjStep, value: bool) void {
+        self.disable_gen_h = value;
     }
 
     /// Unless setOutputDir was called, this function must be called only in
@@ -1407,6 +1413,10 @@ pub const LibExeObjStep = struct {
             zig_args.append("--strip") catch unreachable;
         }
 
+        if (self.single_threaded) {
+            try zig_args.append("--single-threaded");
+        }
+
         switch (self.build_mode) {
             builtin.Mode.Debug => {},
             builtin.Mode.ReleaseSafe => zig_args.append("--release-safe") catch unreachable,
@@ -1432,6 +1442,9 @@ pub const LibExeObjStep = struct {
         }
         if (self.is_dynamic) {
             try zig_args.append("-dynamic");
+        }
+        if (self.disable_gen_h) {
+            try zig_args.append("--disable-gen-h");
         }
 
         switch (self.target) {

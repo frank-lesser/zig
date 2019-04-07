@@ -6,12 +6,9 @@
     <title>Documentation - The Zig Programming Language</title>
     <style type="text/css">
       body{
-        background-color:#111;
-        color: #bbb;
         font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
       }
       a {
-        color: #88f;
         text-decoration: none;
       }
       table, th, td {
@@ -39,17 +36,15 @@
       .file {
         text-decoration: underline;
       }
-      code {
+      pre,code {
         font-size: 12pt;
       }
       pre > code {
         display: block;
         overflow: auto;
-
-        overflow-x: auto;
         padding: 0.5em;
-        color: #ccc;
-        background: #222;
+        color: #333;
+        background: #f8f8f8;
       }
       .table-wrapper {
         width: 100%;
@@ -57,76 +52,109 @@
       }
 
       .tok-kw {
-          color: #eee;
+          color: #333;
           font-weight: bold;
       }
       .tok-str {
-          color: #2e5;
+          color: #d14;
       }
       .tok-builtin {
-          color: #ff894c;
+          color: #0086b3;
       }
       .tok-comment {
-          color: #aa7;
+          color: #777;
           font-style: italic;
       }
       .tok-fn {
-          color: #e33;
+          color: #900;
           font-weight: bold;
       }
       .tok-null {
-          color: #ff8080;
+          color: #008080;
       }
       .tok-number {
-          color: #ff8080;
+          color: #008080;
       }
       .tok-type {
-          color: #68f;
+          color: #458;
           font-weight: bold;
       }
 
-      /* Desktop */
-      @media screen and (min-width: 56.25em) {
-        #nav {
-          width: 20em;
-          height: 100%;
-          position: fixed;
-          overflow-y: scroll;
-          left: 0;
-          top: 0;
-          padding-left: 1em;
-        }
-        #contents {
-          max-width: 60em;
-          padding-left: 22em;
-          padding: 1em;
-          padding-left: 24em;
-        }
+      #contents {
+        max-width: 60em;
+        margin: auto;
       }
-      /* Mobile */
-      @media screen and (max-width: 56.25em) {
-        body, code {
-          font-size: small;
-        }
-        #nav {
-          border-bottom: 1px solid grey;
-        }
-      }
+
       h1 a, h2 a, h3 a, h4 a, h5 a {
         text-decoration: none;
-        color: #aaa;
+        color: #333;
       }
-      #nav a {
-        color: #aaa;
-        text-decoration: none;
+
+      a.hdr {
+        visibility: hidden;
+      }
+      h1:hover > a.hdr, h2:hover > a.hdr, h3:hover > a.hdr, h4:hover > a.hdr, h5:hover > a.hdr {
+        visibility: visible;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body{
+            background-color:#111;
+            color: #bbb;
+        }
+        a {
+            color: #88f;
+        }
+        table, th, td {
+            border-color: grey;
+        }
+        .t2_0 {
+            color: grey;
+        }
+        .t31_1 {
+            color: red;
+        }
+        .t32_1 {
+            color: green;
+        }
+        .t36_1 {
+            color: #0086b3;
+        }
+        pre > code {
+            color: #ccc;
+            background: #222;
+        }
+        .tok-kw {
+            color: #eee;
+        }
+        .tok-str {
+            color: #2e5;
+        }
+        .tok-builtin {
+            color: #ff894c;
+        }
+        .tok-comment {
+            color: #aa7;
+        }
+        .tok-fn {
+            color: #e33;
+        }
+        .tok-null {
+            color: #ff8080;
+        }
+        .tok-number {
+            color: #ff8080;
+        }
+        .tok-type {
+            color: #68f;
+        }
+        h1 a, h2 a, h3 a, h4 a, h5 a {
+            color: #aaa;
+        }
       }
     </style>
   </head>
   <body>
-    <div id="nav">
-      <h3>Index</h3>
-      {#nav#}
-    </div>
     <div id="contents">
       {#header_open|Introduction#}
       <p>
@@ -152,6 +180,11 @@
       This HTML document depends on no external files, so you can use it offline.
       </p>
       {#header_close#}
+
+      {#header_open|Index#}
+      {#nav#}
+      {#header_close#}
+
       {#header_open|Hello World#}
 
       {#code_begin|exe|hello#}
@@ -685,6 +718,142 @@ test "init with undefined" {
       {#header_close#}
       {#header_close#}
       {#header_close#}
+
+      {#header_open|Variables#}
+      <p>
+      A variable is a unit of {#link|Memory#} storage.
+      </p>
+      <p>
+      Variables are never allowed to shadow identifiers from an outer scope.
+      </p>
+      <p>
+      It is generally preferable to use {#syntax#}const{#endsyntax#} rather than
+      {#syntax#}var{#endsyntax#} when declaring a variable. This causes less work for both
+      humans and computers to do when reading code, and creates more optimization opportunities.
+      </p>
+      {#header_open|Global Variables#}
+      <p>
+      Global variables are considered to be a top level declaration, which means that they are
+      order-independent and lazily analyzed. The initialization value of global variables is implicitly
+      {#link|comptime#}. If a global variable is {#syntax#}const{#endsyntax#} then its value is
+      {#syntax#}comptime{#endsyntax#}-known, otherwise it is runtime-known.
+      </p>
+      {#code_begin|test|global_variables#}
+var y: i32 = add(10, x);
+const x: i32 = add(12, 34);
+
+test "global variables" {
+    assert(x == 46);
+    assert(y == 56);
+}
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+const std = @import("std");
+const assert = std.debug.assert;
+      {#code_end#}
+      <p>
+      Global variables may be declared inside a {#link|struct#}, {#link|union#}, or {#link|enum#}:
+      </p>
+      {#code_begin|test|namespaced_global#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "namespaced global variable" {
+    assert(foo() == 1235);
+    assert(foo() == 1236);
+}
+
+fn foo() i32 {
+    const S = struct {
+        var x: i32 = 1234;
+    };
+    S.x += 1;
+    return S.x;
+}
+      {#code_end#}
+      <p>
+      The {#syntax#}extern{#endsyntax#} keyword can be used to link against a variable that is exported
+      from another object. The {#syntax#}export{#endsyntax#} keyword or {#link|@export#} builtin function
+      can be used to make a variable available to other objects at link time. In both cases,
+      the type of the variable must be C ABI compatible.
+      </p>
+      {#see_also|Exporting a C Library#}
+      {#header_close#}
+
+      {#header_open|Thread Local Variables#}
+      <p>A variable may be specified to be a thread-local variable using the
+      {#syntax#}threadlocal{#endsyntax#} keyword:</p>
+      {#code_begin|test|tls#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+threadlocal var x: i32 = 1234;
+
+test "thread local storage" {
+    const thread1 = try std.os.spawnThread({}, testTls);
+    const thread2 = try std.os.spawnThread({}, testTls);
+    testTls({});
+    thread1.wait();
+    thread2.wait();
+}
+
+fn testTls(context: void) void {
+    assert(x == 1234);
+    x += 1;
+    assert(x == 1235);
+}
+      {#code_end#}
+      <p>
+      For {#link|Single Threaded Builds#}, all thread local variables are treated as {#link|Global Variables#}.
+      </p>
+      <p>
+      Thread local variables may not be {#syntax#}const{#endsyntax#}.
+      </p>
+      {#header_close#}
+
+      {#header_open|Local Variables#}
+      <p>
+      Local variables occur inside {#link|Functions#}, {#link|comptime#} blocks, and {#link|@cImport#} blocks.
+      </p>
+      <p>
+      When a local variable is {#syntax#}const{#endsyntax#}, it means that after initialization, the variable's
+      value will not change. If the initialization value of a {#syntax#}const{#endsyntax#} variable is
+      {#link|comptime#}-known, then the variable is also {#syntax#}comptime{#endsyntax#}-known.
+      </p>
+      <p>
+      A local variable may be qualified with the {#syntax#}comptime{#endsyntax#} keyword. This causes
+      the variable's value to be {#syntax#}comptime{#endsyntax#}-known, and all loads and stores of the
+      variable to happen during semantic analysis of the program, rather than at runtime.
+      All variables declared in a {#syntax#}comptime{#endsyntax#} expression are implicitly
+      {#syntax#}comptime{#endsyntax#} variables.
+      </p>
+      {#code_begin|test|comptime_vars#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "comptime vars" {
+    var x: i32 = 1;
+    comptime var y: i32 = 1;
+
+    x += 1;
+    y += 1;
+
+    assert(x == 2);
+    assert(y == 2);
+
+    if (y != 2) {
+        // This compile error never triggers because y is a comptime variable,
+        // and so `y != 2` is a comptime value, and this if is statically evaluated.
+        @compileError("wrong y value");
+    }
+}
+      {#code_end#}
+      {#header_close#}
+      {#header_close#}
+
       {#header_open|Integers#}
       {#header_open|Integer Literals#}
       {#code_begin|syntax#}
@@ -2094,6 +2263,8 @@ test "linked list" {
       {#header_open|extern struct#}
       <p>An {#syntax#}extern struct{#endsyntax#} has in-memory layout guaranteed to match the
       C ABI for the target.</p>
+      <p>This kind of struct should only be used for compatibility with the C ABI. Every other
+      use case should be solved with {#link|packed struct#} or normal {#link|struct#}.</p>
       {#see_also|extern union|extern enum#}
       {#header_close#}
 
@@ -2112,8 +2283,8 @@ test "linked list" {
         <li>A {#link|packed enum#} field uses exactly the bit width of its integer tag type.</li>
         <li>A {#link|packed union#} field uses exactly the bit width of the union field with
         the largest bit width.</li>
-        <li>Non-byte-aligned fields are packed into the smallest possible
-        byte-aligned integers in accordance with the target endianness.
+        <li>Non-ABI-aligned fields are packed into the smallest possible
+        ABI-aligned integers in accordance with the target endianness.
         </li>
       </ul>
       <p>
@@ -2213,10 +2384,10 @@ fn bar(x: *const u3) u3 {
       {#code_end#}
       <p>
       In this case, the function {#syntax#}bar{#endsyntax#} cannot be called becuse the pointer
-      to the non-byte-aligned field mentions the bit offset, but the function expects a byte-aligned pointer.
+      to the non-ABI-aligned field mentions the bit offset, but the function expects an ABI-aligned pointer.
       </p>
       <p>
-      Pointers to non-byte-aligned fields share the same address as the other fields within their host integer:
+      Pointers to non-ABI-aligned fields share the same address as the other fields within their host integer:
       </p>
       {#code_begin|test#}
 const std = @import("std");
@@ -7277,6 +7448,8 @@ pub const TypeInfo = union(TypeId) {
     ArgTuple: void,
     Opaque: void,
     Promise: Promise,
+    Vector: Vector,
+    EnumLiteral: void,
 
 
     pub const Int = struct {
@@ -7294,11 +7467,13 @@ pub const TypeInfo = union(TypeId) {
         is_volatile: bool,
         alignment: comptime_int,
         child: type,
+        is_allowzero: bool,
 
         pub const Size = enum {
             One,
             Many,
             Slice,
+            C,
         };
     };
 
@@ -7339,9 +7514,7 @@ pub const TypeInfo = union(TypeId) {
         value: comptime_int,
     };
 
-    pub const ErrorSet = struct {
-        errors: []Error,
-    };
+    pub const ErrorSet = ?[]Error;
 
     pub const EnumField = struct {
         name: []const u8,
@@ -7396,6 +7569,11 @@ pub const TypeInfo = union(TypeId) {
         child: ?type,
     };
 
+    pub const Vector = struct {
+        len: comptime_int,
+        child: type,
+    };
+
     pub const Definition = struct {
         name: []const u8,
         is_pub: bool,
@@ -7427,6 +7605,11 @@ pub const TypeInfo = union(TypeId) {
     };
 };
       {#code_end#}
+      <p>
+      For {#link|structs|struct#}, {#link|unions|union#}, {#link|enums|enum#}, and
+      {#link|error sets|Error Set Type#}, the fields are guaranteed to be in the same
+      order as declared. For declarations, the order is unspecified.
+      </p>
       {#header_close#}
 
       {#header_open|@typeName#}
@@ -7533,7 +7716,7 @@ pub fn build(b: *Builder) void {
       {#header_open|Single Threaded Builds#}
       <p>Zig has a compile option <code>--single-threaded</code> which has the following effects:
       <ul>
-        <li>Variables which have Thread Local Storage instead become globals.</li>
+        <li>All {#link|Thread Local Variables#} are treated as {#link|Global Variables#}.</li>
         <li>The overhead of {#link|Coroutines#} becomes equivalent to function call overhead.
           TODO: please note this will not be implemented until the upcoming Coroutine Rewrite</li>
         <li>The {#syntax#}@import("builtin").single_threaded{#endsyntax#} becomes {#syntax#}true{#endsyntax#}
@@ -9508,12 +9691,8 @@ skip &lt;- ([ \n] / line_comment)*
 
 CHAR_LITERAL &lt;- "'" char_char "'" skip
 FLOAT
-    &lt;- "0b" [01]+  "." [01]+  ([eE] [-+]? [01]+)?  skip
-     / "0o" [0-7]+ "." [0-7]+ ([eE] [-+]? [0-7]+)? skip
-     / "0x" hex+   "." hex+   ([pP] [-+]? hex+)?   skip
+    &lt;- "0x" hex+   "." hex+   ([pP] [-+]? hex+)?   skip
      /      [0-9]+ "." [0-9]+ ([eE] [-+]? [0-9]+)? skip
-     / "0b" [01]+  "."? [eE] [-+]? [01]+  skip
-     / "0o" [0-7]+ "."? [eE] [-+]? [0-7]+ skip
      / "0x" hex+   "."? [pP] [-+]? hex+   skip
      /      [0-9]+ "."? [eE] [-+]? [0-9]+ skip
 INTEGER

@@ -46,11 +46,17 @@ test "std.os.Thread.getCurrentId" {
     const thread = try os.spawnThread(&thread_current_id, testThreadIdFn);
     const thread_id = thread.handle();
     thread.wait();
-    switch (builtin.os) {
-        builtin.Os.windows => expect(os.Thread.getCurrentId() != thread_current_id),
-        else => {
-            expect(thread_current_id == thread_id);
-        },
+    if (os.Thread.use_pthreads) {
+        expect(thread_current_id == thread_id);
+    } else {
+        switch (builtin.os) {
+            builtin.Os.windows => expect(os.Thread.getCurrentId() != thread_current_id),
+            else => {
+                // If the thread completes very quickly, then thread_id can be 0. See the
+                // documentation comments for `std.os.Thread.handle`.
+                expect(thread_id == 0 or thread_current_id == thread_id);
+            },
+        }
     }
 }
 
@@ -108,10 +114,6 @@ test "AtomicFile" {
 
 test "thread local storage" {
     if (builtin.single_threaded) return error.SkipZigTest;
-    if (!builtin.position_independent_code and !builtin.link_libc) {
-        // TODO https://github.com/ziglang/zig/issues/2063
-        return error.SkipZigTest;
-    }
     const thread1 = try std.os.spawnThread({}, testTls);
     const thread2 = try std.os.spawnThread({}, testTls);
     testTls({});

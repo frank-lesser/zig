@@ -854,12 +854,14 @@ pub fn parse(allocator: *mem.Allocator, source: []const u8) !ast.Tree {
             },
 
             State.ParamDecl => |fn_proto| {
+                const comments = try eatDocComments(arena, &tok_it, &tree);
                 if (eatToken(&tok_it, &tree, Token.Id.RParen)) |_| {
                     continue;
                 }
                 const param_decl = try arena.create(ast.Node.ParamDecl);
                 param_decl.* = ast.Node.ParamDecl{
                     .base = ast.Node{ .id = ast.Node.Id.ParamDecl },
+                    .doc_comments = comments,
                     .comptime_token = null,
                     .noalias_token = null,
                     .name_token = null,
@@ -901,8 +903,20 @@ pub fn parse(allocator: *mem.Allocator, source: []const u8) !ast.Tree {
             State.ParamDeclEnd => |ctx| {
                 if (eatToken(&tok_it, &tree, Token.Id.Ellipsis3)) |ellipsis3| {
                     ctx.param_decl.var_args_token = ellipsis3;
-                    stack.append(State{ .ExpectToken = Token.Id.RParen }) catch unreachable;
-                    continue;
+
+                    switch (expectCommaOrEnd(&tok_it, &tree, Token.Id.RParen)) {
+                        ExpectCommaOrEndResult.end_token => |t| {
+                            if (t == null) {
+                                stack.append(State{ .ExpectToken = Token.Id.RParen }) catch unreachable;
+                                continue;
+                            }
+                            continue;
+                        },
+                        ExpectCommaOrEndResult.parse_error => |e| {
+                            try tree.errors.push(e);
+                            return tree;
+                        },
+                    }
                 }
 
                 try stack.append(State{ .ParamDeclComma = ctx.fn_proto });

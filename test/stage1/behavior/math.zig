@@ -31,6 +31,9 @@ fn testDivision() void {
     expect(divFloor(i32, 0, -0x80000000) == 0);
     expect(divFloor(i32, -0x40000001, 0x40000000) == -2);
     expect(divFloor(i32, -0x80000000, 1) == -0x80000000);
+    expect(divFloor(i32, 10, 12) == 0);
+    expect(divFloor(i32, -14, 12) == -2);
+    expect(divFloor(i32, -2, 12) == -1);
 
     expect(divTrunc(i32, 5, 3) == 1);
     expect(divTrunc(i32, -5, 3) == -1);
@@ -40,6 +43,13 @@ fn testDivision() void {
     expect(divTrunc(f32, -5.0, 3.0) == -1.0);
     expect(divTrunc(f64, 5.0, 3.0) == 1.0);
     expect(divTrunc(f64, -5.0, 3.0) == -1.0);
+    expect(divTrunc(i32, 10, 12) == 0);
+    expect(divTrunc(i32, -14, 12) == -1);
+    expect(divTrunc(i32, -2, 12) == 0);
+
+    expect(mod(i32, 10, 12) == 10);
+    expect(mod(i32, -14, 12) == 10);
+    expect(mod(i32, -2, 12) == 10);
 
     comptime {
         expect(
@@ -76,6 +86,9 @@ fn divFloor(comptime T: type, a: T, b: T) T {
 }
 fn divTrunc(comptime T: type, a: T, b: T) T {
     return @divTrunc(a, b);
+}
+fn mod(comptime T: type, a: T, b: T) T {
+    return @mod(a, b);
 }
 
 test "@addWithOverflow" {
@@ -596,4 +609,26 @@ test "vector integer addition" {
     };
     S.doTheTest();
     comptime S.doTheTest();
+}
+
+test "NaN comparison" {
+    testNanEqNan(f16);
+    testNanEqNan(f32);
+    testNanEqNan(f64);
+    testNanEqNan(f128);
+    comptime testNanEqNan(f16);
+    comptime testNanEqNan(f32);
+    comptime testNanEqNan(f64);
+    comptime testNanEqNan(f128);
+}
+
+fn testNanEqNan(comptime F: type) void {
+    var nan1 = std.math.nan(F);
+    var nan2 = std.math.nan(F);
+    expect(nan1 != nan2);
+    expect(!(nan1 == nan2));
+    expect(!(nan1 > nan2));
+    expect(!(nan1 >= nan2));
+    expect(!(nan1 < nan2));
+    expect(!(nan1 <= nan2));
 }
