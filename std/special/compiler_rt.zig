@@ -160,10 +160,11 @@ comptime {
                     @export("__chkstk", __chkstk, strong_linkage);
                     @export("___chkstk_ms", ___chkstk_ms, linkage);
                 }
+                // The "ti" functions must use @Vector(2, u64) parameter types to adhere to the ABI
+                // that LLVM expects compiler-rt to have.
                 @export("__divti3", @import("compiler_rt/divti3.zig").__divti3_windows_x86_64, linkage);
                 @export("__modti3", @import("compiler_rt/modti3.zig").__modti3_windows_x86_64, linkage);
                 @export("__multi3", @import("compiler_rt/multi3.zig").__multi3_windows_x86_64, linkage);
-                @export("__muloti4", @import("compiler_rt/muloti4.zig").__muloti4_windows_x86_64, linkage);
                 @export("__udivti3", @import("compiler_rt/udivti3.zig").__udivti3_windows_x86_64, linkage);
                 @export("__udivmodti4", @import("compiler_rt/udivmodti4.zig").__udivmodti4_windows_x86_64, linkage);
                 @export("__umodti3", @import("compiler_rt/umodti3.zig").__umodti3_windows_x86_64, linkage);
@@ -174,11 +175,11 @@ comptime {
         @export("__divti3", @import("compiler_rt/divti3.zig").__divti3, linkage);
         @export("__modti3", @import("compiler_rt/modti3.zig").__modti3, linkage);
         @export("__multi3", @import("compiler_rt/multi3.zig").__multi3, linkage);
-        @export("__muloti4", @import("compiler_rt/muloti4.zig").__muloti4, linkage);
         @export("__udivti3", @import("compiler_rt/udivti3.zig").__udivti3, linkage);
         @export("__udivmodti4", @import("compiler_rt/udivmodti4.zig").__udivmodti4, linkage);
         @export("__umodti3", @import("compiler_rt/umodti3.zig").__umodti3, linkage);
     }
+    @export("__muloti4", @import("compiler_rt/muloti4.zig").__muloti4, linkage);
 }
 
 const std = @import("std");
@@ -196,17 +197,6 @@ pub fn panic(msg: []const u8, error_return_trace: ?*builtin.StackTrace) noreturn
     } else {
         unreachable;
     }
-}
-
-pub fn setXmm0(comptime T: type, value: T) void {
-    comptime assert(builtin.arch == builtin.Arch.x86_64);
-    const aligned_value: T align(16) = value;
-    asm volatile (
-        \\movaps (%[ptr]), %%xmm0
-            :
-        : [ptr] "r" (&aligned_value)
-        : "xmm0"
-    );
 }
 
 extern fn __udivdi3(a: u64, b: u64) u64 {
@@ -253,14 +243,75 @@ const is_arm_arch = switch (builtin.arch) {
 
 const is_arm_32 = is_arm_arch and !is_arm_64;
 
-const use_thumb_1 = is_arm_32 and switch (builtin.arch.arm) {
-    builtin.Arch.Arm32.v6,
-    builtin.Arch.Arm32.v6m,
-    builtin.Arch.Arm32.v6k,
-    builtin.Arch.Arm32.v6t2,
-    => true,
-    else => false,
-};
+const use_thumb_1 = usesThumb1(builtin.arch);
+
+fn usesThumb1(arch: builtin.Arch) bool {
+    return switch (arch) {
+        .arm => switch (arch.arm) {
+            .v6m => true,
+            else => false,
+        },
+        .armeb => switch (arch.armeb) {
+            .v6m => true,
+            else => false,
+        },
+        .thumb => switch (arch.thumb) {
+            .v5,
+            .v5te,
+            .v4t,
+            .v6,
+            .v6m,
+            .v6k,
+            => true,
+            else => false,
+        },
+        .thumbeb => switch (arch.thumbeb) {
+            .v5,
+            .v5te,
+            .v4t,
+            .v6,
+            .v6m,
+            .v6k,
+            => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+test "usesThumb1" {
+    testing.expect(usesThumb1(builtin.Arch{ .arm = .v6m }));
+    testing.expect(!usesThumb1(builtin.Arch{ .arm = .v5 }));
+    //etc.
+
+    testing.expect(usesThumb1(builtin.Arch{ .armeb = .v6m }));
+    testing.expect(!usesThumb1(builtin.Arch{ .armeb = .v5 }));
+    //etc.
+
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v5 }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v5te }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v4t }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v6 }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v6k }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumb = .v6m }));
+    testing.expect(!usesThumb1(builtin.Arch{ .thumb = .v6t2 }));
+    //etc.
+
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v5 }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v5te }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v4t }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v6 }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v6k }));
+    testing.expect(usesThumb1(builtin.Arch{ .thumbeb = .v6m }));
+    testing.expect(!usesThumb1(builtin.Arch{ .thumbeb = .v6t2 }));
+    //etc.
+
+    testing.expect(!usesThumb1(builtin.Arch{ .aarch64 = .v8 }));
+    testing.expect(!usesThumb1(builtin.Arch{ .aarch64_be = .v8 }));
+    testing.expect(!usesThumb1(builtin.Arch.x86_64));
+    testing.expect(!usesThumb1(builtin.Arch.riscv32));
+    //etc.
+}
 
 nakedcc fn __aeabi_uidivmod() void {
     @setRuntimeSafety(false);
