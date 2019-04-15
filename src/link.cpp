@@ -1091,7 +1091,9 @@ static void construct_linker_job_wasm(LinkJob *lj) {
     CodeGen *g = lj->codegen;
 
     lj->args.append("-error-limit=0");
-    lj->args.append("--no-entry");  // So lld doesn't look for _start.
+    if (g->zig_target->os != OsWASI) {
+	    lj->args.append("--no-entry");  // So lld doesn't look for _start.
+    }
     lj->args.append("--allow-undefined");
     lj->args.append("--export-all");
     lj->args.append("-o");
@@ -1426,18 +1428,6 @@ static void get_darwin_platform(LinkJob *lj, DarwinPlatform *platform) {
     }
 }
 
-static bool darwin_version_lt(DarwinPlatform *platform, int major, int minor) {
-    if (platform->major < major) {
-        return true;
-    } else if (platform->major > major) {
-        return false;
-    }
-    if (platform->minor < minor) {
-        return true;
-    }
-    return false;
-}
-
 static void construct_linker_job_macho(LinkJob *lj) {
     CodeGen *g = lj->codegen;
 
@@ -1560,16 +1550,6 @@ static void construct_linker_job_macho(LinkJob *lj) {
     } else {
         lj->args.append("-undefined");
         lj->args.append("dynamic_lookup");
-    }
-
-    if (platform.kind == MacOS) {
-        if (darwin_version_lt(&platform, 10, 5)) {
-            lj->args.append("-lgcc_s.10.4");
-        } else if (darwin_version_lt(&platform, 10, 6)) {
-            lj->args.append("-lgcc_s.10.5");
-        }
-    } else {
-        zig_panic("TODO");
     }
 
     for (size_t i = 0; i < g->darwin_frameworks.length; i += 1) {
