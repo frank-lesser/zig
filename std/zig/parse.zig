@@ -22,7 +22,6 @@ pub fn parse(allocator: *mem.Allocator, source: []const u8) !ast.Tree {
         .base = ast.Node{ .id = ast.Node.Id.Root },
         .decls = ast.Node.Root.DeclList.init(arena),
         .doc_comments = null,
-        .shebang = null,
         // initialized when we get the eof token
         .eof_token = undefined,
     };
@@ -42,15 +41,6 @@ pub fn parse(allocator: *mem.Allocator, source: []const u8) !ast.Tree {
         if (token_ptr.id == Token.Id.Eof) break;
     }
     var tok_it = tree.tokens.iterator(0);
-
-    // skip over shebang line
-    shebang: {
-        const shebang_tok_index = tok_it.index;
-        const shebang_tok_ptr = tok_it.peek() orelse break :shebang;
-        if (shebang_tok_ptr.id != Token.Id.ShebangLine) break :shebang;
-        root_node.shebang = shebang_tok_index;
-        _ = tok_it.next();
-    }
 
     // skip over line comments at the top of the file
     while (true) {
@@ -625,6 +615,35 @@ pub fn parse(allocator: *mem.Allocator, source: []const u8) !ast.Tree {
                                 .extern_export_inline_token = null,
                                 .lib_name = null,
                                 .comments = comments,
+                            },
+                        });
+                        continue;
+                    },
+                    Token.Id.Keyword_comptime => {
+                        const block = try arena.create(ast.Node.Block);
+                        block.* = ast.Node.Block{
+                            .base = ast.Node{ .id = ast.Node.Id.Block },
+                            .label = null,
+                            .lbrace = undefined,
+                            .statements = ast.Node.Block.StatementList.init(arena),
+                            .rbrace = undefined,
+                        };
+
+                        const node = try arena.create(ast.Node.Comptime);
+                        node.* = ast.Node.Comptime{
+                            .base = ast.Node{ .id = ast.Node.Id.Comptime },
+                            .comptime_token = token_index,
+                            .expr = &block.base,
+                            .doc_comments = comments,
+                        };
+                        try container_decl.fields_and_decls.push(&node.base);
+
+                        stack.append(State{ .ContainerDecl = container_decl }) catch unreachable;
+                        try stack.append(State{ .Block = block });
+                        try stack.append(State{
+                            .ExpectTokenSave = ExpectTokenSave{
+                                .id = Token.Id.LBrace,
+                                .ptr = &block.lbrace,
                             },
                         });
                         continue;

@@ -50,14 +50,6 @@ test "zig fmt: linksection" {
     );
 }
 
-test "zig fmt: shebang line" {
-    try testCanonical(
-        \\#!/usr/bin/env zig
-        \\pub fn main() void {}
-        \\
-    );
-}
-
 test "zig fmt: correctly move doc comments on struct fields" {
     try testTransform(
         \\pub const section_64 = extern struct {
@@ -2113,6 +2105,21 @@ test "zig fmt: error return" {
         \\fn err() anyerror {
         \\    call();
         \\    return error.InvalidArgs;
+        \\}
+        \\
+    );
+}
+
+test "zig fmt: comptime block in container" {
+    try testCanonical(
+        \\pub fn container() type {
+        \\    return struct {
+        \\        comptime {
+        \\            if (false) {
+        \\                unreachable;
+        \\            }
+        \\        }
+        \\    };
         \\}
         \\
     );

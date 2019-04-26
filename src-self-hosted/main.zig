@@ -858,7 +858,7 @@ fn cmdHelp(allocator: *Allocator, args: []const []const u8) !void {
     try stdout.write(usage);
 }
 
-const info_zen =
+pub const info_zen =
     \\
     \\ * Communicate intent precisely.
     \\ * Edge cases matter.

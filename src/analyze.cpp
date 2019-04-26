@@ -2790,7 +2790,10 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
     } else if (source_node->type == NodeTypeTestDecl) {
         ZigFn *fn_table_entry = create_fn_raw(g, FnInlineAuto);
 
-        get_fully_qualified_decl_name(&fn_table_entry->symbol_name, &tld_fn->base);
+	Buf test_fn_name = BUF_INIT;
+	get_fully_qualified_decl_name(&test_fn_name, &tld_fn->base);
+	buf_resize(&fn_table_entry->symbol_name, 0);
+	buf_appendf(&fn_table_entry->symbol_name, "test \"%s\"", buf_ptr(&test_fn_name));
 
         tld_fn->fn_entry = fn_table_entry;
 
@@ -3725,7 +3728,7 @@ static void analyze_fn_body(CodeGen *g, ZigFn *fn_table_entry) {
     }
     if (g->verbose_ir) {
         fprintf(stderr, "\n");
-        ast_render(g, stderr, fn_table_entry->body_node, 4);
+        ast_render(stderr, fn_table_entry->body_node, 4);
         fprintf(stderr, "\n{ // (IR)\n");
         ir_print(g, stderr, &fn_table_entry->ir_executable, 4);
         fprintf(stderr, "}\n");
@@ -5158,11 +5161,10 @@ bool const_values_equal(CodeGen *g, ConstExprValue *a, ConstExprValue *b) {
             if (bigint_cmp(&union1->tag, &union2->tag) == CmpEQ) {
                 TypeUnionField *field = find_union_field_by_tag(a->type, &union1->tag);
                 assert(field != nullptr);
-                if (type_has_bits(field->type_entry)) {
-                    zig_panic("TODO const expr analyze union field value for equality");
-                } else {
+                if (!type_has_bits(field->type_entry))
                     return true;
-                }
+                assert(find_union_field_by_tag(a->type, &union2->tag) != nullptr);
+                return const_values_equal(g, union1->payload, union2->payload);
             }
             return false;
         }
@@ -6073,7 +6075,7 @@ Error file_fetch(CodeGen *g, Buf *resolved_path, Buf *contents) {
     if (g->enable_cache) {
         return cache_add_file_fetch(&g->cache_hash, resolved_path, contents);
     } else {
-        return os_fetch_file_path(resolved_path, contents, false);
+        return os_fetch_file_path(resolved_path, contents);
     }
 }
 

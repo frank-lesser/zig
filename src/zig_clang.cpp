@@ -28,7 +28,7 @@
 #endif
 
 // Detect additions to the enum
-void zig2clang_BO(clang::BinaryOperatorKind op) {
+void ZigClang_detect_enum_BO(clang::BinaryOperatorKind op) {
     switch (op) {
         case clang::BO_PtrMemD:
         case clang::BO_PtrMemI:
@@ -102,7 +102,7 @@ static_assert((clang::BinaryOperatorKind)ZigClangBO_Xor == clang::BO_Xor, "");
 static_assert((clang::BinaryOperatorKind)ZigClangBO_XorAssign == clang::BO_XorAssign, "");
 
 // Detect additions to the enum
-void zig2clang_UO(clang::UnaryOperatorKind op) {
+void ZigClang_detect_enum_UO(clang::UnaryOperatorKind op) {
     switch (op) {
         case clang::UO_AddrOf:
         case clang::UO_Coawait:
@@ -138,7 +138,7 @@ static_assert((clang::UnaryOperatorKind)ZigClangUO_PreInc == clang::UO_PreInc, "
 static_assert((clang::UnaryOperatorKind)ZigClangUO_Real == clang::UO_Real, "");
 
 // Detect additions to the enum
-void zig2clang_CK(clang::CastKind x) {
+void ZigClang_detect_enum_CK(clang::CastKind x) {
     switch (x) {
         case clang::CK_ARCConsumeObject:
         case clang::CK_ARCExtendBlockObject:
@@ -264,7 +264,7 @@ static_assert((clang::CastKind)ZigClangCK_AddressSpaceConversion == clang::CK_Ad
 static_assert((clang::CastKind)ZigClangCK_IntToOCLSampler == clang::CK_IntToOCLSampler, "");
 
 // Detect additions to the enum
-void zig2clang_TypeClass(clang::Type::TypeClass ty) {
+void ZigClang_detect_enum_TypeClass(clang::Type::TypeClass ty) {
     switch (ty) {
         case clang::Type::Builtin:
         case clang::Type::Complex:
@@ -366,7 +366,7 @@ static_assert((clang::Type::TypeClass)ZigClangType_Pipe == clang::Type::Pipe, ""
 static_assert((clang::Type::TypeClass)ZigClangType_Atomic == clang::Type::Atomic, "");
 
 // Detect additions to the enum
-void zig2clang_StmtClass(clang::Stmt::StmtClass x) {
+void ZigClang_detect_enum_StmtClass(clang::Stmt::StmtClass x) {
     switch (x) {
         case clang::Stmt::NoStmtClass:
         case clang::Stmt::NullStmtClass:
@@ -767,6 +767,37 @@ static_assert((clang::Stmt::StmtClass)ZigClangStmt_OMPTargetTeamsDistributeParal
 static_assert((clang::Stmt::StmtClass)ZigClangStmt_OMPTargetTeamsDistributeParallelForSimdDirectiveClass == clang::Stmt::OMPTargetTeamsDistributeParallelForSimdDirectiveClass, "");
 static_assert((clang::Stmt::StmtClass)ZigClangStmt_OMPTargetTeamsDistributeSimdDirectiveClass == clang::Stmt::OMPTargetTeamsDistributeSimdDirectiveClass, "");
 
+void ZigClang_detect_enum_APValueKind(clang::APValue::ValueKind x) {
+    switch (x) {
+        case clang::APValue::Uninitialized:
+        case clang::APValue::Int:
+        case clang::APValue::Float:
+        case clang::APValue::ComplexInt:
+        case clang::APValue::ComplexFloat:
+        case clang::APValue::LValue:
+        case clang::APValue::Vector:
+        case clang::APValue::Array:
+        case clang::APValue::Struct:
+        case clang::APValue::Union:
+        case clang::APValue::MemberPointer:
+        case clang::APValue::AddrLabelDiff:
+            break;
+    }
+}
+
+static_assert((clang::APValue::ValueKind)ZigClangAPValueUninitialized == clang::APValue::Uninitialized, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueInt == clang::APValue::Int, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueFloat == clang::APValue::Float, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueComplexInt == clang::APValue::ComplexInt, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueComplexFloat == clang::APValue::ComplexFloat, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueLValue == clang::APValue::LValue, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueVector == clang::APValue::Vector, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueArray == clang::APValue::Array, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueStruct == clang::APValue::Struct, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueUnion == clang::APValue::Union, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueMemberPointer == clang::APValue::MemberPointer, "");
+static_assert((clang::APValue::ValueKind)ZigClangAPValueAddrLabelDiff == clang::APValue::AddrLabelDiff, "");
+
 
 static_assert(sizeof(ZigClangSourceLocation) == sizeof(clang::SourceLocation), "");
 static ZigClangSourceLocation bitcast(clang::SourceLocation src) {
@@ -789,6 +820,18 @@ static ZigClangQualType bitcast(clang::QualType src) {
 static clang::QualType bitcast(ZigClangQualType src) {
     clang::QualType dest;
     memcpy(&dest, static_cast<void *>(&src), sizeof(ZigClangQualType));
+    return dest;
+}
+
+static_assert(sizeof(ZigClangAPValueLValueBase) == sizeof(clang::APValue::LValueBase), "");
+static ZigClangAPValueLValueBase bitcast(clang::APValue::LValueBase src) {
+    ZigClangAPValueLValueBase dest;
+    memcpy(&dest, static_cast<void *>(&src), sizeof(ZigClangAPValueLValueBase));
+    return dest;
+}
+static clang::APValue::LValueBase bitcast(ZigClangAPValueLValueBase src) {
+    clang::APValue::LValueBase dest;
+    memcpy(&dest, static_cast<void *>(&src), sizeof(ZigClangAPValueLValueBase));
     return dest;
 }
 
@@ -1025,4 +1068,194 @@ ZigClangQualType ZigClangExpr_getType(const ZigClangExpr *self) {
 ZigClangSourceLocation ZigClangExpr_getBeginLoc(const ZigClangExpr *self) {
     auto casted = reinterpret_cast<const clang::Expr *>(self);
     return bitcast(casted->getBeginLoc());
+}
+
+ZigClangAPValueKind ZigClangAPValue_getKind(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    return (ZigClangAPValueKind)casted->getKind();
+}
+
+const ZigClangAPSInt *ZigClangAPValue_getInt(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    const llvm::APSInt *result = &casted->getInt();
+    return reinterpret_cast<const ZigClangAPSInt *>(result);
+}
+
+unsigned ZigClangAPValue_getArrayInitializedElts(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    return casted->getArrayInitializedElts();
+}
+
+const ZigClangAPValue *ZigClangAPValue_getArrayInitializedElt(const ZigClangAPValue *self, unsigned i) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    const clang::APValue *result = &casted->getArrayInitializedElt(i);
+    return reinterpret_cast<const ZigClangAPValue *>(result);
+}
+
+const ZigClangAPValue *ZigClangAPValue_getArrayFiller(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    const clang::APValue *result = &casted->getArrayFiller();
+    return reinterpret_cast<const ZigClangAPValue *>(result);
+}
+
+unsigned ZigClangAPValue_getArraySize(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    return casted->getArraySize();
+}
+
+const ZigClangAPSInt *ZigClangAPSInt_negate(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    llvm::APSInt *result = new llvm::APSInt();
+    *result = *casted;
+    *result = -*result;
+    return reinterpret_cast<const ZigClangAPSInt *>(result);
+}
+
+void ZigClangAPSInt_free(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    delete casted;
+}
+
+bool ZigClangAPSInt_isSigned(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    return casted->isSigned();
+}
+
+bool ZigClangAPSInt_isNegative(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    return casted->isNegative();
+}
+
+const uint64_t *ZigClangAPSInt_getRawData(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    return casted->getRawData();
+}
+
+unsigned ZigClangAPSInt_getNumWords(const ZigClangAPSInt *self) {
+    auto casted = reinterpret_cast<const llvm::APSInt *>(self);
+    return casted->getNumWords();
+}
+
+const ZigClangExpr *ZigClangAPValueLValueBase_dyn_cast_Expr(ZigClangAPValueLValueBase self) {
+    clang::APValue::LValueBase casted = bitcast(self);
+    const clang::Expr *expr = casted.dyn_cast<const clang::Expr *>();
+    return reinterpret_cast<const ZigClangExpr *>(expr);
+}
+
+ZigClangAPValueLValueBase ZigClangAPValue_getLValueBase(const ZigClangAPValue *self) {
+    auto casted = reinterpret_cast<const clang::APValue *>(self);
+    clang::APValue::LValueBase lval_base = casted->getLValueBase();
+    return bitcast(lval_base);
+}
+
+ZigClangASTUnit *ZigClangLoadFromCommandLine(const char **args_begin, const char **args_end,
+    struct Stage2ErrorMsg **errors_ptr, size_t *errors_len, const char *resources_path)
+{
+    clang::IntrusiveRefCntPtr<clang::DiagnosticsEngine> diags(clang::CompilerInstance::createDiagnostics(new clang::DiagnosticOptions));
+
+    std::shared_ptr<clang::PCHContainerOperations> pch_container_ops = std::make_shared<clang::PCHContainerOperations>();
+
+    bool only_local_decls = true;
+    bool capture_diagnostics = true;
+    bool user_files_are_volatile = true;
+    bool allow_pch_with_compiler_errors = false;
+    bool single_file_parse = false;
+    bool for_serialization = false;
+    std::unique_ptr<clang::ASTUnit> *err_unit = new std::unique_ptr<clang::ASTUnit>();
+    clang::ASTUnit *ast_unit = clang::ASTUnit::LoadFromCommandLine(
+            args_begin, args_end,
+            pch_container_ops, diags, resources_path,
+            only_local_decls, capture_diagnostics, clang::None, true, 0, clang::TU_Complete,
+            false, false, allow_pch_with_compiler_errors, clang::SkipFunctionBodiesScope::None,
+            single_file_parse, user_files_are_volatile, for_serialization, clang::None, err_unit,
+            nullptr);
+
+    // Early failures in LoadFromCommandLine may return with ErrUnit unset.
+    if (!ast_unit && !err_unit) {
+        return nullptr;
+    }
+
+    if (diags->getClient()->getNumErrors() > 0) {
+        if (ast_unit) {
+            *err_unit = std::unique_ptr<clang::ASTUnit>(ast_unit);
+        }
+
+        size_t cap = 4;
+        *errors_len = 0;
+        *errors_ptr = reinterpret_cast<Stage2ErrorMsg*>(malloc(cap * sizeof(Stage2ErrorMsg)));
+        if (*errors_ptr == nullptr) {
+            return nullptr;
+        }
+
+        for (clang::ASTUnit::stored_diag_iterator it = (*err_unit)->stored_diag_begin(),
+                it_end = (*err_unit)->stored_diag_end();
+                it != it_end; ++it)
+        {
+            switch (it->getLevel()) {
+                case clang::DiagnosticsEngine::Ignored:
+                case clang::DiagnosticsEngine::Note:
+                case clang::DiagnosticsEngine::Remark:
+                case clang::DiagnosticsEngine::Warning:
+                    continue;
+                case clang::DiagnosticsEngine::Error:
+                case clang::DiagnosticsEngine::Fatal:
+                    break;
+            }
+            llvm::StringRef msg_str_ref = it->getMessage();
+            if (*errors_len >= cap) {
+                cap *= 2;
+                Stage2ErrorMsg *new_errors = reinterpret_cast<Stage2ErrorMsg *>(
+                        realloc(*errors_ptr, cap * sizeof(Stage2ErrorMsg)));
+                if (new_errors == nullptr) {
+                    free(*errors_ptr);
+                    *errors_ptr = nullptr;
+                    *errors_len = 0;
+                    return nullptr;
+                }
+                *errors_ptr = new_errors;
+            }
+            Stage2ErrorMsg *msg = *errors_ptr + *errors_len;
+            *errors_len += 1;
+            msg->msg_ptr = (const char *)msg_str_ref.bytes_begin();
+            msg->msg_len = msg_str_ref.size();
+
+            clang::FullSourceLoc fsl = it->getLocation();
+            if (fsl.hasManager()) {
+                clang::FileID file_id = fsl.getFileID();
+                clang::StringRef filename = fsl.getManager().getFilename(fsl);
+                if (filename.empty()) {
+                    msg->filename_ptr = nullptr;
+                } else {
+                    msg->filename_ptr = (const char *)filename.bytes_begin();
+                    msg->filename_len = filename.size();
+                }
+                msg->source = (const char *)fsl.getManager().getBufferData(file_id).bytes_begin();
+                msg->line = fsl.getSpellingLineNumber() - 1;
+                msg->column = fsl.getSpellingColumnNumber() - 1;
+                msg->offset = fsl.getManager().getFileOffset(fsl);
+            } else {
+                // The only known way this gets triggered right now is if you have a lot of errors
+                // clang emits "too many errors emitted, stopping now"
+                msg->filename_ptr = nullptr;
+                msg->source = nullptr;
+            }
+        }
+
+        if (*errors_len == 0) {
+            free(*errors_ptr);
+            *errors_ptr = nullptr;
+        }
+
+        return nullptr;
+    }
+
+    return reinterpret_cast<ZigClangASTUnit *>(ast_unit);
+}
+
+void ZigClangErrorMsg_delete(Stage2ErrorMsg *ptr, size_t len) {
+    free(ptr);
+}
+
+void ZigClangASTUnit_delete(struct ZigClangASTUnit *self) {
+    delete reinterpret_cast<clang::ASTUnit *>(self);
 }

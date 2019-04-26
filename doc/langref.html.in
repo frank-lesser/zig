@@ -159,13 +159,15 @@
     <div id="contents">
       {#header_open|Introduction#}
       <p>
-      Zig is an open-source programming language designed for <strong>robustness</strong>,
-      <strong>optimality</strong>, and <strong>clarity</strong>.
+      Zig is a general-purpose programming language designed for <strong>robustness</strong>,
+      <strong>optimality</strong>, and <strong>maintainability</strong>.
       </p>
       <ul>
         <li><strong>Robust</strong> - behavior is correct even for edge cases such as out of memory.</li>
         <li><strong>Optimal</strong> - write programs the best way they can behave and perform.</li>
-        <li><strong>Clear</strong> - precisely communicate your intent to the compiler and other programmers. The language imposes a low overhead to reading code.</li>
+        <li><strong>Maintainable</strong> - precisely communicate intent to the compiler and other programmers.
+            The language imposes a low overhead to reading code and is resilient to changing requirements
+            and environments.</li>
       </ul>
       <p>
       Often the most efficient way to learn something new is to see examples, so
@@ -3126,7 +3128,7 @@ test "while null capture" {
     while (eventuallyNullSequence()) |value| {
         sum2 += value;
     } else {
-        assert(sum1 == 3);
+        assert(sum2 == 3);
     }
 }
 
@@ -7273,6 +7275,10 @@ test "@setRuntimeSafety" {
       consider whether you want to use {#syntax#}@sizeOf(T){#endsyntax#} or
       {#syntax#}@typeInfo(T).Int.bits{#endsyntax#}.
       </p>
+      <p>
+      This function measures the size at runtime. For types that are disallowed at runtime, such as
+      {#syntax#}comptime_int{#endsyntax#} and {#syntax#}type{#endsyntax#}, the result is {#syntax#}0{#endsyntax#}.
+      </p>
       {#see_also|@typeInfo#}
       {#header_close#}
 
@@ -9441,8 +9447,6 @@ PrimaryExpr
 
 IfExpr &lt;- IfPrefix Expr (KEYWORD_else Payload? Expr)?
 
-LabeledExpr &lt;- BlockLabel? (Block / LoopExpr)
-
 Block &lt;- LBRACE Statement* RBRACE
 
 LoopExpr &lt;- KEYWORD_inline? (ForExpr / WhileExpr)
@@ -9450,6 +9454,8 @@ LoopExpr &lt;- KEYWORD_inline? (ForExpr / WhileExpr)
 ForExpr &lt;- ForPrefix Expr (KEYWORD_else Expr)?
 
 WhileExpr &lt;- WhilePrefix Expr (KEYWORD_else Payload? Expr)?
+
+CurlySuffixExpr &lt;- TypeExpr InitList?
 
 InitList
     &lt;- LBRACE FieldInit (COMMA FieldInit)* COMMA? RBRACE

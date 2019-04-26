@@ -76,10 +76,9 @@ struct TransScopeWhile {
 };
 
 struct Context {
-    ZigList<ErrorMsg *> *errors;
+    AstNode *root;
     VisibMod visib_mod;
     bool want_export;
-    AstNode *root;
     HashMap<const void *, AstNode *, ptr_hash, ptr_eq> decl_table;
     HashMap<Buf *, AstNode *, buf_hash, buf_eql_buf> macro_table;
     HashMap<Buf *, AstNode *, buf_hash, buf_eql_buf> global_table;
@@ -125,7 +124,16 @@ static AstNode *trans_expr(Context *c, ResultUsed result_used, TransScope *scope
 static AstNode *trans_qual_type(Context *c, ZigClangQualType qt, ZigClangSourceLocation source_loc);
 static AstNode *trans_bool_expr(Context *c, ResultUsed result_used, TransScope *scope,
         const ZigClangExpr *expr, TransLRValue lrval);
-static AstNode *trans_ap_value(Context *c, clang::APValue *ap_value, ZigClangQualType qt, ZigClangSourceLocation source_loc);
+static AstNode *trans_ap_value(Context *c, const ZigClangAPValue *ap_value, ZigClangQualType qt,
+        ZigClangSourceLocation source_loc);
+
+static const ZigClangAPSInt *bitcast(const llvm::APSInt *src) {
+    return reinterpret_cast<const ZigClangAPSInt *>(src);
+}
+
+static const ZigClangAPValue *bitcast(const clang::APValue *src) {
+    return reinterpret_cast<const ZigClangAPValue *>(src);
+}
 
 static const ZigClangStmt *bitcast(const clang::Stmt *src) {
     return reinterpret_cast<const ZigClangStmt *>(src);
@@ -497,18 +505,34 @@ static Buf *string_ref_to_buf(llvm::StringRef string_ref) {
     return buf_create_from_mem((const char *)string_ref.bytes_begin(), string_ref.size());
 }
 
-static AstNode *trans_create_node_apint(Context *c, const llvm::APSInt &aps_int) {
+static AstNode *trans_create_node_apint(Context *c, const ZigClangAPSInt *aps_int) {
     AstNode *node = trans_create_node(c, NodeTypeIntLiteral);
     node->data.int_literal.bigint = allocate<BigInt>(1);
-    bool is_negative = aps_int.isSigned() && aps_int.isNegative();
+    bool is_negative = ZigClangAPSInt_isSigned(aps_int) && ZigClangAPSInt_isNegative(aps_int);
     if (!is_negative) {
-        bigint_init_data(node->data.int_literal.bigint, aps_int.getRawData(), aps_int.getNumWords(), false);
+        bigint_init_data(node->data.int_literal.bigint,
+                ZigClangAPSInt_getRawData(aps_int),
+                ZigClangAPSInt_getNumWords(aps_int),
+                false);
         return node;
     }
-    llvm::APSInt negated = -aps_int;
-    bigint_init_data(node->data.int_literal.bigint, negated.getRawData(), negated.getNumWords(), true);
+    const ZigClangAPSInt *negated = ZigClangAPSInt_negate(aps_int);
+    bigint_init_data(node->data.int_literal.bigint, ZigClangAPSInt_getRawData(negated),
+            ZigClangAPSInt_getNumWords(negated), true);
+    ZigClangAPSInt_free(negated);
     return node;
+}
 
+static AstNode *trans_create_node_apfloat(Context *c, const llvm::APFloat &ap_float) {
+    uint8_t buf[128];
+    size_t written = ap_float.convertToHexString((char *)buf, 0, false,
+                                                 llvm::APFloat::rmNearestTiesToEven);
+    AstNode *node = trans_create_node(c, NodeTypeFloatLiteral);
+    node->data.float_literal.bigfloat = allocate<BigFloat>(1);
+    if (bigfloat_init_buf(node->data.float_literal.bigfloat, buf, written)) {
+        node->data.float_literal.overflow = true;
+    }
+    return node;
 }
 
 static const ZigClangType *qual_type_canon(ZigClangQualType qt) {
@@ -1295,8 +1319,48 @@ static AstNode *trans_integer_literal(Context *c, ResultUsed result_used, const 
         emit_warning(c, bitcast(stmt->getBeginLoc()), "invalid integer literal");
         return nullptr;
     }
-    AstNode *node = trans_create_node_apint(c, result.Val.getInt());
+    AstNode *node = trans_create_node_apint(c, bitcast(&result.Val.getInt()));
     return maybe_suppress_result(c, result_used, node);
+}
+
+static AstNode *trans_floating_literal(Context *c, ResultUsed result_used, const clang::FloatingLiteral *stmt) {
+    llvm::APFloat result{0.0f};
+    if (!stmt->EvaluateAsFloat(result, *reinterpret_cast<clang::ASTContext *>(c->ctx))) {
+        emit_warning(c, bitcast(stmt->getBeginLoc()), "invalid floating literal");
+        return nullptr;
+    }
+    AstNode *node = trans_create_node_apfloat(c, result);
+    return maybe_suppress_result(c, result_used, node);
+}
+
+static AstNode *trans_character_literal(Context *c, ResultUsed result_used, const clang::CharacterLiteral *stmt) {
+    switch (stmt->getKind()) {
+        case clang::CharacterLiteral::CharacterKind::Ascii:
+            {
+                unsigned val = stmt->getValue();
+                // C has a somewhat obscure feature called multi-character character
+                // constant
+                if (val > 255)
+                    return trans_create_node_unsigned(c, val);
+            }
+            // fallthrough
+        case clang::CharacterLiteral::CharacterKind::UTF8:
+            {
+                AstNode *node = trans_create_node(c, NodeTypeCharLiteral);
+                node->data.char_literal.value = stmt->getValue();
+                return maybe_suppress_result(c, result_used, node);
+            }
+        case clang::CharacterLiteral::CharacterKind::UTF16:
+            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO support UTF16 character literals");
+            return nullptr;
+        case clang::CharacterLiteral::CharacterKind::UTF32:
+            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO support UTF32 character literals");
+            return nullptr;
+        case clang::CharacterLiteral::CharacterKind::Wide:
+            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO support wide character literals");
+            return nullptr;
+    }
+    zig_unreachable();
 }
 
 static AstNode *trans_constant_expr(Context *c, ResultUsed result_used, const clang::ConstantExpr *expr) {
@@ -1307,7 +1371,7 @@ static AstNode *trans_constant_expr(Context *c, ResultUsed result_used, const cl
         emit_warning(c, bitcast(expr->getBeginLoc()), "invalid constant expression");
         return nullptr;
     }
-    AstNode *node = trans_ap_value(c, &result.Val, bitcast(expr->getType()), bitcast(expr->getBeginLoc()));
+    AstNode *node = trans_ap_value(c, bitcast(&result.Val), bitcast(expr->getType()), bitcast(expr->getBeginLoc()));
     return maybe_suppress_result(c, result_used, node);
 }
 
@@ -1882,15 +1946,21 @@ static AstNode *trans_implicit_cast_expr(Context *c, ResultUsed result_used, Tra
         case ZigClangCK_ConstructorConversion:
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_ConstructorConversion");
             return nullptr;
-        case ZigClangCK_IntegralToPointer:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_IntegralToPointer");
-            return nullptr;
-        case ZigClangCK_PointerToIntegral:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_PointerToIntegral");
-            return nullptr;
         case ZigClangCK_PointerToBoolean:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_PointerToBoolean");
-            return nullptr;
+            {
+                const clang::Expr *expr = stmt->getSubExpr();
+                AstNode *val = trans_expr(c, ResultUsedYes, scope, bitcast(expr), TransRValue);
+                if (val == nullptr)
+                    return nullptr;
+
+                AstNode *val_ptr = trans_create_node_builtin_fn_call_str(c, "ptrToInt");
+                val_ptr->data.fn_call_expr.params.append(val);
+
+                AstNode *zero = trans_create_node_unsigned(c, 0);
+
+                // Translate as @ptrToInt((&val) != 0)
+                return trans_create_node_bin_op(c, val_ptr, BinOpTypeCmpNotEq, zero);
+            }
         case ZigClangCK_ToVoid:
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_ToVoid");
             return nullptr;
@@ -1898,19 +1968,82 @@ static AstNode *trans_implicit_cast_expr(Context *c, ResultUsed result_used, Tra
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_VectorSplat");
             return nullptr;
         case ZigClangCK_IntegralToBoolean:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_IntegralToBoolean");
-            return nullptr;
+            {
+                const clang::Expr *expr = stmt->getSubExpr();
+
+                bool expr_val;
+                if (expr->EvaluateAsBooleanCondition(expr_val, *reinterpret_cast<clang::ASTContext *>(c->ctx))) {
+                    return trans_create_node_bool(c, expr_val);
+                }
+
+                AstNode *val = trans_expr(c, ResultUsedYes, scope, bitcast(expr), TransRValue);
+                if (val == nullptr)
+                    return nullptr;
+
+                AstNode *zero = trans_create_node_unsigned(c, 0);
+
+                // Translate as val != 0
+                return trans_create_node_bin_op(c, val, BinOpTypeCmpNotEq, zero);
+            }
+        case ZigClangCK_PointerToIntegral:
+            {
+                AstNode *target_node = trans_expr(c, ResultUsedYes, scope, bitcast(stmt->getSubExpr()), TransRValue);
+                if (target_node == nullptr)
+                    return nullptr;
+
+                AstNode *dest_type_node = get_expr_type(c, (const ZigClangExpr *)stmt);
+                if (dest_type_node == nullptr)
+                    return nullptr;
+
+                AstNode *val_node = trans_create_node_builtin_fn_call_str(c, "ptrToInt");
+                val_node->data.fn_call_expr.params.append(target_node);
+                // @ptrToInt always returns a usize
+                AstNode *node = trans_create_node_builtin_fn_call_str(c, "intCast");
+                node->data.fn_call_expr.params.append(dest_type_node);
+                node->data.fn_call_expr.params.append(val_node);
+
+                return maybe_suppress_result(c, result_used, node);
+            }
+        case ZigClangCK_IntegralToPointer:
+            {
+                AstNode *target_node = trans_expr(c, ResultUsedYes, scope, bitcast(stmt->getSubExpr()), TransRValue);
+                if (target_node == nullptr)
+                    return nullptr;
+
+                AstNode *dest_type_node = get_expr_type(c, (const ZigClangExpr *)stmt);
+                if (dest_type_node == nullptr)
+                    return nullptr;
+
+                AstNode *node = trans_create_node_builtin_fn_call_str(c, "intToPtr");
+                node->data.fn_call_expr.params.append(dest_type_node);
+                node->data.fn_call_expr.params.append(target_node);
+
+                return maybe_suppress_result(c, result_used, node);
+            }
         case ZigClangCK_IntegralToFloating:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_IntegralToFloating");
-            return nullptr;
+        case ZigClangCK_FloatingToIntegral:
+            {
+                AstNode *target_node = trans_expr(c, ResultUsedYes, scope, bitcast(stmt->getSubExpr()), TransRValue);
+                if (target_node == nullptr)
+                    return nullptr;
+
+                AstNode *dest_type_node = get_expr_type(c, (const ZigClangExpr *)stmt);
+                if (dest_type_node == nullptr)
+                    return nullptr;
+
+                char const *fn = (ZigClangCK)stmt->getCastKind() == ZigClangCK_IntegralToFloating ?
+                    "intToFloat" : "floatToInt";
+                AstNode *node = trans_create_node_builtin_fn_call_str(c, fn);
+                node->data.fn_call_expr.params.append(dest_type_node);
+                node->data.fn_call_expr.params.append(target_node);
+
+                return maybe_suppress_result(c, result_used, node);
+            }
         case ZigClangCK_FixedPointCast:
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_FixedPointCast");
             return nullptr;
         case ZigClangCK_FixedPointToBoolean:
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_FixedPointToBoolean");
-            return nullptr;
-        case ZigClangCK_FloatingToIntegral:
-            emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_FloatingToIntegral");
             return nullptr;
         case ZigClangCK_FloatingToBoolean:
             emit_warning(c, bitcast(stmt->getBeginLoc()), "TODO handle C CK_FloatingToBoolean");
@@ -3484,7 +3617,8 @@ static int trans_stmt_extra(Context *c, TransScope *scope, const ZigClangStmt *s
             emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C ObjCBridgedCastExprClass");
             return ErrorUnexpected;
         case ZigClangStmt_CharacterLiteralClass:
-            emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C CharacterLiteralClass");
+            return wrap_stmt(out_node, out_child_scope, scope,
+                    trans_character_literal(c, result_used, (const clang::CharacterLiteral *)stmt));
             return ErrorUnexpected;
         case ZigClangStmt_ChooseExprClass:
             emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C ChooseExprClass");
@@ -3523,8 +3657,8 @@ static int trans_stmt_extra(Context *c, TransScope *scope, const ZigClangStmt *s
             emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C FixedPointLiteralClass");
             return ErrorUnexpected;
         case ZigClangStmt_FloatingLiteralClass:
-            emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C FloatingLiteralClass");
-            return ErrorUnexpected;
+            return wrap_stmt(out_node, out_child_scope, scope,
+                    trans_floating_literal(c, result_used, (const clang::FloatingLiteral *)stmt));
         case ZigClangStmt_ExprWithCleanupsClass:
             emit_warning(c, ZigClangStmt_getBeginLoc(stmt), "TODO handle C ExprWithCleanupsClass");
             return ErrorUnexpected;
@@ -4103,7 +4237,8 @@ static AstNode *resolve_enum_decl(Context *c, const ZigClangEnumDecl *enum_decl)
             field_name = enum_val_name;
         }
 
-        AstNode *int_node = pure_enum && !is_anonymous ? nullptr : trans_create_node_apint(c, enum_const->getInitVal());
+        AstNode *int_node = pure_enum && !is_anonymous ?
+            nullptr : trans_create_node_apint(c, bitcast(&enum_const->getInitVal()));
         AstNode *field_node = trans_create_node(c, NodeTypeStructField);
         field_node->data.struct_field.name = field_name;
         field_node->data.struct_field.type = nullptr;
@@ -4245,17 +4380,19 @@ static AstNode *resolve_record_decl(Context *c, const ZigClangRecordDecl *record
     }
 }
 
-static AstNode *trans_ap_value(Context *c, clang::APValue *ap_value, ZigClangQualType qt, ZigClangSourceLocation source_loc) {
-    switch (ap_value->getKind()) {
-        case clang::APValue::Int:
-            return trans_create_node_apint(c, ap_value->getInt());
-        case clang::APValue::Uninitialized:
+static AstNode *trans_ap_value(Context *c, const ZigClangAPValue *ap_value, ZigClangQualType qt,
+        ZigClangSourceLocation source_loc)
+{
+    switch (ZigClangAPValue_getKind(ap_value)) {
+        case ZigClangAPValueInt:
+            return trans_create_node_apint(c, ZigClangAPValue_getInt(ap_value));
+        case ZigClangAPValueUninitialized:
             return trans_create_node(c, NodeTypeUndefinedLiteral);
-        case clang::APValue::Array: {
+        case ZigClangAPValueArray: {
             emit_warning(c, source_loc, "TODO add a test case for this code");
 
-            unsigned init_count = ap_value->getArrayInitializedElts();
-            unsigned all_count = ap_value->getArraySize();
+            unsigned init_count = ZigClangAPValue_getArrayInitializedElts(ap_value);
+            unsigned all_count = ZigClangAPValue_getArraySize(ap_value);
             unsigned leftover_count = all_count - init_count;
             AstNode *init_node = trans_create_node(c, NodeTypeContainerInitExpr);
             AstNode *arr_type_node = trans_qual_type(c, qt, source_loc);
@@ -4269,8 +4406,8 @@ static AstNode *trans_ap_value(Context *c, clang::APValue *ap_value, ZigClangQua
             ZigClangQualType child_qt = bitcast(qt_type->getAsArrayTypeUnsafe()->getElementType());
 
             for (size_t i = 0; i < init_count; i += 1) {
-                clang::APValue &elem_ap_val = ap_value->getArrayInitializedElt(i);
-                AstNode *elem_node = trans_ap_value(c, &elem_ap_val, child_qt, source_loc);
+                const ZigClangAPValue *elem_ap_val = ZigClangAPValue_getArrayInitializedElt(ap_value, i);
+                AstNode *elem_node = trans_ap_value(c, elem_ap_val, child_qt, source_loc);
                 if (elem_node == nullptr)
                     return nullptr;
                 init_node->data.container_init_expr.entries.append(elem_node);
@@ -4279,8 +4416,8 @@ static AstNode *trans_ap_value(Context *c, clang::APValue *ap_value, ZigClangQua
                 return init_node;
             }
 
-            clang::APValue &filler_ap_val = ap_value->getArrayFiller();
-            AstNode *filler_node = trans_ap_value(c, &filler_ap_val, child_qt, source_loc);
+            const ZigClangAPValue *filler_ap_val = ZigClangAPValue_getArrayFiller(ap_value);
+            AstNode *filler_node = trans_ap_value(c, filler_ap_val, child_qt, source_loc);
             if (filler_node == nullptr)
                 return nullptr;
 
@@ -4307,37 +4444,37 @@ static AstNode *trans_ap_value(Context *c, clang::APValue *ap_value, ZigClangQua
 
             return trans_create_node_bin_op(c, init_node, BinOpTypeArrayCat, rhs_node);
         }
-        case clang::APValue::LValue: {
-            const clang::APValue::LValueBase lval_base = ap_value->getLValueBase();
-            if (const clang::Expr *expr = lval_base.dyn_cast<const clang::Expr *>()) {
-                return trans_expr(c, ResultUsedYes, &c->global_scope->base, bitcast(expr), TransRValue);
+        case ZigClangAPValueLValue: {
+            const ZigClangAPValueLValueBase lval_base = ZigClangAPValue_getLValueBase(ap_value);
+            if (const ZigClangExpr *expr = ZigClangAPValueLValueBase_dyn_cast_Expr(lval_base)) {
+                return trans_expr(c, ResultUsedYes, &c->global_scope->base, expr, TransRValue);
             }
             //const clang::ValueDecl *value_decl = lval_base.get<const clang::ValueDecl *>();
             emit_warning(c, source_loc, "TODO handle initializer LValue clang::ValueDecl");
             return nullptr;
         }
-        case clang::APValue::Float:
+        case ZigClangAPValueFloat:
             emit_warning(c, source_loc, "unsupported initializer value kind: Float");
             return nullptr;
-        case clang::APValue::ComplexInt:
+        case ZigClangAPValueComplexInt:
             emit_warning(c, source_loc, "unsupported initializer value kind: ComplexInt");
             return nullptr;
-        case clang::APValue::ComplexFloat:
+        case ZigClangAPValueComplexFloat:
             emit_warning(c, source_loc, "unsupported initializer value kind: ComplexFloat");
             return nullptr;
-        case clang::APValue::Vector:
+        case ZigClangAPValueVector:
             emit_warning(c, source_loc, "unsupported initializer value kind: Vector");
             return nullptr;
-        case clang::APValue::Struct:
+        case ZigClangAPValueStruct:
             emit_warning(c, source_loc, "unsupported initializer value kind: Struct");
             return nullptr;
-        case clang::APValue::Union:
+        case ZigClangAPValueUnion:
             emit_warning(c, source_loc, "unsupported initializer value kind: Union");
             return nullptr;
-        case clang::APValue::MemberPointer:
+        case ZigClangAPValueMemberPointer:
             emit_warning(c, source_loc, "unsupported initializer value kind: MemberPointer");
             return nullptr;
-        case clang::APValue::AddrLabelDiff:
+        case ZigClangAPValueAddrLabelDiff:
             emit_warning(c, source_loc, "unsupported initializer value kind: AddrLabelDiff");
             return nullptr;
     }
@@ -4374,7 +4511,7 @@ static void visit_var_decl(Context *c, const clang::VarDecl *var_decl) {
     if (is_static && !is_extern) {
         AstNode *init_node;
         if (var_decl->hasInit()) {
-            clang::APValue *ap_value = var_decl->evaluateValue();
+            const ZigClangAPValue *ap_value = bitcast(var_decl->evaluateValue());
             if (ap_value == nullptr) {
                 emit_warning(c, bitcast(var_decl->getLocation()),
                         "ignoring variable '%s' - unable to evaluate initializer", buf_ptr(name));
@@ -4880,14 +5017,15 @@ static void process_preprocessor_entities(Context *c, ZigClangASTUnit *zunit) {
     }
 }
 
-Error parse_h_file(AstNode **out_root_node, ZigList<ErrorMsg *> *errors, const char *target_file,
-        CodeGen *codegen, Buf *tmp_dep_file)
+Error parse_h_file(CodeGen *codegen, AstNode **out_root_node,
+        Stage2ErrorMsg **errors_ptr, size_t *errors_len,
+        const char **args_begin, const char **args_end,
+        Stage2TranslateMode mode, const char *resources_path)
 {
     Context context = {0};
     Context *c = &context;
     c->warnings_on = codegen->verbose_cimport;
-    c->errors = errors;
-    if (buf_ends_with_str(buf_create_from_str(target_file), ".h")) {
+    if (mode == Stage2TranslateModeImport) {
         c->visib_mod = VisibModPub;
         c->want_export = false;
     } else {
@@ -4901,161 +5039,10 @@ Error parse_h_file(AstNode **out_root_node, ZigList<ErrorMsg *> *errors, const c
     c->codegen = codegen;
     c->global_scope = trans_scope_root_create(c);
 
-    ZigList<const char *> clang_argv = {0};
-
-    clang_argv.append("-x");
-    clang_argv.append("c");
-
-    if (tmp_dep_file != nullptr) {
-        clang_argv.append("-MD");
-        clang_argv.append("-MV");
-        clang_argv.append("-MF");
-        clang_argv.append(buf_ptr(tmp_dep_file));
-    }
-
-    if (c->codegen->zig_target->is_native) {
-        char *ZIG_PARSEC_CFLAGS = getenv("ZIG_NATIVE_PARSEC_CFLAGS");
-        if (ZIG_PARSEC_CFLAGS) {
-            Buf tmp_buf = BUF_INIT;
-            char *start = ZIG_PARSEC_CFLAGS;
-            char *space = strstr(start, " ");
-            while (space) {
-                if (space - start > 0) {
-                    buf_init_from_mem(&tmp_buf, start, space - start);
-                    clang_argv.append(buf_ptr(buf_create_from_buf(&tmp_buf)));
-                }
-                start = space + 1;
-                space = strstr(start, " ");
-            }
-            buf_init_from_str(&tmp_buf, start);
-            clang_argv.append(buf_ptr(buf_create_from_buf(&tmp_buf)));
-        }
-    }
-
-    clang_argv.append("-nobuiltininc");
-    clang_argv.append("-nostdinc");
-    clang_argv.append("-nostdinc++");
-    if (codegen->libc_link_lib == nullptr) {
-        clang_argv.append("-nolibc");
-    }
-
-    clang_argv.append("-isystem");
-    clang_argv.append(buf_ptr(codegen->zig_c_headers_dir));
-
-    for (size_t i = 0; i < codegen->libc_include_dir_len; i += 1) {
-        Buf *include_dir = codegen->libc_include_dir_list[i];
-        clang_argv.append("-isystem");
-        clang_argv.append(buf_ptr(include_dir));
-    }
-
-    // windows c runtime requires -D_DEBUG if using debug libraries
-    if (codegen->build_mode == BuildModeDebug) {
-        clang_argv.append("-D_DEBUG");
-    }
-
-    for (size_t i = 0; i < codegen->clang_argv_len; i += 1) {
-        clang_argv.append(codegen->clang_argv[i]);
-    }
-
-    // we don't need spell checking and it slows things down
-    clang_argv.append("-fno-spell-checking");
-
-    // this gives us access to preprocessing entities, presumably at
-    // the cost of performance
-    clang_argv.append("-Xclang");
-    clang_argv.append("-detailed-preprocessing-record");
-
-    if (c->codegen->zig_target->is_native) {
-        clang_argv.append("-march=native");
-    } else {
-        clang_argv.append("-target");
-        clang_argv.append(buf_ptr(&c->codegen->triple_str));
-    }
-
-    clang_argv.append(target_file);
-
-    if (codegen->verbose_cc) {
-        fprintf(stderr, "clang");
-        for (size_t i = 0; i < clang_argv.length; i += 1) {
-            fprintf(stderr, " %s", clang_argv.at(i));
-        }
-        fprintf(stderr, "\n");
-    }
-
-    // to make the [start...end] argument work
-    clang_argv.append(nullptr);
-
-    clang::IntrusiveRefCntPtr<clang::DiagnosticsEngine> diags(clang::CompilerInstance::createDiagnostics(new clang::DiagnosticOptions));
-
-    std::shared_ptr<clang::PCHContainerOperations> pch_container_ops = std::make_shared<clang::PCHContainerOperations>();
-
-    bool only_local_decls = true;
-    bool capture_diagnostics = true;
-    bool user_files_are_volatile = true;
-    bool allow_pch_with_compiler_errors = false;
-    bool single_file_parse = false;
-    bool for_serialization = false;
-    const char *resources_path = buf_ptr(codegen->zig_c_headers_dir);
-    std::unique_ptr<clang::ASTUnit> err_unit;
-    ZigClangASTUnit *ast_unit = reinterpret_cast<ZigClangASTUnit *>(clang::ASTUnit::LoadFromCommandLine(
-            &clang_argv.at(0), &clang_argv.last(),
-            pch_container_ops, diags, resources_path,
-            only_local_decls, capture_diagnostics, clang::None, true, 0, clang::TU_Complete,
-            false, false, allow_pch_with_compiler_errors, clang::SkipFunctionBodiesScope::None,
-            single_file_parse, user_files_are_volatile, for_serialization, clang::None, &err_unit,
-            nullptr));
-
-    // Early failures in LoadFromCommandLine may return with ErrUnit unset.
-    if (!ast_unit && !err_unit) {
-        return ErrorFileSystem;
-    }
-
-    if (diags->getClient()->getNumErrors() > 0) {
-        if (ast_unit) {
-            err_unit = std::unique_ptr<clang::ASTUnit>(reinterpret_cast<clang::ASTUnit *>(ast_unit));
-        }
-
-        for (clang::ASTUnit::stored_diag_iterator it = err_unit->stored_diag_begin(),
-                it_end = err_unit->stored_diag_end();
-                it != it_end; ++it)
-        {
-            switch (it->getLevel()) {
-                case clang::DiagnosticsEngine::Ignored:
-                case clang::DiagnosticsEngine::Note:
-                case clang::DiagnosticsEngine::Remark:
-                case clang::DiagnosticsEngine::Warning:
-                    continue;
-                case clang::DiagnosticsEngine::Error:
-                case clang::DiagnosticsEngine::Fatal:
-                    break;
-            }
-            llvm::StringRef msg_str_ref = it->getMessage();
-            Buf *msg = string_ref_to_buf(msg_str_ref);
-            clang::FullSourceLoc fsl = it->getLocation();
-            if (fsl.hasManager()) {
-                clang::FileID file_id = fsl.getFileID();
-                clang::StringRef filename = fsl.getManager().getFilename(fsl);
-                unsigned line = fsl.getSpellingLineNumber() - 1;
-                unsigned column = fsl.getSpellingColumnNumber() - 1;
-                unsigned offset = fsl.getManager().getFileOffset(fsl);
-                const char *source = (const char *)fsl.getManager().getBufferData(file_id).bytes_begin();
-                Buf *path;
-                if (filename.empty()) {
-                    path = buf_alloc();
-                } else {
-                    path = string_ref_to_buf(filename);
-                }
-
-                ErrorMsg *err_msg = err_msg_create_with_offset(path, line, column, offset, source, msg);
-
-                c->errors->append(err_msg);
-            } else {
-                // NOTE the only known way this gets triggered right now is if you have a lot of errors
-                // clang emits "too many errors emitted, stopping now"
-                fprintf(stderr, "unexpected error from clang: %s\n", buf_ptr(msg));
-            }
-        }
-
+    ZigClangASTUnit *ast_unit = ZigClangLoadFromCommandLine(args_begin, args_end, errors_ptr, errors_len,
+            resources_path);
+    if (ast_unit == nullptr) {
+        if (*errors_len == 0) return ErrorNoMem;
         return ErrorCCompileErrors;
     }
 
@@ -5072,6 +5059,8 @@ Error parse_h_file(AstNode **out_root_node, ZigList<ErrorMsg *> *errors, const c
     render_aliases(c);
 
     *out_root_node = c->root;
+
+    ZigClangASTUnit_delete(ast_unit);
 
     return ErrorNone;
 }
