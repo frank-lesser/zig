@@ -799,6 +799,162 @@ static_assert((clang::APValue::ValueKind)ZigClangAPValueMemberPointer == clang::
 static_assert((clang::APValue::ValueKind)ZigClangAPValueAddrLabelDiff == clang::APValue::AddrLabelDiff, "");
 
 
+void ZigClang_detect_enum_DeclKind(clang::Decl::Kind x) {
+    switch (x) {
+        case clang::Decl::AccessSpec:
+        case clang::Decl::Block:
+        case clang::Decl::Captured:
+        case clang::Decl::ClassScopeFunctionSpecialization:
+        case clang::Decl::Empty:
+        case clang::Decl::Export:
+        case clang::Decl::ExternCContext:
+        case clang::Decl::FileScopeAsm:
+        case clang::Decl::Friend:
+        case clang::Decl::FriendTemplate:
+        case clang::Decl::Import:
+        case clang::Decl::LinkageSpec:
+        case clang::Decl::Label:
+        case clang::Decl::Namespace:
+        case clang::Decl::NamespaceAlias:
+        case clang::Decl::ObjCCompatibleAlias:
+        case clang::Decl::ObjCCategory:
+        case clang::Decl::ObjCCategoryImpl:
+        case clang::Decl::ObjCImplementation:
+        case clang::Decl::ObjCInterface:
+        case clang::Decl::ObjCProtocol:
+        case clang::Decl::ObjCMethod:
+        case clang::Decl::ObjCProperty:
+        case clang::Decl::BuiltinTemplate:
+        case clang::Decl::ClassTemplate:
+        case clang::Decl::FunctionTemplate:
+        case clang::Decl::TypeAliasTemplate:
+        case clang::Decl::VarTemplate:
+        case clang::Decl::TemplateTemplateParm:
+        case clang::Decl::Enum:
+        case clang::Decl::Record:
+        case clang::Decl::CXXRecord:
+        case clang::Decl::ClassTemplateSpecialization:
+        case clang::Decl::ClassTemplatePartialSpecialization:
+        case clang::Decl::TemplateTypeParm:
+        case clang::Decl::ObjCTypeParam:
+        case clang::Decl::TypeAlias:
+        case clang::Decl::Typedef:
+        case clang::Decl::UnresolvedUsingTypename:
+        case clang::Decl::Using:
+        case clang::Decl::UsingDirective:
+        case clang::Decl::UsingPack:
+        case clang::Decl::UsingShadow:
+        case clang::Decl::ConstructorUsingShadow:
+        case clang::Decl::Binding:
+        case clang::Decl::Field:
+        case clang::Decl::ObjCAtDefsField:
+        case clang::Decl::ObjCIvar:
+        case clang::Decl::Function:
+        case clang::Decl::CXXDeductionGuide:
+        case clang::Decl::CXXMethod:
+        case clang::Decl::CXXConstructor:
+        case clang::Decl::CXXConversion:
+        case clang::Decl::CXXDestructor:
+        case clang::Decl::MSProperty:
+        case clang::Decl::NonTypeTemplateParm:
+        case clang::Decl::Var:
+        case clang::Decl::Decomposition:
+        case clang::Decl::ImplicitParam:
+        case clang::Decl::OMPCapturedExpr:
+        case clang::Decl::ParmVar:
+        case clang::Decl::VarTemplateSpecialization:
+        case clang::Decl::VarTemplatePartialSpecialization:
+        case clang::Decl::EnumConstant:
+        case clang::Decl::IndirectField:
+        case clang::Decl::OMPDeclareReduction:
+        case clang::Decl::UnresolvedUsingValue:
+        case clang::Decl::OMPRequires:
+        case clang::Decl::OMPThreadPrivate:
+        case clang::Decl::ObjCPropertyImpl:
+        case clang::Decl::PragmaComment:
+        case clang::Decl::PragmaDetectMismatch:
+        case clang::Decl::StaticAssert:
+        case clang::Decl::TranslationUnit:
+            break;
+    }
+}
+
+static_assert((clang::Decl::Kind)ZigClangDeclAccessSpec == clang::Decl::AccessSpec, "");
+static_assert((clang::Decl::Kind)ZigClangDeclBlock == clang::Decl::Block, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCaptured == clang::Decl::Captured, "");
+static_assert((clang::Decl::Kind)ZigClangDeclClassScopeFunctionSpecialization == clang::Decl::ClassScopeFunctionSpecialization, "");
+static_assert((clang::Decl::Kind)ZigClangDeclEmpty == clang::Decl::Empty, "");
+static_assert((clang::Decl::Kind)ZigClangDeclExport == clang::Decl::Export, "");
+static_assert((clang::Decl::Kind)ZigClangDeclExternCContext == clang::Decl::ExternCContext, "");
+static_assert((clang::Decl::Kind)ZigClangDeclFileScopeAsm == clang::Decl::FileScopeAsm, "");
+static_assert((clang::Decl::Kind)ZigClangDeclFriend == clang::Decl::Friend, "");
+static_assert((clang::Decl::Kind)ZigClangDeclFriendTemplate == clang::Decl::FriendTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclImport == clang::Decl::Import, "");
+static_assert((clang::Decl::Kind)ZigClangDeclLinkageSpec == clang::Decl::LinkageSpec, "");
+static_assert((clang::Decl::Kind)ZigClangDeclLabel == clang::Decl::Label, "");
+static_assert((clang::Decl::Kind)ZigClangDeclNamespace == clang::Decl::Namespace, "");
+static_assert((clang::Decl::Kind)ZigClangDeclNamespaceAlias == clang::Decl::NamespaceAlias, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCCompatibleAlias == clang::Decl::ObjCCompatibleAlias, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCCategory == clang::Decl::ObjCCategory, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCCategoryImpl == clang::Decl::ObjCCategoryImpl, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCImplementation == clang::Decl::ObjCImplementation, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCInterface == clang::Decl::ObjCInterface, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCProtocol == clang::Decl::ObjCProtocol, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCMethod == clang::Decl::ObjCMethod, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCProperty == clang::Decl::ObjCProperty, "");
+static_assert((clang::Decl::Kind)ZigClangDeclBuiltinTemplate == clang::Decl::BuiltinTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclClassTemplate == clang::Decl::ClassTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclFunctionTemplate == clang::Decl::FunctionTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTypeAliasTemplate == clang::Decl::TypeAliasTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclVarTemplate == clang::Decl::VarTemplate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTemplateTemplateParm == clang::Decl::TemplateTemplateParm, "");
+static_assert((clang::Decl::Kind)ZigClangDeclEnum == clang::Decl::Enum, "");
+static_assert((clang::Decl::Kind)ZigClangDeclRecord == clang::Decl::Record, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXRecord == clang::Decl::CXXRecord, "");
+static_assert((clang::Decl::Kind)ZigClangDeclClassTemplateSpecialization == clang::Decl::ClassTemplateSpecialization, "");
+static_assert((clang::Decl::Kind)ZigClangDeclClassTemplatePartialSpecialization == clang::Decl::ClassTemplatePartialSpecialization, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTemplateTypeParm == clang::Decl::TemplateTypeParm, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCTypeParam == clang::Decl::ObjCTypeParam, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTypeAlias == clang::Decl::TypeAlias, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTypedef == clang::Decl::Typedef, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUnresolvedUsingTypename == clang::Decl::UnresolvedUsingTypename, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUsing == clang::Decl::Using, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUsingDirective == clang::Decl::UsingDirective, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUsingPack == clang::Decl::UsingPack, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUsingShadow == clang::Decl::UsingShadow, "");
+static_assert((clang::Decl::Kind)ZigClangDeclConstructorUsingShadow == clang::Decl::ConstructorUsingShadow, "");
+static_assert((clang::Decl::Kind)ZigClangDeclBinding == clang::Decl::Binding, "");
+static_assert((clang::Decl::Kind)ZigClangDeclField == clang::Decl::Field, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCAtDefsField == clang::Decl::ObjCAtDefsField, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCIvar == clang::Decl::ObjCIvar, "");
+static_assert((clang::Decl::Kind)ZigClangDeclFunction == clang::Decl::Function, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXDeductionGuide == clang::Decl::CXXDeductionGuide, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXMethod == clang::Decl::CXXMethod, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXConstructor == clang::Decl::CXXConstructor, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXConversion == clang::Decl::CXXConversion, "");
+static_assert((clang::Decl::Kind)ZigClangDeclCXXDestructor == clang::Decl::CXXDestructor, "");
+static_assert((clang::Decl::Kind)ZigClangDeclMSProperty == clang::Decl::MSProperty, "");
+static_assert((clang::Decl::Kind)ZigClangDeclNonTypeTemplateParm == clang::Decl::NonTypeTemplateParm, "");
+static_assert((clang::Decl::Kind)ZigClangDeclVar == clang::Decl::Var, "");
+static_assert((clang::Decl::Kind)ZigClangDeclDecomposition == clang::Decl::Decomposition, "");
+static_assert((clang::Decl::Kind)ZigClangDeclImplicitParam == clang::Decl::ImplicitParam, "");
+static_assert((clang::Decl::Kind)ZigClangDeclOMPCapturedExpr == clang::Decl::OMPCapturedExpr, "");
+static_assert((clang::Decl::Kind)ZigClangDeclParmVar == clang::Decl::ParmVar, "");
+static_assert((clang::Decl::Kind)ZigClangDeclVarTemplateSpecialization == clang::Decl::VarTemplateSpecialization, "");
+static_assert((clang::Decl::Kind)ZigClangDeclVarTemplatePartialSpecialization == clang::Decl::VarTemplatePartialSpecialization, "");
+static_assert((clang::Decl::Kind)ZigClangDeclEnumConstant == clang::Decl::EnumConstant, "");
+static_assert((clang::Decl::Kind)ZigClangDeclIndirectField == clang::Decl::IndirectField, "");
+static_assert((clang::Decl::Kind)ZigClangDeclOMPDeclareReduction == clang::Decl::OMPDeclareReduction, "");
+static_assert((clang::Decl::Kind)ZigClangDeclUnresolvedUsingValue == clang::Decl::UnresolvedUsingValue, "");
+static_assert((clang::Decl::Kind)ZigClangDeclOMPRequires == clang::Decl::OMPRequires, "");
+static_assert((clang::Decl::Kind)ZigClangDeclOMPThreadPrivate == clang::Decl::OMPThreadPrivate, "");
+static_assert((clang::Decl::Kind)ZigClangDeclObjCPropertyImpl == clang::Decl::ObjCPropertyImpl, "");
+static_assert((clang::Decl::Kind)ZigClangDeclPragmaComment == clang::Decl::PragmaComment, "");
+static_assert((clang::Decl::Kind)ZigClangDeclPragmaDetectMismatch == clang::Decl::PragmaDetectMismatch, "");
+static_assert((clang::Decl::Kind)ZigClangDeclStaticAssert == clang::Decl::StaticAssert, "");
+static_assert((clang::Decl::Kind)ZigClangDeclTranslationUnit == clang::Decl::TranslationUnit, "");
+
+
 static_assert(sizeof(ZigClangSourceLocation) == sizeof(clang::SourceLocation), "");
 static ZigClangSourceLocation bitcast(clang::SourceLocation src) {
     ZigClangSourceLocation dest;
@@ -868,6 +1024,10 @@ const char* ZigClangSourceManager_getCharacterData(const ZigClangSourceManager *
 
 ZigClangQualType ZigClangASTContext_getPointerType(const ZigClangASTContext* self, ZigClangQualType T) {
     return bitcast(reinterpret_cast<const clang::ASTContext *>(self)->getPointerType(bitcast(T)));
+}
+
+unsigned ZigClangASTContext_getTypeAlign(const ZigClangASTContext* self, ZigClangQualType T) {
+    return reinterpret_cast<const clang::ASTContext *>(self)->getTypeAlign(bitcast(T));
 }
 
 ZigClangASTContext *ZigClangASTUnit_getASTContext(ZigClangASTUnit *self) {
@@ -942,6 +1102,16 @@ const char *ZigClangDecl_getName_bytes_begin(const ZigClangDecl *zig_decl) {
     return (const char *)named_decl->getName().bytes_begin();
 }
 
+ZigClangDeclKind ZigClangDecl_getKind(const struct ZigClangDecl *self) {
+    auto casted = reinterpret_cast<const clang::Decl *>(self);
+    return (ZigClangDeclKind)casted->getKind();
+}
+
+const char *ZigClangDecl_getDeclKindName(const struct ZigClangDecl *self) {
+    auto casted = reinterpret_cast<const clang::Decl *>(self);
+    return casted->getDeclKindName();
+}
+
 ZigClangSourceLocation ZigClangRecordDecl_getLocation(const ZigClangRecordDecl *zig_record_decl) {
     const clang::RecordDecl *record_decl = reinterpret_cast<const clang::RecordDecl *>(zig_record_decl);
     return bitcast(record_decl->getLocation());
@@ -954,6 +1124,11 @@ ZigClangSourceLocation ZigClangEnumDecl_getLocation(const ZigClangEnumDecl *self
 
 ZigClangSourceLocation ZigClangTypedefNameDecl_getLocation(const ZigClangTypedefNameDecl *self) {
     auto casted = reinterpret_cast<const clang::TypedefNameDecl *>(self);
+    return bitcast(casted->getLocation());
+}
+
+ZigClangSourceLocation ZigClangDecl_getLocation(const ZigClangDecl *self) {
+    auto casted = reinterpret_cast<const clang::Decl *>(self);
     return bitcast(casted->getLocation());
 }
 
@@ -1028,6 +1203,11 @@ ZigClangTypeClass ZigClangType_getTypeClass(const ZigClangType *self) {
     auto casted = reinterpret_cast<const clang::Type *>(self);
     clang::Type::TypeClass tc = casted->getTypeClass();
     return (ZigClangTypeClass)tc;
+}
+
+ZigClangQualType ZigClangType_getPointeeType(const ZigClangType *self) {
+    auto casted = reinterpret_cast<const clang::Type *>(self);
+    return bitcast(casted->getPointeeType());
 }
 
 bool ZigClangType_isVoidType(const ZigClangType *self) {
