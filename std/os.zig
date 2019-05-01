@@ -146,6 +146,12 @@ pub fn getRandomBytes(buf: []u8) !void {
                 };
             }
         },
+        Os.wasi => {
+            const random_get_result = os.wasi.random_get(buf.ptr, buf.len);
+            if (random_get_result != os.wasi.ESUCCESS) {
+                return error.Unknown;
+            }
+        },
         Os.zen => {
             const randomness = []u8{ 42, 1, 7, 12, 22, 17, 99, 16, 26, 87, 41, 45 };
             var i: usize = 0;
@@ -756,6 +762,37 @@ pub fn getEnvMap(allocator: *Allocator) !BufMap {
 
             try result.setMove(key, value);
         }
+    } else if (builtin.os == Os.wasi) {
+        var environ_count: usize = undefined;
+        var environ_buf_size: usize = undefined;
+
+        const environ_sizes_get_ret = std.os.wasi.environ_sizes_get(&environ_count, &environ_buf_size);
+        if (environ_sizes_get_ret != os.wasi.ESUCCESS) {
+            return unexpectedErrorPosix(environ_sizes_get_ret);
+        }
+
+        // TODO: Verify that the documentation is incorrect
+        // https://github.com/WebAssembly/WASI/issues/27
+        var environ = try allocator.alloc(?[*]u8, environ_count + 1);
+        defer allocator.free(environ);
+        var environ_buf = try std.heap.wasm_allocator.alloc(u8, environ_buf_size);
+        defer allocator.free(environ_buf);
+
+        const environ_get_ret = std.os.wasi.environ_get(environ.ptr, environ_buf.ptr);
+        if (environ_get_ret != os.wasi.ESUCCESS) {
+            return unexpectedErrorPosix(environ_get_ret);
+        }
+
+        for (environ) |env| {
+            if (env) |ptr| {
+                const pair = mem.toSlice(u8, ptr);
+                var parts = mem.separate(pair, "=");
+                const key = parts.next().?;
+                const value = parts.next().?;
+                try result.set(key, value);
+            }
+        }
+        return result;
     } else {
         for (posix_environ_raw) |ptr| {
             var line_i: usize = 0;
@@ -2190,7 +2227,7 @@ pub fn argsAlloc(allocator: *mem.Allocator) ![]const []u8 {
         }
 
         var result_slice = try allocator.alloc([]u8, count);
-        
+
         var i: usize = 0;
         while (i < count) : (i += 1) {
             result_slice[i] = mem.toSlice(u8, argv[i]);
