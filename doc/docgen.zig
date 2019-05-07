@@ -512,6 +512,10 @@ fn genToc(allocator: *mem.Allocator, tokenizer: *Tokenizer) !Toc {
                             target_str = "x86_64-windows";
                         } else if (mem.eql(u8, end_tag_name, "target_linux_x86_64")) {
                             target_str = "x86_64-linux";
+                        } else if (mem.eql(u8, end_tag_name, "target_wasm")) {
+                            target_str = "wasm32-freestanding";
+                        } else if (mem.eql(u8, end_tag_name, "target_wasi")) {
+                            target_str = "wasm32-wasi";
                         } else if (mem.eql(u8, end_tag_name, "link_libc")) {
                             link_libc = true;
                         } else if (mem.eql(u8, end_tag_name, "code_end")) {
@@ -1064,6 +1068,9 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                         }
                         if (code.target_str) |triple| {
                             try build_args.appendSlice([][]const u8{ "-target", triple });
+                            if (!code.is_inline) {
+                                try out.print(" -target {}", triple);
+                            }
                         }
                         if (expected_outcome == .BuildFail) {
                             const result = try os.ChildProcess.exec(
@@ -1101,11 +1108,12 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                         _ = exec(allocator, &env_map, build_args.toSliceConst()) catch return parseError(tokenizer, code.source_token, "example failed to compile");
 
                         if (code.target_str) |triple| {
-                            if (mem.startsWith(u8, triple, "x86_64-linux") and
+                            if (mem.startsWith(u8, triple, "wasm32") or
+                                mem.startsWith(u8, triple, "x86_64-linux") and
                                 (builtin.os != builtin.Os.linux or builtin.arch != builtin.Arch.x86_64))
                             {
                                 // skip execution
-                                try out.print("\n$ # Skipping execution because it is non-native.</code></pre>\n");
+                                try out.print("</code></pre>\n");
                                 break :code_block;
                             }
                         }
@@ -1169,6 +1177,7 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                         }
                         if (code.target_str) |triple| {
                             try test_args.appendSlice([][]const u8{ "-target", triple });
+                            try out.print(" -target {}", triple);
                         }
                         const result = exec(allocator, &env_map, test_args.toSliceConst()) catch return parseError(tokenizer, code.source_token, "test failed");
                         const escaped_stderr = try escapeHtml(allocator, result.stderr);
@@ -1347,6 +1356,11 @@ fn genHtml(allocator: *mem.Allocator, tokenizer: *Tokenizer, toc: *Toc, out: var
                                     try out.print(" --release-small");
                                 }
                             },
+                        }
+
+                        if (code.target_str) |triple| {
+                            try build_args.appendSlice([][]const u8{ "-target", triple });
+                            try out.print(" -target {}", triple);
                         }
 
                         if (maybe_error_match) |error_match| {
