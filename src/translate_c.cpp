@@ -1914,7 +1914,7 @@ static AstNode *trans_implicit_cast_expr(Context *c, ResultUsed result_used, Tra
                 return trans_c_cast(c, bitcast(stmt->getBeginLoc()), dest_type, src_type, target_node);
             }
         case ZigClangCK_NullToPointer:
-            return trans_create_node_unsigned(c, 0);
+            return trans_create_node(c, NodeTypeNullLiteral);
         case ZigClangCK_NoOp:
             return trans_expr(c, ResultUsedYes, scope, bitcast(stmt->getSubExpr()), TransRValue);
         case ZigClangCK_Dependent:
@@ -2721,7 +2721,7 @@ static AstNode *trans_bool_expr(Context *c, ResultUsed result_used, TransScope *
                     return trans_create_node_bin_op(c, res, BinOpTypeCmpNotEq, trans_create_node_unsigned_negative(c, 0, false));
                 case clang::BuiltinType::NullPtr:
                     return trans_create_node_bin_op(c, res, BinOpTypeCmpNotEq,
-                            trans_create_node_unsigned(c, 0));
+                            trans_create_node(c, NodeTypeNullLiteral));
 
                 case clang::BuiltinType::Void:
                 case clang::BuiltinType::Half:
@@ -2818,8 +2818,7 @@ static AstNode *trans_bool_expr(Context *c, ResultUsed result_used, TransScope *
             break;
         }
         case ZigClangType_Pointer:
-            return trans_create_node_bin_op(c, res, BinOpTypeCmpNotEq,
-                    trans_create_node_unsigned(c, 0));
+            return trans_create_node_bin_op(c, res, BinOpTypeCmpNotEq, trans_create_node(c, NodeTypeNullLiteral));
 
         case ZigClangType_Typedef:
         {
@@ -4010,7 +4009,7 @@ static TransScope *trans_stmt(Context *c, TransScope *scope, const ZigClangStmt 
     return child_scope;
 }
 
-static void visit_fn_decl(Context *c, const clang::FunctionDecl *fn_decl) {
+static void visit_fn_decl(Context *c, const ZigClangFunctionDecl *fn_decl) {
     Buf *fn_name = buf_create_from_str(ZigClangDecl_getName_bytes_begin((const ZigClangDecl *)fn_decl));
 
     if (get_global(c, fn_name)) {
@@ -4018,26 +4017,28 @@ static void visit_fn_decl(Context *c, const clang::FunctionDecl *fn_decl) {
         return;
     }
 
-    AstNode *proto_node = trans_qual_type(c, bitcast(fn_decl->getType()), bitcast(fn_decl->getLocation()));
+    AstNode *proto_node = trans_qual_type(c, ZigClangFunctionDecl_getType(fn_decl),
+            ZigClangFunctionDecl_getLocation(fn_decl));
     if (proto_node == nullptr) {
-        emit_warning(c, bitcast(fn_decl->getLocation()), "unable to resolve prototype of function '%s'", buf_ptr(fn_name));
+        emit_warning(c, ZigClangFunctionDecl_getLocation(fn_decl),
+                "unable to resolve prototype of function '%s'", buf_ptr(fn_name));
         return;
     }
 
     proto_node->data.fn_proto.name = fn_name;
-    proto_node->data.fn_proto.is_extern = !fn_decl->hasBody();
+    proto_node->data.fn_proto.is_extern = !((const clang::FunctionDecl*)fn_decl)->hasBody();
 
-    clang::StorageClass sc = fn_decl->getStorageClass();
+    clang::StorageClass sc = ((const clang::FunctionDecl*)fn_decl)->getStorageClass();
     if (sc == clang::SC_None) {
         proto_node->data.fn_proto.visib_mod = c->visib_mod;
-        proto_node->data.fn_proto.is_export = fn_decl->hasBody() ? c->want_export : false;
+        proto_node->data.fn_proto.is_export = ((const clang::FunctionDecl*)fn_decl)->hasBody() ? c->want_export : false;
     } else if (sc == clang::SC_Extern || sc == clang::SC_Static) {
         proto_node->data.fn_proto.visib_mod = c->visib_mod;
     } else if (sc == clang::SC_PrivateExtern) {
-        emit_warning(c, bitcast(fn_decl->getLocation()), "unsupported storage class: private extern");
+        emit_warning(c, ZigClangFunctionDecl_getLocation(fn_decl), "unsupported storage class: private extern");
         return;
     } else {
-        emit_warning(c, bitcast(fn_decl->getLocation()), "unsupported storage class: unknown");
+        emit_warning(c, ZigClangFunctionDecl_getLocation(fn_decl), "unsupported storage class: unknown");
         return;
     }
 
@@ -4045,7 +4046,7 @@ static void visit_fn_decl(Context *c, const clang::FunctionDecl *fn_decl) {
 
     for (size_t i = 0; i < proto_node->data.fn_proto.params.length; i += 1) {
         AstNode *param_node = proto_node->data.fn_proto.params.at(i);
-        const clang::ParmVarDecl *param = fn_decl->getParamDecl(i);
+        const clang::ParmVarDecl *param = ((const clang::FunctionDecl*)fn_decl)->getParamDecl(i);
         const char *name = ZigClangDecl_getName_bytes_begin((const ZigClangDecl *)param);
 
         Buf *proto_param_name;
@@ -4064,7 +4065,7 @@ static void visit_fn_decl(Context *c, const clang::FunctionDecl *fn_decl) {
         param_node->data.param_decl.name = scope_var->zig_name;
     }
 
-    if (!fn_decl->hasBody()) {
+    if (!((const clang::FunctionDecl*)fn_decl)->hasBody()) {
         // just a prototype
         add_top_level_decl(c, proto_node->data.fn_proto.name, proto_node);
         return;
@@ -4072,11 +4073,11 @@ static void visit_fn_decl(Context *c, const clang::FunctionDecl *fn_decl) {
 
     // actual function definition with body
     c->ptr_params.clear();
-    const ZigClangStmt *body = bitcast(fn_decl->getBody());
+    const ZigClangStmt *body = bitcast(((const clang::FunctionDecl*)fn_decl)->getBody());
     AstNode *actual_body_node;
     TransScope *result_scope = trans_stmt(c, scope, body, &actual_body_node);
     if (result_scope == nullptr) {
-        emit_warning(c, bitcast(fn_decl->getLocation()), "unable to translate function");
+        emit_warning(c, ZigClangFunctionDecl_getLocation(fn_decl), "unable to translate function");
         return;
     }
     assert(actual_body_node != nullptr);
@@ -4559,7 +4560,7 @@ static bool decl_visitor(void *context, const ZigClangDecl *decl) {
 
     switch (ZigClangDecl_getKind(decl)) {
         case ZigClangDeclFunction:
-            visit_fn_decl(c, reinterpret_cast<const clang::FunctionDecl*>(decl));
+            visit_fn_decl(c, reinterpret_cast<const ZigClangFunctionDecl*>(decl));
             break;
         case ZigClangDeclTypedef:
             resolve_typedef_decl(c, reinterpret_cast<const ZigClangTypedefNameDecl *>(decl));
