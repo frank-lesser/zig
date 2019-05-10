@@ -3,6 +3,17 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "attempt to cast enum literal to error",
+        \\export fn entry() void {
+        \\    switch (error.Hi) {
+        \\        .Hi => {},
+        \\    }
+        \\}
+    ,
+        "tmp.zig:3:9: error: expected type 'error{Hi}', found '(enum literal)'",
+    );
+
+    cases.add(
         "@sizeOf bad type",
         \\export fn entry() void {
         \\    _ = @sizeOf(@typeOf(null));
@@ -574,15 +585,6 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\}
     ,
         "tmp.zig:1:13: error: threadlocal variable cannot be constant",
-    );
-
-    cases.add(
-        "threadlocal qualifier on local variable",
-        \\export fn entry() void {
-        \\    threadlocal var x: i32 = 1234;
-        \\}
-    ,
-        "tmp.zig:2:5: error: function-local variable 'x' cannot be threadlocal",
     );
 
     cases.add(
@@ -5915,5 +5917,22 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\}
     ,
         "tmp.zig:3:23: error: expected type '[]u32', found '*const u32'",
+    );
+
+    cases.add(
+        "for loop body expression ignored",
+        \\fn returns() usize {
+        \\    return 2;
+        \\}
+        \\export fn f1() void {
+        \\    for ("hello") |_| returns();
+        \\}
+        \\export fn f2() void {
+        \\    var x: anyerror!i32 = error.Bad;
+        \\    for ("hello") |_| returns() else unreachable;
+        \\}
+    ,
+        "tmp.zig:5:30: error: expression value is ignored",
+        "tmp.zig:9:30: error: expression value is ignored",
     );
 }
