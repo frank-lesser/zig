@@ -1277,15 +1277,15 @@ static AstNode *trans_qual_type(Context *c, ZigClangQualType qt, ZigClangSourceL
     return trans_type(c, ZigClangQualType_getTypePtr(qt), source_loc);
 }
 
-static int trans_compound_stmt_inline(Context *c, TransScope *scope, const clang::CompoundStmt *stmt,
+static int trans_compound_stmt_inline(Context *c, TransScope *scope, const ZigClangCompoundStmt *stmt,
         AstNode *block_node, TransScope **out_node_scope)
 {
     assert(block_node->type == NodeTypeBlock);
-    for (clang::CompoundStmt::const_body_iterator it = stmt->body_begin(), end_it = stmt->body_end();
-            it != end_it; ++it)
+    for (ZigClangCompoundStmt_const_body_iterator it = ZigClangCompoundStmt_body_begin(stmt),
+        end_it = ZigClangCompoundStmt_body_end(stmt); it != end_it; ++it)
     {
         AstNode *child_node;
-        scope = trans_stmt(c, scope, bitcast(*it), &child_node);
+        scope = trans_stmt(c, scope, *it, &child_node);
         if (scope == nullptr)
             return ErrorUnexpected;
         if (child_node != nullptr)
@@ -1297,7 +1297,7 @@ static int trans_compound_stmt_inline(Context *c, TransScope *scope, const clang
     return ErrorNone;
 }
 
-static AstNode *trans_compound_stmt(Context *c, TransScope *scope, const clang::CompoundStmt *stmt,
+static AstNode *trans_compound_stmt(Context *c, TransScope *scope, const ZigClangCompoundStmt *stmt,
         TransScope **out_node_scope)
 {
     TransScopeBlock *child_scope_block = trans_scope_block_create(c, scope);
@@ -1309,7 +1309,7 @@ static AstNode *trans_compound_stmt(Context *c, TransScope *scope, const clang::
 static AstNode *trans_stmt_expr(Context *c, ResultUsed result_used, TransScope *scope,
         const clang::StmtExpr *stmt, TransScope **out_node_scope)
 {
-    AstNode *block = trans_compound_stmt(c, scope, stmt->getSubStmt(), out_node_scope);
+    AstNode *block = trans_compound_stmt(c, scope, (const ZigClangCompoundStmt *)stmt->getSubStmt(), out_node_scope);
     if (block == nullptr)
         return block;
     assert(block->type == NodeTypeBlock);
@@ -3220,7 +3220,7 @@ static AstNode *trans_switch_stmt(Context *c, TransScope *parent_scope, const cl
     AstNode *body_node;
     const ZigClangStmt *body_stmt = bitcast(stmt->getBody());
     if (ZigClangStmt_getStmtClass(body_stmt) == ZigClangStmt_CompoundStmtClass) {
-        if (trans_compound_stmt_inline(c, &switch_scope->base, (const clang::CompoundStmt *)body_stmt,
+        if (trans_compound_stmt_inline(c, &switch_scope->base, (const ZigClangCompoundStmt *)body_stmt,
                                        block_scope->node, nullptr))
         {
             return nullptr;
@@ -3399,7 +3399,7 @@ static int trans_stmt_extra(Context *c, TransScope *scope, const ZigClangStmt *s
                     trans_return_stmt(c, scope, (const clang::ReturnStmt *)stmt));
         case ZigClangStmt_CompoundStmtClass:
             return wrap_stmt(out_node, out_child_scope, scope,
-                    trans_compound_stmt(c, scope, (const clang::CompoundStmt *)stmt, out_node_scope));
+                    trans_compound_stmt(c, scope, (const ZigClangCompoundStmt *)stmt, out_node_scope));
         case ZigClangStmt_IntegerLiteralClass:
             return wrap_stmt(out_node, out_child_scope, scope,
                     trans_integer_literal(c, result_used, (const clang::IntegerLiteral *)stmt));
@@ -4038,15 +4038,15 @@ static void visit_fn_decl(Context *c, const ZigClangFunctionDecl *fn_decl) {
     }
 
     proto_node->data.fn_proto.name = fn_name;
-    proto_node->data.fn_proto.is_extern = !((const clang::FunctionDecl*)fn_decl)->hasBody();
+    proto_node->data.fn_proto.is_extern = !ZigClangFunctionDecl_hasBody(fn_decl);
 
-    clang::StorageClass sc = ((const clang::FunctionDecl*)fn_decl)->getStorageClass();
-    if (sc == clang::SC_None) {
+    ZigClangStorageClass sc = ZigClangFunctionDecl_getStorageClass(fn_decl);
+    if (sc == ZigClangStorageClass_None) {
         proto_node->data.fn_proto.visib_mod = c->visib_mod;
-        proto_node->data.fn_proto.is_export = ((const clang::FunctionDecl*)fn_decl)->hasBody() ? c->want_export : false;
-    } else if (sc == clang::SC_Extern || sc == clang::SC_Static) {
+        proto_node->data.fn_proto.is_export = ZigClangFunctionDecl_hasBody(fn_decl) ? c->want_export : false;
+    } else if (sc == ZigClangStorageClass_Extern || sc == ZigClangStorageClass_Static) {
         proto_node->data.fn_proto.visib_mod = c->visib_mod;
-    } else if (sc == clang::SC_PrivateExtern) {
+    } else if (sc == ZigClangStorageClass_PrivateExtern) {
         emit_warning(c, ZigClangFunctionDecl_getLocation(fn_decl), "unsupported storage class: private extern");
         return;
     } else {
@@ -4058,7 +4058,7 @@ static void visit_fn_decl(Context *c, const ZigClangFunctionDecl *fn_decl) {
 
     for (size_t i = 0; i < proto_node->data.fn_proto.params.length; i += 1) {
         AstNode *param_node = proto_node->data.fn_proto.params.at(i);
-        const clang::ParmVarDecl *param = ((const clang::FunctionDecl*)fn_decl)->getParamDecl(i);
+        const ZigClangParmVarDecl *param = ZigClangFunctionDecl_getParamDecl(fn_decl, i);
         const char *name = ZigClangDecl_getName_bytes_begin((const ZigClangDecl *)param);
 
         Buf *proto_param_name;
@@ -4077,7 +4077,7 @@ static void visit_fn_decl(Context *c, const ZigClangFunctionDecl *fn_decl) {
         param_node->data.param_decl.name = scope_var->zig_name;
     }
 
-    if (!((const clang::FunctionDecl*)fn_decl)->hasBody()) {
+    if (!ZigClangFunctionDecl_hasBody(fn_decl)) {
         // just a prototype
         add_top_level_decl(c, proto_node->data.fn_proto.name, proto_node);
         return;
@@ -4085,7 +4085,7 @@ static void visit_fn_decl(Context *c, const ZigClangFunctionDecl *fn_decl) {
 
     // actual function definition with body
     c->ptr_params.clear();
-    const ZigClangStmt *body = bitcast(((const clang::FunctionDecl*)fn_decl)->getBody());
+    const ZigClangStmt *body = ZigClangFunctionDecl_getBody(fn_decl);
     AstNode *actual_body_node;
     TransScope *result_scope = trans_stmt(c, scope, body, &actual_body_node);
     if (result_scope == nullptr) {

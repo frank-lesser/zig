@@ -88,7 +88,6 @@ struct ZigClangSkipFunctionBodiesScope;
 struct ZigClangSourceManager;
 struct ZigClangSourceRange;
 struct ZigClangStmt;
-struct ZigClangStorageClass;
 struct ZigClangStringLiteral;
 struct ZigClangStringRef;
 struct ZigClangSwitchStmt;
@@ -102,6 +101,8 @@ struct ZigClangValueDecl;
 struct ZigClangVarDecl;
 struct ZigClangWhileStmt;
 struct ZigClangFunctionType;
+
+typedef struct ZigClangStmt *const * ZigClangCompoundStmt_const_body_iterator;
 
 enum ZigClangBO {
     ZigClangBO_PtrMemD,
@@ -700,6 +701,18 @@ enum ZigClangCallingConv {
     ZigClangCallingConv_AArch64VectorCall, // __attribute__((aarch64_vector_pcs))
 };
 
+enum ZigClangStorageClass {
+    // These are legal on both functions and variables.
+    ZigClangStorageClass_None,
+    ZigClangStorageClass_Extern,
+    ZigClangStorageClass_Static,
+    ZigClangStorageClass_PrivateExtern,
+
+    // These are only legal on variables.
+    ZigClangStorageClass_Auto,
+    ZigClangStorageClass_Register,
+};
+
 ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangSourceManager_getSpellingLoc(const struct ZigClangSourceManager *,
         struct ZigClangSourceLocation Loc);
 ZIG_EXTERN_C const char *ZigClangSourceManager_getFilename(const struct ZigClangSourceManager *,
@@ -742,6 +755,10 @@ ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangDecl_getLocation(const struct
 
 ZIG_EXTERN_C struct ZigClangQualType ZigClangFunctionDecl_getType(const struct ZigClangFunctionDecl *);
 ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangFunctionDecl_getLocation(const struct ZigClangFunctionDecl *);
+ZIG_EXTERN_C bool ZigClangFunctionDecl_hasBody(const struct ZigClangFunctionDecl *);
+ZIG_EXTERN_C enum ZigClangStorageClass ZigClangFunctionDecl_getStorageClass(const struct ZigClangFunctionDecl *);
+ZIG_EXTERN_C const struct ZigClangParmVarDecl *ZigClangFunctionDecl_getParamDecl(const struct ZigClangFunctionDecl *, unsigned i);
+ZIG_EXTERN_C const struct ZigClangStmt *ZigClangFunctionDecl_getBody(const struct ZigClangFunctionDecl *);
 
 ZIG_EXTERN_C bool ZigClangRecordDecl_isUnion(const struct ZigClangRecordDecl *record_decl);
 ZIG_EXTERN_C bool ZigClangRecordDecl_isStruct(const struct ZigClangRecordDecl *record_decl);
@@ -805,4 +822,9 @@ ZIG_EXTERN_C struct ZigClangQualType ZigClangFunctionType_getReturnType(const st
 ZIG_EXTERN_C bool ZigClangFunctionProtoType_isVariadic(const struct ZigClangFunctionProtoType *self);
 ZIG_EXTERN_C unsigned ZigClangFunctionProtoType_getNumParams(const struct ZigClangFunctionProtoType *self);
 ZIG_EXTERN_C struct ZigClangQualType ZigClangFunctionProtoType_getParamType(const struct ZigClangFunctionProtoType *self, unsigned i);
+
+
+ZIG_EXTERN_C ZigClangCompoundStmt_const_body_iterator ZigClangCompoundStmt_body_begin(const struct ZigClangCompoundStmt *self);
+ZIG_EXTERN_C ZigClangCompoundStmt_const_body_iterator ZigClangCompoundStmt_body_end(const struct ZigClangCompoundStmt *self);
+
 #endif
