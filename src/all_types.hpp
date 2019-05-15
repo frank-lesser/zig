@@ -2149,6 +2149,7 @@ enum IrInstructionId {
     IrInstructionIdCondBr,
     IrInstructionIdSwitchBr,
     IrInstructionIdSwitchVar,
+    IrInstructionIdSwitchElseVar,
     IrInstructionIdSwitchTarget,
     IrInstructionIdPhi,
     IrInstructionIdUnOp,
@@ -2369,7 +2370,15 @@ struct IrInstructionSwitchVar {
     IrInstruction base;
 
     IrInstruction *target_value_ptr;
-    IrInstruction *prong_value;
+    IrInstruction **prongs_ptr;
+    size_t prongs_len;
+};
+
+struct IrInstructionSwitchElseVar {
+    IrInstruction base;
+
+    IrInstruction *target_value_ptr;
+    IrInstructionSwitchBr *switch_br;
 };
 
 struct IrInstructionSwitchTarget {
