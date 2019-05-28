@@ -296,6 +296,7 @@ static LLVMValueRef gen_const_val(CodeGen *g, ConstExprValue *const_val, const c
 static void generate_error_name_table(CodeGen *g);
 static bool value_is_all_undef(ConstExprValue *const_val);
 static void gen_undef_init(CodeGen *g, uint32_t ptr_align_bytes, ZigType *value_type, LLVMValueRef ptr);
+static LLVMValueRef build_alloca(CodeGen *g, ZigType *type_entry, const char *name, uint32_t alignment);
 
 static void addLLVMAttr(LLVMValueRef val, LLVMAttributeIndex attr_index, const char *attr_name) {
     unsigned kind_id = LLVMGetEnumAttributeKindForName(attr_name, strlen(attr_name));
@@ -396,15 +397,6 @@ static LLVMCallConv get_llvm_cc(CodeGen *g, CallingConvention cc) {
 static void add_uwtable_attr(CodeGen *g, LLVMValueRef fn_val) {
     if (g->zig_target->os == OsWindows) {
         addLLVMFnAttr(fn_val, "uwtable");
-    }
-}
-
-static void add_probe_stack_attr(CodeGen *g, LLVMValueRef fn_val) {
-    // Windows already emits its own stack probes
-    if (!g->disable_stack_probing && g->zig_target->os != OsWindows &&
-        (g->zig_target->arch == ZigLLVM_x86 ||
-         g->zig_target->arch == ZigLLVM_x86_64)) {
-        addLLVMFnAttrStr(fn_val, "probe-stack", "__zig_probe_stack");
     }
 }
 
@@ -596,8 +588,9 @@ static LLVMValueRef fn_llvm_value(CodeGen *g, ZigFn *fn_table_entry) {
                 addLLVMFnAttr(fn_table_entry->llvm_value, "sspstrong");
                 addLLVMFnAttrStr(fn_table_entry->llvm_value, "stack-protector-buffer-size", "4");
             }
-
-            add_probe_stack_attr(g, fn_table_entry->llvm_value);
+        }
+        if (g->have_stack_probing && !fn_table_entry->def_scope->safety_off) {
+            addLLVMFnAttrStr(fn_table_entry->llvm_value, "probe-stack", "__zig_probe_stack");
         }
     } else {
         maybe_import_dll(g, fn_table_entry->llvm_value, linkage);
@@ -1526,53 +1519,12 @@ static LLVMValueRef get_safety_crash_err_fn(CodeGen *g) {
     generate_error_name_table(g);
     assert(g->err_name_table != nullptr);
 
-    size_t unwrap_err_msg_text_len = strlen(unwrap_err_msg_text);
-    size_t err_buf_len = strlen(unwrap_err_msg_text) + g->largest_err_name_len;
-    LLVMValueRef *err_buf_vals = allocate<LLVMValueRef>(err_buf_len);
-    size_t i = 0;
-    for (; i < unwrap_err_msg_text_len; i += 1) {
-        err_buf_vals[i] = LLVMConstInt(LLVMInt8Type(), unwrap_err_msg_text[i], false);
-    }
-    for (; i < err_buf_len; i += 1) {
-        err_buf_vals[i] = LLVMGetUndef(LLVMInt8Type());
-    }
-    uint32_t u8_align_bytes = get_abi_alignment(g, g->builtin_types.entry_u8);
-    LLVMValueRef init_value = LLVMConstArray(LLVMInt8Type(), err_buf_vals, err_buf_len);
-    LLVMValueRef global_array = LLVMAddGlobal(g->module, LLVMTypeOf(init_value), "");
-    LLVMSetInitializer(global_array, init_value);
-    LLVMSetLinkage(global_array, LLVMInternalLinkage);
-    LLVMSetGlobalConstant(global_array, false);
-    LLVMSetUnnamedAddr(global_array, true);
-    LLVMSetAlignment(global_array, u8_align_bytes);
-
-    ZigType *usize = g->builtin_types.entry_usize;
-    LLVMValueRef full_buf_ptr_indices[] = {
-        LLVMConstNull(usize->llvm_type),
-        LLVMConstNull(usize->llvm_type),
-    };
-    LLVMValueRef full_buf_ptr = LLVMConstInBoundsGEP(global_array, full_buf_ptr_indices, 2);
-
-
-    ZigType *u8_ptr_type = get_pointer_to_type_extra(g, g->builtin_types.entry_u8, true, false,
-            PtrLenUnknown, get_abi_alignment(g, g->builtin_types.entry_u8), 0, 0, false);
-    ZigType *str_type = get_slice_type(g, u8_ptr_type);
-    LLVMValueRef global_slice_fields[] = {
-        full_buf_ptr,
-        LLVMConstNull(usize->llvm_type),
-    };
-    LLVMValueRef slice_init_value = LLVMConstNamedStruct(get_llvm_type(g, str_type), global_slice_fields, 2);
-    LLVMValueRef global_slice = LLVMAddGlobal(g->module, LLVMTypeOf(slice_init_value), "");
-    LLVMSetInitializer(global_slice, slice_init_value);
-    LLVMSetLinkage(global_slice, LLVMInternalLinkage);
-    LLVMSetGlobalConstant(global_slice, false);
-    LLVMSetUnnamedAddr(global_slice, true);
-    LLVMSetAlignment(global_slice, get_abi_alignment(g, str_type));
-
-    LLVMValueRef offset_ptr_indices[] = {
-        LLVMConstNull(usize->llvm_type),
-        LLVMConstInt(usize->llvm_type, unwrap_err_msg_text_len, false),
-    };
-    LLVMValueRef offset_buf_ptr = LLVMConstInBoundsGEP(global_array, offset_ptr_indices, 2);
+    // Generate the constant part of the error message
+    LLVMValueRef msg_prefix_init = LLVMConstString(unwrap_err_msg_text, strlen(unwrap_err_msg_text), 1);
+    LLVMValueRef msg_prefix = LLVMAddGlobal(g->module, LLVMTypeOf(msg_prefix_init), "");
+    LLVMSetInitializer(msg_prefix, msg_prefix_init);
+    LLVMSetLinkage(msg_prefix, LLVMInternalLinkage);
+    LLVMSetGlobalConstant(msg_prefix, true);
 
     Buf *fn_name = get_mangled_name(g, buf_create_from_str("__zig_fail_unwrap"), false);
     LLVMTypeRef fn_type_ref;
@@ -1609,6 +1561,19 @@ static LLVMValueRef get_safety_crash_err_fn(CodeGen *g) {
     LLVMPositionBuilderAtEnd(g->builder, entry_block);
     ZigLLVMClearCurrentDebugLocation(g->builder);
 
+    ZigType *usize_ty = g->builtin_types.entry_usize;
+    ZigType *u8_ptr_type = get_pointer_to_type_extra(g, g->builtin_types.entry_u8, true, false,
+            PtrLenUnknown, get_abi_alignment(g, g->builtin_types.entry_u8), 0, 0, false);
+    ZigType *str_type = get_slice_type(g, u8_ptr_type);
+
+    // Allocate a buffer to hold the fully-formatted error message
+    const size_t err_buf_len = strlen(unwrap_err_msg_text) + g->largest_err_name_len;
+    LLVMValueRef max_msg_len = LLVMConstInt(usize_ty->llvm_type, err_buf_len, 0);
+    LLVMValueRef msg_buffer = LLVMBuildArrayAlloca(g->builder, LLVMInt8Type(), max_msg_len, "msg_buffer");
+
+    // Allocate a []u8 slice for the message
+    LLVMValueRef msg_slice = build_alloca(g, str_type, "msg_slice", 0);
+
     LLVMValueRef err_ret_trace_arg;
     LLVMValueRef err_val;
     if (g->have_err_ret_tracing) {
@@ -1619,8 +1584,9 @@ static LLVMValueRef get_safety_crash_err_fn(CodeGen *g) {
         err_val = LLVMGetParam(fn_val, 0);
     }
 
+    // Fetch the error name from the global table
     LLVMValueRef err_table_indices[] = {
-        LLVMConstNull(g->builtin_types.entry_usize->llvm_type),
+        LLVMConstNull(usize_ty->llvm_type),
         err_val,
     };
     LLVMValueRef err_name_val = LLVMBuildInBoundsGEP(g->builder, g->err_name_table, err_table_indices, 2, "");
@@ -1631,15 +1597,38 @@ static LLVMValueRef get_safety_crash_err_fn(CodeGen *g) {
     LLVMValueRef len_field_ptr = LLVMBuildStructGEP(g->builder, err_name_val, slice_len_index, "");
     LLVMValueRef err_name_len = gen_load_untyped(g, len_field_ptr, 0, false, "");
 
-    ZigLLVMBuildMemCpy(g->builder, offset_buf_ptr, u8_align_bytes, err_name_ptr, u8_align_bytes, err_name_len, false);
+    LLVMValueRef msg_prefix_len = LLVMConstInt(usize_ty->llvm_type, strlen(unwrap_err_msg_text), false);
+    // Points to the beginning of msg_buffer
+    LLVMValueRef msg_buffer_ptr_indices[] = {
+        LLVMConstNull(usize_ty->llvm_type),
+    };
+    LLVMValueRef msg_buffer_ptr = LLVMBuildInBoundsGEP(g->builder, msg_buffer, msg_buffer_ptr_indices, 1, "");
+    // Points to the beginning of the constant prefix message
+    LLVMValueRef msg_prefix_ptr_indices[] = {
+        LLVMConstNull(usize_ty->llvm_type),
+    };
+    LLVMValueRef msg_prefix_ptr = LLVMConstInBoundsGEP(msg_prefix, msg_prefix_ptr_indices, 1);
 
-    LLVMValueRef const_prefix_len = LLVMConstInt(LLVMTypeOf(err_name_len), strlen(unwrap_err_msg_text), false);
-    LLVMValueRef full_buf_len = LLVMBuildNUWAdd(g->builder, const_prefix_len, err_name_len, "");
+    // Build the message using the prefix...
+    ZigLLVMBuildMemCpy(g->builder, msg_buffer_ptr, 1, msg_prefix_ptr, 1, msg_prefix_len, false);
+    // ..and append the error name
+    LLVMValueRef msg_buffer_ptr_after_indices[] = {
+        msg_prefix_len,
+    };
+    LLVMValueRef msg_buffer_ptr_after = LLVMBuildInBoundsGEP(g->builder, msg_buffer, msg_buffer_ptr_after_indices, 1, "");
+    ZigLLVMBuildMemCpy(g->builder, msg_buffer_ptr_after, 1, err_name_ptr, 1, err_name_len, false);
 
-    LLVMValueRef global_slice_len_field_ptr = LLVMBuildStructGEP(g->builder, global_slice, slice_len_index, "");
-    gen_store(g, full_buf_len, global_slice_len_field_ptr, u8_ptr_type);
+    // Set the slice pointer
+    LLVMValueRef msg_slice_ptr_field_ptr = LLVMBuildStructGEP(g->builder, msg_slice, slice_ptr_index, "");
+    gen_store_untyped(g, msg_buffer_ptr, msg_slice_ptr_field_ptr, 0, false);
 
-    gen_panic(g, global_slice, err_ret_trace_arg);
+    // Set the slice length
+    LLVMValueRef slice_len = LLVMBuildNUWAdd(g->builder, msg_prefix_len, err_name_len, "");
+    LLVMValueRef msg_slice_len_field_ptr = LLVMBuildStructGEP(g->builder, msg_slice, slice_len_index, "");
+    gen_store_untyped(g, slice_len, msg_slice_len_field_ptr, 0, false);
+
+    // Call panic()
+    gen_panic(g, msg_slice, err_ret_trace_arg);
 
     LLVMPositionBuilderAtEnd(g->builder, prev_block);
     LLVMSetCurrentDebugLocation(g->builder, prev_debug_location);
@@ -7458,6 +7447,20 @@ static bool detect_pic(CodeGen *g) {
     zig_unreachable();
 }
 
+static bool detect_stack_probing(CodeGen *g) {
+    if (!target_supports_stack_probing(g->zig_target))
+        return false;
+    switch (g->want_stack_check) {
+        case WantStackCheckDisabled:
+            return false;
+        case WantStackCheckEnabled:
+            return true;
+        case WantStackCheckAuto:
+            return g->build_mode == BuildModeSafeRelease || g->build_mode == BuildModeDebug;
+    }
+    zig_unreachable();
+}
+
 static bool detect_single_threaded(CodeGen *g) {
     if (g->want_single_threaded)
         return true;
@@ -7476,6 +7479,7 @@ static bool detect_err_ret_tracing(CodeGen *g) {
 Buf *codegen_generate_builtin_source(CodeGen *g) {
     g->have_dynamic_link = detect_dynamic_link(g);
     g->have_pic = detect_pic(g);
+    g->have_stack_probing = detect_stack_probing(g);
     g->is_single_threaded = detect_single_threaded(g);
     g->have_err_ret_tracing = detect_err_ret_tracing(g);
 
@@ -7982,6 +7986,7 @@ static void init(CodeGen *g) {
 
     g->have_dynamic_link = detect_dynamic_link(g);
     g->have_pic = detect_pic(g);
+    g->have_stack_probing = detect_stack_probing(g);
     g->is_single_threaded = detect_single_threaded(g);
     g->have_err_ret_tracing = detect_err_ret_tracing(g);
 
@@ -7990,7 +7995,7 @@ static void init(CodeGen *g) {
     }
 
     if (g->is_test_build) {
-        g->subsystem = TargetSubsystemConsole;
+        g->subsystem = g->subsystem == TargetSubsystemAuto ? TargetSubsystemConsole : g->subsystem;
     }
 
     assert(g->root_out_name);
@@ -9077,8 +9082,11 @@ static void gen_h_file(CodeGen *g) {
     if (!out_h)
         zig_panic("unable to open %s: %s\n", buf_ptr(out_h_path), strerror(errno));
 
-    Buf *export_macro = preprocessor_mangle(buf_sprintf("%s_EXPORT", buf_ptr(g->root_out_name)));
-    buf_upcase(export_macro);
+    Buf *export_macro = nullptr;
+    if (g->is_dynamic) {
+        export_macro = preprocessor_mangle(buf_sprintf("%s_EXPORT", buf_ptr(g->root_out_name)));
+        buf_upcase(export_macro);
+    }
 
     Buf *extern_c_macro = preprocessor_mangle(buf_sprintf("%s_EXTERN_C", buf_ptr(g->root_out_name)));
     buf_upcase(extern_c_macro);
@@ -9103,10 +9111,11 @@ static void gen_h_file(CodeGen *g) {
             FnExport *fn_export = &fn_table_entry->export_list.items[0];
             symbol_name = &fn_export->name;
         }
+
         buf_appendf(&h_buf, "%s %s %s(",
-                buf_ptr(export_macro),
-                buf_ptr(&return_type_c),
-                buf_ptr(symbol_name));
+            buf_ptr(g->is_dynamic ? export_macro : extern_c_macro),
+            buf_ptr(&return_type_c),
+            buf_ptr(symbol_name));
 
         Buf param_type_c = BUF_INIT;
         if (fn_type_id->param_count > 0) {
@@ -9156,13 +9165,16 @@ static void gen_h_file(CodeGen *g) {
     fprintf(out_h, "#define %s\n", buf_ptr(extern_c_macro));
     fprintf(out_h, "#endif\n");
     fprintf(out_h, "\n");
-    fprintf(out_h, "#if defined(_WIN32)\n");
-    fprintf(out_h, "#define %s %s __declspec(dllimport)\n", buf_ptr(export_macro), buf_ptr(extern_c_macro));
-    fprintf(out_h, "#else\n");
-    fprintf(out_h, "#define %s %s __attribute__((visibility (\"default\")))\n",
+
+    if (g->is_dynamic) {
+        fprintf(out_h, "#if defined(_WIN32)\n");
+        fprintf(out_h, "#define %s %s __declspec(dllimport)\n", buf_ptr(export_macro), buf_ptr(extern_c_macro));
+        fprintf(out_h, "#else\n");
+        fprintf(out_h, "#define %s %s __attribute__((visibility (\"default\")))\n",
             buf_ptr(export_macro), buf_ptr(extern_c_macro));
-    fprintf(out_h, "#endif\n");
-    fprintf(out_h, "\n");
+        fprintf(out_h, "#endif\n");
+        fprintf(out_h, "\n");
+    }
 
     for (size_t type_i = 0; type_i < gen_h->types_to_declare.length; type_i += 1) {
         ZigType *type_entry = gen_h->types_to_declare.at(type_i);
@@ -9351,10 +9363,10 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->each_lib_rpath);
     cache_bool(ch, g->disable_gen_h);
     cache_bool(ch, g->bundle_compiler_rt);
-    cache_bool(ch, g->disable_stack_probing);
     cache_bool(ch, want_valgrind_support(g));
     cache_bool(ch, g->have_pic);
     cache_bool(ch, g->have_dynamic_link);
+    cache_bool(ch, g->have_stack_probing);
     cache_bool(ch, g->is_dummy_so);
     cache_buf_opt(ch, g->mmacosx_version_min);
     cache_buf_opt(ch, g->mios_version_min);

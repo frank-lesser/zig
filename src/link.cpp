@@ -25,7 +25,7 @@ static CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, Ou
     CodeGen *child_gen = codegen_create(nullptr, root_src_path, parent_gen->zig_target, out_type,
         parent_gen->build_mode, parent_gen->zig_lib_dir, parent_gen->zig_std_dir, libc, get_stage1_cache_path());
     child_gen->disable_gen_h = true;
-    child_gen->disable_stack_probing = true;
+    child_gen->want_stack_check = WantStackCheckDisabled;
     child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
     child_gen->verbose_ast = parent_gen->verbose_ast;
     child_gen->verbose_link = parent_gen->verbose_link;
@@ -776,14 +776,6 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
 }
 
 static Buf *build_a_raw(CodeGen *parent_gen, const char *aname, Buf *full_path, OutType child_out_type) {
-    // The Mach-O LLD code is not well maintained, and trips an assertion
-    // when we link compiler_rt and libc.zig as libraries rather than objects.
-    // Here we workaround this by having compiler_rt and libc.zig be objects.
-    // TODO write our own linker. https://github.com/ziglang/zig/issues/1535
-    if (parent_gen->zig_target->os == OsMacOSX) {
-        child_out_type = OutTypeObj;
-    }
-
     CodeGen *child_gen = create_child_codegen(parent_gen, full_path, child_out_type,
             parent_gen->libc);
     codegen_set_out_name(child_gen, buf_create_from_str(aname));
