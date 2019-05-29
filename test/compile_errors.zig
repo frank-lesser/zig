@@ -3,6 +3,23 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "undefined as field type is rejected",
+        \\const Foo = struct {
+        \\    a: undefined,
+        \\};
+        \\const Bar = union {
+        \\    a: undefined,
+        \\};
+        \\pub fn main() void {
+        \\    const foo: Foo = undefined;
+        \\    const bar: Bar = undefined;
+        \\}
+    ,
+        "tmp.zig:2:8: error: expected type 'type', found '(undefined)'",
+        "tmp.zig:5:8: error: expected type 'type', found '(undefined)'",
+    );
+
+    cases.add(
         "@hasDecl with non-container",
         \\export fn entry() void {
         \\    _ = @hasDecl(i32, "hi");
@@ -1202,7 +1219,6 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\}
     ,
         "tmp.zig:2:5: error: `_` is not a declarable symbol",
-        "tmp.zig:3:12: error: use of undeclared identifier '_'",
     );
 
     cases.add(
@@ -1215,7 +1231,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    }
         \\}
     ,
-        "tmp.zig:4:20: error: use of undeclared identifier '_'",
+        "tmp.zig:4:20: error: `_` may only be used to assign things to",
     );
 
     cases.add(
@@ -1231,7 +1247,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    return 1;
         \\}
     ,
-        "tmp.zig:4:20: error: use of undeclared identifier '_'",
+        "tmp.zig:4:20: error: `_` may only be used to assign things to",
     );
 
     cases.add(
@@ -1249,7 +1265,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    return error.optionalReturnError;
         \\}
     ,
-        "tmp.zig:6:17: error: use of undeclared identifier '_'",
+        "tmp.zig:6:17: error: `_` may only be used to assign things to",
     );
 
     cases.add(
