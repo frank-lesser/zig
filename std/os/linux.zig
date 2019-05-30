@@ -14,12 +14,12 @@ const vdso = @import("linux/vdso.zig");
 const dl = @import("../dynamic_library.zig");
 
 pub const is_the_target = builtin.os == .linux;
-pub use switch (builtin.arch) {
+pub usingnamespace switch (builtin.arch) {
     .x86_64 => @import("linux/x86_64.zig"),
     .aarch64 => @import("linux/arm64.zig"),
     else => struct {},
 };
-pub use @import("bits.zig");
+pub usingnamespace @import("bits.zig");
 pub const tls = @import("linux/tls.zig");
 
 /// Set by startup code, used by `getauxval`.
@@ -816,6 +816,10 @@ pub fn capget(hdrp: *cap_user_header_t, datap: *cap_user_data_t) usize {
 
 pub fn capset(hdrp: *cap_user_header_t, datap: *const cap_user_data_t) usize {
     return syscall2(SYS_capset, @ptrToInt(hdrp), @ptrToInt(datap));
+}
+
+pub fn sigaltstack(ss: ?*stack_t, old_ss: ?*stack_t) usize {
+    return syscall2(SYS_sigaltstack, @ptrToInt(ss), @ptrToInt(old_ss));
 }
 
 // XXX: This should be weak
