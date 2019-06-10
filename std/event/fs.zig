@@ -698,7 +698,7 @@ pub async fn readFile(loop: *Loop, file_path: []const u8, max_size: usize) ![]u8
     while (true) {
         try list.ensureCapacity(list.len + mem.page_size);
         const buf = list.items[list.len..];
-        const buf_array = [][]u8{buf};
+        const buf_array = [_][]u8{buf};
         const amt = try await (async preadv(loop, fd, buf_array, list.len) catch unreachable);
         list.len += amt;
         if (list.len > max_size) {
@@ -887,7 +887,7 @@ pub fn Watch(comptime V: type) type {
         }
 
         async fn addFileKEvent(self: *Self, file_path: []const u8, value: V) !?V {
-            const resolved_path = try std.fs.path.resolve(self.channel.loop.allocator, [][]const u8{file_path});
+            const resolved_path = try std.fs.path.resolve(self.channel.loop.allocator, [_][]const u8{file_path});
             var resolved_path_consumed = false;
             defer if (!resolved_path_consumed) self.channel.loop.allocator.free(resolved_path);
 

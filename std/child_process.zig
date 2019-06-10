@@ -13,7 +13,7 @@ const BufMap = std.BufMap;
 const Buffer = std.Buffer;
 const builtin = @import("builtin");
 const Os = builtin.Os;
-const LinkedList = std.LinkedList;
+const TailQueue = std.TailQueue;
 const maxInt = std.math.maxInt;
 
 pub const ChildProcess = struct {
@@ -48,7 +48,7 @@ pub const ChildProcess = struct {
     pub cwd: ?[]const u8,
 
     err_pipe: if (os.windows.is_the_target) void else [2]os.fd_t,
-    llnode: if (os.windows.is_the_target) void else LinkedList(*ChildProcess).Node,
+    llnode: if (os.windows.is_the_target) void else TailQueue(*ChildProcess).Node,
 
     pub const SpawnError = error{OutOfMemory} || os.ExecveError || os.SetIdError ||
         os.ChangeCurDirError || windows.CreateProcessError;
@@ -388,7 +388,7 @@ pub const ChildProcess = struct {
 
         self.pid = pid;
         self.err_pipe = err_pipe;
-        self.llnode = LinkedList(*ChildProcess).Node.init(self);
+        self.llnode = TailQueue(*ChildProcess).Node.init(self);
         self.term = null;
 
         if (self.stdin_behavior == StdIo.Pipe) {
@@ -523,7 +523,7 @@ pub const ChildProcess = struct {
         // to match posix semantics
         const app_name = x: {
             if (self.cwd) |cwd| {
-                const resolved = try fs.path.resolve(self.allocator, [][]const u8{ cwd, self.argv[0] });
+                const resolved = try fs.path.resolve(self.allocator, [_][]const u8{ cwd, self.argv[0] });
                 defer self.allocator.free(resolved);
                 break :x try cstr.addNullByte(self.allocator, resolved);
             } else {
@@ -546,7 +546,7 @@ pub const ChildProcess = struct {
 
             var it = mem.tokenize(PATH, ";");
             while (it.next()) |search_path| {
-                const joined_path = try fs.path.join(self.allocator, [][]const u8{ search_path, app_name });
+                const joined_path = try fs.path.join(self.allocator, [_][]const u8{ search_path, app_name });
                 defer self.allocator.free(joined_path);
 
                 const joined_path_w = try unicode.utf8ToUtf16LeWithNull(self.allocator, joined_path);
