@@ -13791,20 +13791,6 @@ static IrInstruction *ir_analyze_instruction_decl_var(IrAnalyze *ira,
     return ir_build_var_decl_gen(ira, &decl_var_instruction->base, var, casted_init_value);
 }
 
-static VarLinkage global_linkage_to_var_linkage(GlobalLinkageId id) {
-    switch (id) {
-        case GlobalLinkageIdStrong:
-            return VarLinkageExportStrong;
-        case GlobalLinkageIdWeak:
-            return VarLinkageExportWeak;
-        case GlobalLinkageIdLinkOnce:
-            return VarLinkageExportLinkOnce;
-        case GlobalLinkageIdInternal:
-            return VarLinkageInternal;
-    }
-    zig_unreachable();
-}
-
 static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructionExport *instruction) {
     IrInstruction *name = instruction->name->child;
     Buf *symbol_name = ir_resolve_str(ira, name);
@@ -13901,6 +13887,15 @@ static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructio
                 want_var_export = true;
             }
             break;
+        case ZigTypeIdArray:
+            if (!type_allowed_in_extern(ira->codegen, target->value.type->data.array.child_type)) {
+                ir_add_error(ira, target,
+                    buf_sprintf("array element type '%s' not extern-compatible",
+                        buf_ptr(&target->value.type->data.array.child_type->name)));
+            } else {
+                want_var_export = true;
+            }
+            break;
         case ZigTypeIdMetaType: {
             ZigType *type_value = target->value.data.x_type;
             switch (type_value->id) {
@@ -13968,7 +13963,6 @@ static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructio
         case ZigTypeIdInt:
         case ZigTypeIdFloat:
         case ZigTypeIdPointer:
-        case ZigTypeIdArray:
         case ZigTypeIdComptimeFloat:
         case ZigTypeIdComptimeInt:
         case ZigTypeIdUndefined:
@@ -13994,7 +13988,7 @@ static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructio
         if (load_ptr->ptr->id == IrInstructionIdVarPtr) {
             IrInstructionVarPtr *var_ptr = reinterpret_cast<IrInstructionVarPtr *>(load_ptr->ptr);
             ZigVar *var = var_ptr->var;
-            var->linkage = global_linkage_to_var_linkage(global_linkage_id);
+            add_var_export(ira->codegen, var, symbol_name, global_linkage_id);
         }
     }
 
@@ -14287,7 +14281,7 @@ static IrInstruction *ir_get_var_ptr(IrAnalyze *ira, IrInstruction *instruction,
     ConstExprValue *mem_slot = nullptr;
 
     bool comptime_var_mem = ir_get_var_is_comptime(var);
-    bool linkage_makes_it_runtime = var->linkage == VarLinkageExternal;
+    bool linkage_makes_it_runtime = var->decl_node->data.variable_declaration.is_extern;
     bool is_const = var->src_is_const;
     bool is_volatile = false;
 
@@ -16800,7 +16794,7 @@ static IrInstruction *ir_analyze_instruction_slice_type(IrAnalyze *ira,
         case ZigTypeIdPromise:
         case ZigTypeIdVector:
             {
-                if ((err = type_resolve(ira->codegen, child_type, ResolveStatusZeroBitsKnown)))
+                if ((err = type_resolve(ira->codegen, child_type, ResolveStatusAlignmentKnown)))
                     return ira->codegen->invalid_instruction;
                 ZigType *slice_ptr_type = get_pointer_to_type_extra(ira->codegen, child_type,
                         is_const, is_volatile, PtrLenUnknown, align_bytes, 0, 0, is_allow_zero);
@@ -18619,10 +18613,11 @@ static Error ir_make_type_info_decls(IrAnalyze *ira, IrInstruction *source_instr
                         true, false, PtrLenUnknown,
                         0, 0, 0, false);
                     fn_decl_fields[6].type = get_optional_type(ira->codegen, get_slice_type(ira->codegen, u8_ptr));
-                    if (fn_node->is_extern && buf_len(fn_node->lib_name) > 0) {
+                    if (fn_node->is_extern && fn_node->lib_name != nullptr && buf_len(fn_node->lib_name) > 0) {
                         fn_decl_fields[6].data.x_optional = create_const_vals(1);
                         ConstExprValue *lib_name = create_const_str_lit(ira->codegen, fn_node->lib_name);
-                        init_const_slice(ira->codegen, fn_decl_fields[6].data.x_optional, lib_name, 0, buf_len(fn_node->lib_name), true);
+                        init_const_slice(ira->codegen, fn_decl_fields[6].data.x_optional, lib_name, 0,
+                                buf_len(fn_node->lib_name), true);
                     } else {
                         fn_decl_fields[6].data.x_optional = nullptr;
                     }
