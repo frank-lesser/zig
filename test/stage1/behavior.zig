@@ -27,7 +27,6 @@ comptime {
     _ = @import("behavior/bugs/2114.zig");
     _ = @import("behavior/bugs/2346.zig");
     _ = @import("behavior/bugs/2578.zig");
-    _ = @import("behavior/bugs/2689.zig");
     _ = @import("behavior/bugs/394.zig");
     _ = @import("behavior/bugs/421.zig");
     _ = @import("behavior/bugs/529.zig");
@@ -70,6 +69,8 @@ comptime {
     _ = @import("behavior/optional.zig");
     _ = @import("behavior/pointers.zig");
     _ = @import("behavior/popcount.zig");
+    _ = @import("behavior/muladd.zig");
+    _ = @import("behavior/floatop.zig");
     _ = @import("behavior/ptrcast.zig");
     _ = @import("behavior/pub_enum.zig");
     _ = @import("behavior/ref_var_in_if_after_if_2nd_switch_prong.zig");
