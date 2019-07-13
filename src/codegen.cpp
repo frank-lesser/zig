@@ -24,9 +24,6 @@
 #include <stdio.h>
 #include <errno.h>
 
-#define CACHE_OUT_SUBDIR "o"
-#define CACHE_HASH_SUBDIR "h"
-
 static void init_darwin_native(CodeGen *g) {
     char *osx_target = getenv("MACOSX_DEPLOYMENT_TARGET");
     char *ios_target = getenv("IPHONEOS_DEPLOYMENT_TARGET");
@@ -202,7 +199,7 @@ CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget 
         g->link_libs_list.append(g->libc_link_lib);
     }
 
-    get_target_triple(&g->triple_str, g->zig_target);
+    target_triple_llvm(&g->llvm_triple_str, g->zig_target);
     g->pointer_size_bytes = target_arch_pointer_bit_width(g->zig_target->arch) / 8;
 
     if (!target_has_debug_info(g->zig_target)) {
@@ -5592,6 +5589,7 @@ static LLVMValueRef ir_render_instruction(CodeGen *g, IrExecutable *executable, 
         case IrInstructionIdByteOffsetOf:
         case IrInstructionIdBitOffsetOf:
         case IrInstructionIdTypeInfo:
+        case IrInstructionIdHasField:
         case IrInstructionIdTypeId:
         case IrInstructionIdSetEvalBranchQuota:
         case IrInstructionIdPtrType:
@@ -5634,6 +5632,7 @@ static LLVMValueRef ir_render_instruction(CodeGen *g, IrExecutable *executable, 
         case IrInstructionIdRef:
         case IrInstructionIdBitCastSrc:
         case IrInstructionIdTestErrSrc:
+        case IrInstructionIdUnionInitNamedField:
             zig_unreachable();
 
         case IrInstructionIdDeclVarGen:
@@ -7328,6 +7327,7 @@ static void define_builtin_fns(CodeGen *g) {
     create_builtin_fn(g, BuiltinFnIdMemberName, "memberName", 2);
     create_builtin_fn(g, BuiltinFnIdField, "field", 2);
     create_builtin_fn(g, BuiltinFnIdTypeInfo, "typeInfo", 1);
+    create_builtin_fn(g, BuiltinFnIdHasField, "hasField", 2);
     create_builtin_fn(g, BuiltinFnIdTypeof, "typeOf", 1); // TODO rename to TypeOf
     create_builtin_fn(g, BuiltinFnIdAddWithOverflow, "addWithOverflow", 4);
     create_builtin_fn(g, BuiltinFnIdSubWithOverflow, "subWithOverflow", 4);
@@ -7417,6 +7417,7 @@ static void define_builtin_fns(CodeGen *g) {
     create_builtin_fn(g, BuiltinFnIdFromBytes, "bytesToSlice", 2);
     create_builtin_fn(g, BuiltinFnIdThis, "This", 0);
     create_builtin_fn(g, BuiltinFnIdHasDecl, "hasDecl", 2);
+    create_builtin_fn(g, BuiltinFnIdUnionInit, "unionInit", 3);
 }
 
 static const char *bool_to_str(bool b) {
@@ -7919,6 +7920,14 @@ Buf *codegen_generate_builtin_source(CodeGen *g) {
     }
     {
         buf_appendf(contents,
+            "pub const Version = struct {\n"
+            "    major: u32,\n"
+            "    minor: u32,\n"
+            "    patch: u32,\n"
+            "};\n\n");
+    }
+    {
+        buf_appendf(contents,
         "pub const SubSystem = enum {\n"
         "    Console,\n"
         "    Windows,\n"
@@ -7948,6 +7957,15 @@ Buf *codegen_generate_builtin_source(CodeGen *g) {
     buf_appendf(contents, "pub const os = Os.%s;\n", cur_os);
     buf_appendf(contents, "pub const arch = %s;\n", cur_arch);
     buf_appendf(contents, "pub const abi = Abi.%s;\n", cur_abi);
+    if (g->libc_link_lib != nullptr && g->zig_target->glibc_version != nullptr) {
+        buf_appendf(contents,
+            "pub const glibc_version: ?Version = Version{.major = %d, .minor = %d, .patch = %d};\n",
+                g->zig_target->glibc_version->major,
+                g->zig_target->glibc_version->minor,
+                g->zig_target->glibc_version->patch);
+    } else {
+        buf_appendf(contents, "pub const glibc_version: ?Version = null;\n");
+    }
     buf_appendf(contents, "pub const object_format = ObjectFormat.%s;\n", cur_obj_fmt);
     buf_appendf(contents, "pub const mode = %s;\n", build_mode_to_str(g->build_mode));
     buf_appendf(contents, "pub const link_libc = %s;\n", bool_to_str(g->libc_link_lib != nullptr));
@@ -8004,6 +8022,11 @@ static Error define_builtin_compile_vars(CodeGen *g) {
     cache_int(&cache_hash, g->zig_target->vendor);
     cache_int(&cache_hash, g->zig_target->os);
     cache_int(&cache_hash, g->zig_target->abi);
+    if (g->zig_target->glibc_version != nullptr) {
+        cache_int(&cache_hash, g->zig_target->glibc_version->major);
+        cache_int(&cache_hash, g->zig_target->glibc_version->minor);
+        cache_int(&cache_hash, g->zig_target->glibc_version->patch);
+    }
     cache_bool(&cache_hash, g->have_err_ret_tracing);
     cache_bool(&cache_hash, g->libc_link_lib != nullptr);
     cache_bool(&cache_hash, g->valgrind_support);
@@ -8080,7 +8103,7 @@ static void init(CodeGen *g) {
     assert(g->root_out_name);
     g->module = LLVMModuleCreateWithName(buf_ptr(g->root_out_name));
 
-    LLVMSetTarget(g->module, buf_ptr(&g->triple_str));
+    LLVMSetTarget(g->module, buf_ptr(&g->llvm_triple_str));
 
     if (target_object_format(g->zig_target) == ZigLLVM_COFF) {
         ZigLLVMAddModuleCodeViewFlag(g->module);
@@ -8090,13 +8113,13 @@ static void init(CodeGen *g) {
 
     LLVMTargetRef target_ref;
     char *err_msg = nullptr;
-    if (LLVMGetTargetFromTriple(buf_ptr(&g->triple_str), &target_ref, &err_msg)) {
+    if (LLVMGetTargetFromTriple(buf_ptr(&g->llvm_triple_str), &target_ref, &err_msg)) {
         fprintf(stderr,
             "Zig is expecting LLVM to understand this target: '%s'\n"
             "However LLVM responded with: \"%s\"\n"
             "Zig is unable to continue. This is a bug in Zig:\n"
             "https://github.com/ziglang/zig/issues/438\n"
-        , buf_ptr(&g->triple_str), err_msg);
+        , buf_ptr(&g->llvm_triple_str), err_msg);
         exit(1);
     }
 
@@ -8130,8 +8153,9 @@ static void init(CodeGen *g) {
         target_specific_features = "";
     }
 
-    g->target_machine = LLVMCreateTargetMachine(target_ref, buf_ptr(&g->triple_str),
-            target_specific_cpu_args, target_specific_features, opt_level, reloc_mode, LLVMCodeModelDefault);
+    g->target_machine = ZigLLVMCreateTargetMachine(target_ref, buf_ptr(&g->llvm_triple_str),
+            target_specific_cpu_args, target_specific_features, opt_level, reloc_mode,
+            LLVMCodeModelDefault, g->function_sections);
 
     g->target_data_ref = LLVMCreateTargetDataLayout(g->target_machine);
 
@@ -8309,12 +8333,12 @@ static void detect_libc(CodeGen *g) {
         !target_os_is_darwin(g->zig_target->os))
     {
         Buf triple_buf = BUF_INIT;
-        get_target_triple(&triple_buf, g->zig_target);
+        target_triple_zig(&triple_buf, g->zig_target);
         fprintf(stderr,
             "Zig is unable to provide a libc for the chosen target '%s'.\n"
             "The target is non-native, so Zig also cannot use the native libc installation.\n"
-            "Choose a target which has a libc available, or provide a libc installation text file.\n"
-            "See `zig libc --help` for more details.\n", buf_ptr(&triple_buf));
+            "Choose a target which has a libc available (see `zig targets`), or\n"
+            "provide a libc installation text file (see `zig libc --help`).\n", buf_ptr(&triple_buf));
         exit(1);
     }
 }
@@ -8335,6 +8359,10 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
 
     args.append("-nostdinc");
     args.append("-fno-spell-checking");
+
+    if (g->function_sections) {
+        args.append("-ffunction-sections");
+    }
 
     if (translate_c) {
         // this gives us access to preprocessing entities, presumably at
@@ -8369,10 +8397,16 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
         args.append("-march=native");
     } else {
         args.append("-target");
-        args.append(buf_ptr(&g->triple_str));
+        args.append(buf_ptr(&g->llvm_triple_str));
     }
     if (g->zig_target->os == OsFreestanding) {
         args.append("-ffreestanding");
+    }
+
+    // windows.h has files such as pshpack1.h which do #pragma packing, triggering a clang warning.
+    // So for this target, we disable this warning.
+    if (g->zig_target->os == OsWindows && target_abi_is_gnu(g->zig_target->abi)) {
+        args.append("-Wno-pragma-pack");
     }
 
     if (!g->strip_debug_symbols) {
@@ -8606,6 +8640,38 @@ static Buf *get_resolved_root_src_path(CodeGen *g) {
     return resolved_path;
 }
 
+static bool want_startup_code(CodeGen *g) {
+    // Test builds get handled separately.
+    if (g->is_test_build)
+        return false;
+
+    // start code does not handle UEFI target
+    if (g->zig_target->os == OsUefi)
+        return false;
+
+    // WASM freestanding can still have an entry point but other freestanding targets do not.
+    if (g->zig_target->os == OsFreestanding && !target_is_wasm(g->zig_target))
+        return false;
+
+    // Declaring certain export functions means skipping the start code
+    if (g->have_c_main || g->have_winmain || g->have_winmain_crt_startup)
+        return false;
+
+    // If there is a pub main in the root source file, that means we need start code.
+    if (g->have_pub_main)
+        return true;
+
+    if (g->out_type == OutTypeExe) {
+        // For build-exe, we might add start code even though there is no pub main, so that the
+        // programmer gets the "no pub main" compile error. However if linking libc and there is
+        // a C source file, that might have main().
+        return g->c_source_files.length == 0 || g->libc_link_lib == nullptr;
+    }
+
+    // For objects and libraries, and we don't have pub main, no start code.
+    return false;
+}
+
 static void gen_root_source(CodeGen *g) {
     Buf *resolved_path = get_resolved_root_src_path(g);
     if (resolved_path == nullptr)
@@ -8646,11 +8712,7 @@ static void gen_root_source(CodeGen *g) {
     }
     report_errors_and_maybe_exit(g);
 
-    if (!g->is_test_build && (g->zig_target->os != OsFreestanding || target_is_wasm(g->zig_target)) &&
-        g->zig_target->os != OsUefi &&
-        !g->have_c_main && !g->have_winmain && !g->have_winmain_crt_startup &&
-        ((g->have_pub_main && g->out_type == OutTypeObj) || g->out_type == OutTypeExe))
-    {
+    if (want_startup_code(g)) {
         g->start_import = add_special_code(g, create_start_pkg(g, g->root_package), "start.zig");
     }
     if (g->zig_target->os == OsWindows && !g->have_dllmain_crt_startup &&
@@ -8679,10 +8741,10 @@ static void gen_root_source(CodeGen *g) {
 
 }
 
-static void print_zig_cc_cmd(const char *zig_exe, ZigList<const char *> *args) {
-    fprintf(stderr, "%s", zig_exe);
+static void print_zig_cc_cmd(ZigList<const char *> *args) {
     for (size_t arg_i = 0; arg_i < args->length; arg_i += 1) {
-        fprintf(stderr, " %s", args->at(arg_i));
+        const char *space_str = (arg_i == 0) ? "" : " ";
+        fprintf(stderr, "%s%s", space_str, args->at(arg_i));
     }
     fprintf(stderr, "\n");
 }
@@ -8732,6 +8794,7 @@ Error create_c_object_cache(CodeGen *g, CacheHash **out_cache_hash, bool verbose
     cache_int(cache_hash, g->build_mode);
     cache_bool(cache_hash, g->have_pic);
     cache_bool(cache_hash, want_valgrind_support(g));
+    cache_bool(cache_hash, g->function_sections);
     for (size_t arg_i = 0; arg_i < g->clang_argv_len; arg_i += 1) {
         cache_str(cache_hash, g->clang_argv[arg_i]);
     }
@@ -8819,12 +8882,12 @@ static void gen_c_object(CodeGen *g, Buf *self_exe_path, CFile *c_file) {
         }
 
         if (g->verbose_cc) {
-            print_zig_cc_cmd("zig", &args);
+            print_zig_cc_cmd(&args);
         }
         os_spawn_process(args, &term);
         if (term.how != TerminationIdClean || term.code != 0) {
             fprintf(stderr, "\nThe following command failed:\n");
-            print_zig_cc_cmd(buf_ptr(self_exe_path), &args);
+            print_zig_cc_cmd(&args);
             exit(1);
         }
 
@@ -9430,6 +9493,11 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_int(ch, g->zig_target->vendor);
     cache_int(ch, g->zig_target->os);
     cache_int(ch, g->zig_target->abi);
+    if (g->zig_target->glibc_version != nullptr) {
+        cache_int(ch, g->zig_target->glibc_version->major);
+        cache_int(ch, g->zig_target->glibc_version->minor);
+        cache_int(ch, g->zig_target->glibc_version->patch);
+    }
     cache_int(ch, detect_subsystem(g));
     cache_bool(ch, g->strip_debug_symbols);
     cache_bool(ch, g->is_test_build);
@@ -9447,6 +9515,7 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->have_dynamic_link);
     cache_bool(ch, g->have_stack_probing);
     cache_bool(ch, g->is_dummy_so);
+    cache_bool(ch, g->function_sections);
     cache_buf_opt(ch, g->mmacosx_version_min);
     cache_buf_opt(ch, g->mios_version_min);
     cache_usize(ch, g->version_major);
@@ -9463,6 +9532,7 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
         cache_buf(ch, &g->libc->kernel32_lib_dir);
     }
     cache_buf_opt(ch, g->dynamic_linker_path);
+    cache_buf_opt(ch, g->version_script_path);
 
     // gen_c_objects appends objects to g->link_objects which we want to include in the hash
     gen_c_objects(g);
@@ -9570,7 +9640,7 @@ void codegen_build_and_link(CodeGen *g) {
                 fprintf(stderr, "Unable to check cache: %s is not a directory\n",
                     buf_ptr(manifest_dir));
             } else {
-                fprintf(stderr, "Unable to check cache: %s\n", err_str(err));
+                fprintf(stderr, "Unable to check cache: %s: %s\n", buf_ptr(manifest_dir), err_str(err));
             }
             exit(1);
         }
@@ -9634,10 +9704,14 @@ void codegen_build_and_link(CodeGen *g) {
         }
     }
 
+    codegen_release_caches(g);
+    codegen_add_time_event(g, "Done");
+}
+
+void codegen_release_caches(CodeGen *g) {
     while (g->caches_to_release.length != 0) {
         cache_release(g->caches_to_release.pop());
     }
-    codegen_add_time_event(g, "Done");
 }
 
 ZigPackage *codegen_create_package(CodeGen *g, const char *root_src_dir, const char *root_src_path,
@@ -9656,3 +9730,35 @@ ZigPackage *codegen_create_package(CodeGen *g, const char *root_src_dir, const c
     }
     return pkg;
 }
+
+CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType out_type,
+        ZigLibCInstallation *libc)
+{
+    CodeGen *child_gen = codegen_create(nullptr, root_src_path, parent_gen->zig_target, out_type,
+        parent_gen->build_mode, parent_gen->zig_lib_dir, parent_gen->zig_std_dir, libc, get_stage1_cache_path());
+    child_gen->disable_gen_h = true;
+    child_gen->want_stack_check = WantStackCheckDisabled;
+    child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
+    child_gen->verbose_ast = parent_gen->verbose_ast;
+    child_gen->verbose_link = parent_gen->verbose_link;
+    child_gen->verbose_ir = parent_gen->verbose_ir;
+    child_gen->verbose_llvm_ir = parent_gen->verbose_llvm_ir;
+    child_gen->verbose_cimport = parent_gen->verbose_cimport;
+    child_gen->verbose_cc = parent_gen->verbose_cc;
+    child_gen->llvm_argv = parent_gen->llvm_argv;
+    child_gen->dynamic_linker_path = parent_gen->dynamic_linker_path;
+
+    codegen_set_strip(child_gen, parent_gen->strip_debug_symbols);
+    child_gen->want_pic = parent_gen->have_pic ? WantPICEnabled : WantPICDisabled;
+    child_gen->valgrind_support = ValgrindSupportDisabled;
+
+    codegen_set_errmsg_color(child_gen, parent_gen->err_color);
+
+    codegen_set_mmacosx_version_min(child_gen, parent_gen->mmacosx_version_min);
+    codegen_set_mios_version_min(child_gen, parent_gen->mios_version_min);
+
+    child_gen->enable_cache = true;
+
+    return child_gen;
+}
+
