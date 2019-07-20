@@ -3837,7 +3837,7 @@ static LLVMValueRef ir_render_call(CodeGen *g, IrExecutable *executable, IrInstr
         return result_loc;
     } else if (handle_is_ptr(src_return_type)) {
         LLVMValueRef store_instr = LLVMBuildStore(g->builder, result, result_loc);
-        LLVMSetAlignment(store_instr, LLVMGetAlignment(result_loc));
+        LLVMSetAlignment(store_instr, get_ptr_align(g, instruction->result_loc->value.type));
         return result_loc;
     } else {
         return result;
@@ -8267,10 +8267,16 @@ static void detect_libc(CodeGen *g) {
 
     if (target_can_build_libc(g->zig_target)) {
         const char *generic_name = target_libc_generic_name(g->zig_target);
-
+        const char *arch_name = target_arch_name(g->zig_target->arch);
+        const char *abi_name = target_abi_name(g->zig_target->abi);
+        if (target_is_musl(g->zig_target)) {
+            // musl has some overrides. its headers are ABI-agnostic and so they all have the "musl" ABI name.
+            abi_name = "musl";
+            // some architectures are handled by the same set of headers
+            arch_name = target_arch_musl_name(g->zig_target->arch);
+        }
         Buf *arch_include_dir = buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-%s-%s",
-                buf_ptr(g->zig_lib_dir), target_arch_name(g->zig_target->arch),
-                target_os_name(g->zig_target->os), target_abi_name(g->zig_target->abi));
+                buf_ptr(g->zig_lib_dir), arch_name, target_os_name(g->zig_target->os), abi_name);
         Buf *generic_include_dir = buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "generic-%s",
                 buf_ptr(g->zig_lib_dir), generic_name);
         Buf *arch_os_include_dir = buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-%s-any",
@@ -8384,14 +8390,15 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
         }
     }
 
-    args.append("-isystem");
-    args.append(buf_ptr(g->zig_c_headers_dir));
-
     for (size_t i = 0; i < g->libc_include_dir_len; i += 1) {
         Buf *include_dir = g->libc_include_dir_list[i];
         args.append("-isystem");
         args.append(buf_ptr(include_dir));
     }
+
+    // According to Rich Felker libc headers are supposed to go before C language headers.
+    args.append("-isystem");
+    args.append(buf_ptr(g->zig_c_headers_dir));
 
     if (g->zig_target->is_native) {
         args.append("-march=native");

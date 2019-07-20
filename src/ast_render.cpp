@@ -193,8 +193,8 @@ static const char *node_type_str(NodeType node_type) {
             return "Symbol";
         case NodeTypePrefixOpExpr:
             return "PrefixOpExpr";
-        case NodeTypeUse:
-            return "Use";
+        case NodeTypeUsingNamespace:
+            return "UsingNamespace";
         case NodeTypeBoolLiteral:
             return "BoolLiteral";
         case NodeTypeNullLiteral:
@@ -444,9 +444,8 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                 const char *extern_str = extern_string(node->data.fn_proto.is_extern);
                 const char *export_str = export_string(node->data.fn_proto.is_export);
                 const char *inline_str = inline_string(node->data.fn_proto.is_inline);
-                fprintf(ar->f, "%s%s%s%sfn", pub_str, inline_str, export_str, extern_str);
+                fprintf(ar->f, "%s%s%s%sfn ", pub_str, inline_str, export_str, extern_str);
                 if (node->data.fn_proto.name != nullptr) {
-                    fprintf(ar->f, " ");
                     print_symbol(ar, node->data.fn_proto.name);
                 }
                 fprintf(ar->f, "(");
@@ -792,7 +791,7 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                     AstNode *decls_node = node->data.container_decl.decls.at(decl_i);
                     render_node_grouped(ar, decls_node);
 
-                    if (decls_node->type == NodeTypeUse ||
+                    if (decls_node->type == NodeTypeUsingNamespace ||
                         decls_node->type == NodeTypeVariableDeclaration ||
                         decls_node->type == NodeTypeFnProto)
                     {
@@ -1171,7 +1170,7 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
         case NodeTypeParamDecl:
         case NodeTypeTestDecl:
         case NodeTypeStructField:
-        case NodeTypeUse:
+        case NodeTypeUsingNamespace:
             zig_panic("TODO more ast rendering");
     }
 }

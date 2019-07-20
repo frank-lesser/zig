@@ -571,6 +571,9 @@ static const MinGWDef mingw_def_list[] = {
     {"shell32", "lib-common" OS_SEP "shell32.def", true},
     {"user32", "lib-common" OS_SEP "user32.def.in", true},
     {"kernel32", "lib-common" OS_SEP "kernel32.def.in", true},
+    {"ntdll", "libarm32" OS_SEP "ntdll.def", true},
+    {"ntdll", "lib32" OS_SEP "ntdll.def", true},
+    {"ntdll", "lib64" OS_SEP "ntdll.def", true},
 };
 
 struct LinkJob {
@@ -911,39 +914,9 @@ static const char *glibc_start_asm_path(CodeGen *parent, const char *file) {
     return buf_ptr(&result);
 }
 
-static const char *musl_arch_name(const ZigTarget *target) {
-    switch (target->arch) {
-        case ZigLLVM_aarch64:
-        case ZigLLVM_aarch64_be:
-            return "aarch64";
-        case ZigLLVM_arm:
-        case ZigLLVM_armeb:
-            return "arm";
-        case ZigLLVM_mips:
-        case ZigLLVM_mipsel:
-            return "mips";
-        case ZigLLVM_mips64el:
-        case ZigLLVM_mips64:
-            return "mips64";
-        case ZigLLVM_ppc:
-            return "powerpc";
-        case ZigLLVM_ppc64:
-        case ZigLLVM_ppc64le:
-            return "powerpc64";
-        case ZigLLVM_systemz:
-            return "s390x";
-        case ZigLLVM_x86:
-            return "i386";
-        case ZigLLVM_x86_64:
-            return "x86_64";
-        default:
-            zig_unreachable();
-    }
-}
-
 static const char *musl_start_asm_path(CodeGen *parent, const char *file) {
     Buf *result = buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "crt" OS_SEP "%s" OS_SEP "%s",
-                   buf_ptr(parent->zig_lib_dir), musl_arch_name(parent->zig_target), file);
+                   buf_ptr(parent->zig_lib_dir), target_arch_musl_name(parent->zig_target->arch), file);
     return buf_ptr(result);
 }
 
@@ -958,18 +931,22 @@ static void musl_add_cc_args(CodeGen *parent, CFile *c_file, bool want_O3) {
 
     c_file->args.append("-I");
     c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "arch" OS_SEP "%s",
-            buf_ptr(parent->zig_lib_dir), musl_arch_name(parent->zig_target))));
+            buf_ptr(parent->zig_lib_dir), target_arch_musl_name(parent->zig_target->arch))));
 
     c_file->args.append("-I");
     c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "arch" OS_SEP "generic",
             buf_ptr(parent->zig_lib_dir))));
 
     c_file->args.append("-I");
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "src" OS_SEP "include",
+            buf_ptr(parent->zig_lib_dir)))); 
+
+    c_file->args.append("-I");
     c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "src" OS_SEP "internal",
             buf_ptr(parent->zig_lib_dir))));
 
     c_file->args.append("-I");
-    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "src" OS_SEP "include",
+    c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "musl" OS_SEP "include",
             buf_ptr(parent->zig_lib_dir))));
 
     c_file->args.append("-I");
@@ -1009,6 +986,7 @@ static const char *musl_arch_names[] = {
     "or1k",
     "powerpc",
     "powerpc64",
+    "riscv64",
     "s390x",
     "sh",
     "x32",
@@ -1036,7 +1014,7 @@ static const char *build_musl(CodeGen *parent) {
         MuslSrcO3,
     };
 
-    const char *target_musl_arch_name = musl_arch_name(parent->zig_target);
+    const char *target_musl_arch_name = target_arch_musl_name(parent->zig_target->arch);
 
     HashMap<Buf *, MuslSrc, buf_hash, buf_eql_buf> source_table = {};
     source_table.init(1800);
@@ -1797,11 +1775,15 @@ static void construct_linker_job_elf(LinkJob *lj) {
                 lj->args.append("--no-as-needed");
             }
         } else if (target_is_glibc(g->zig_target)) {
-            lj->args.append(build_libunwind(g));
+            if (target_supports_libunwind(g->zig_target)) {
+                lj->args.append(build_libunwind(g));
+            }
             add_glibc_libs(lj);
             lj->args.append(get_libc_crt_file(g, "libc_nonshared.a"));
         } else if (target_is_musl(g->zig_target)) {
-            lj->args.append(build_libunwind(g));
+            if (target_supports_libunwind(g->zig_target)) {
+                lj->args.append(build_libunwind(g));
+            }
             lj->args.append(build_musl(g));
         } else {
             zig_unreachable();
@@ -1901,8 +1883,7 @@ static void add_uefi_link_args(LinkJob *lj) {
 static void add_msvc_link_args(LinkJob *lj, bool is_library) {
     CodeGen *g = lj->codegen;
 
-    // TODO: https://github.com/ziglang/zig/issues/2064
-    bool is_dynamic = true; // g->is_dynamic;
+    bool is_dynamic = g->is_dynamic;
     const char *lib_str = is_dynamic ? "" : "lib";
     const char *d_str = (g->build_mode == BuildModeDebug) ? "d" : "";
 
@@ -2148,7 +2129,7 @@ static void add_win_link_args(LinkJob *lj, bool is_library, bool *have_windows_d
 
 static bool is_mingw_link_lib(Buf *name) {
     for (size_t def_i = 0; def_i < array_length(mingw_def_list); def_i += 1) {
-        if (buf_eql_str(name, mingw_def_list[def_i].name)) {
+        if (buf_eql_str_ignore_case(name, mingw_def_list[def_i].name)) {
             return true;
         }
     }
@@ -2262,50 +2243,54 @@ static void construct_linker_job_coff(LinkJob *lj) {
         if (buf_eql_str(link_lib->name, "c")) {
             continue;
         }
-        if (have_windows_dll_import_libs && is_mingw_link_lib(link_lib->name)) {
+        bool is_sys_lib = is_mingw_link_lib(link_lib->name);
+        if (have_windows_dll_import_libs && is_sys_lib) {
             continue;
         }
-        if (link_lib->provided_explicitly) {
+        // If we're linking in the CRT or the libs are provided explictly we don't want to generate def/libs
+        if ((lj->link_in_crt && is_sys_lib) || link_lib->provided_explicitly) {
             if (target_abi_is_gnu(lj->codegen->zig_target->abi)) {
-                Buf *lib_name = buf_sprintf("lib%s.a", buf_ptr(link_lib->name));
+                Buf* lib_name = buf_sprintf("lib%s.a", buf_ptr(link_lib->name));
                 lj->args.append(buf_ptr(lib_name));
-            } else {
-                lj->args.append(buf_ptr(link_lib->name));
             }
-        } else {
-            buf_resize(def_contents, 0);
-            buf_appendf(def_contents, "LIBRARY %s\nEXPORTS\n", buf_ptr(link_lib->name));
-            for (size_t exp_i = 0; exp_i < link_lib->symbols.length; exp_i += 1) {
-                Buf *symbol_name = link_lib->symbols.at(exp_i);
-                buf_appendf(def_contents, "%s\n", buf_ptr(symbol_name));
+            else {
+                Buf* lib_name = buf_sprintf("%s.lib", buf_ptr(link_lib->name));
+                lj->args.append(buf_ptr(lib_name));
             }
-            buf_appendf(def_contents, "\n");
-
-            Buf *def_path = buf_alloc();
-            os_path_join(g->output_dir, buf_sprintf("%s.def", buf_ptr(link_lib->name)), def_path);
-            if ((err = os_write_file(def_path, def_contents))) {
-                zig_panic("error writing def file: %s", err_str(err));
-            }
-
-            Buf *generated_lib_path = buf_alloc();
-            os_path_join(g->output_dir, buf_sprintf("%s.lib", buf_ptr(link_lib->name)), generated_lib_path);
-
-            gen_lib_args.resize(0);
-            gen_lib_args.append("link");
-
-            coff_append_machine_arg(g, &gen_lib_args);
-            gen_lib_args.append(buf_ptr(buf_sprintf("-DEF:%s", buf_ptr(def_path))));
-            gen_lib_args.append(buf_ptr(buf_sprintf("-OUT:%s", buf_ptr(generated_lib_path))));
-            Buf diag = BUF_INIT;
-            ZigLLVM_ObjectFormatType target_ofmt = target_object_format(g->zig_target);
-            if (!zig_lld_link(target_ofmt, gen_lib_args.items, gen_lib_args.length, &diag)) {
-                fprintf(stderr, "%s\n", buf_ptr(&diag));
-                exit(1);
-            }
-            lj->args.append(buf_ptr(generated_lib_path));
+            continue;
         }
-    }
 
+        buf_resize(def_contents, 0);
+        buf_appendf(def_contents, "LIBRARY %s\nEXPORTS\n", buf_ptr(link_lib->name));
+        for (size_t exp_i = 0; exp_i < link_lib->symbols.length; exp_i += 1) {
+            Buf *symbol_name = link_lib->symbols.at(exp_i);
+            buf_appendf(def_contents, "%s\n", buf_ptr(symbol_name));
+        }
+        buf_appendf(def_contents, "\n");
+
+        Buf *def_path = buf_alloc();
+        os_path_join(g->output_dir, buf_sprintf("%s.def", buf_ptr(link_lib->name)), def_path);
+        if ((err = os_write_file(def_path, def_contents))) {
+            zig_panic("error writing def file: %s", err_str(err));
+        }
+
+        Buf *generated_lib_path = buf_alloc();
+        os_path_join(g->output_dir, buf_sprintf("%s.lib", buf_ptr(link_lib->name)), generated_lib_path);
+
+        gen_lib_args.resize(0);
+        gen_lib_args.append("link");
+
+        coff_append_machine_arg(g, &gen_lib_args);
+        gen_lib_args.append(buf_ptr(buf_sprintf("-DEF:%s", buf_ptr(def_path))));
+        gen_lib_args.append(buf_ptr(buf_sprintf("-OUT:%s", buf_ptr(generated_lib_path))));
+        Buf diag = BUF_INIT;
+        ZigLLVM_ObjectFormatType target_ofmt = target_object_format(g->zig_target);
+        if (!zig_lld_link(target_ofmt, gen_lib_args.items, gen_lib_args.length, &diag)) {
+            fprintf(stderr, "%s\n", buf_ptr(&diag));
+            exit(1);
+        }
+        lj->args.append(buf_ptr(generated_lib_path));
+    }
 }
 
 

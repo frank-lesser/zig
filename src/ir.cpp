@@ -8430,7 +8430,7 @@ static IrInstruction *ir_gen_node_raw(IrBuilder *irb, AstNode *node, Scope *scop
     switch (node->type) {
         case NodeTypeStructValueField:
         case NodeTypeParamDecl:
-        case NodeTypeUse:
+        case NodeTypeUsingNamespace:
         case NodeTypeSwitchProng:
         case NodeTypeSwitchRange:
         case NodeTypeStructField:
@@ -14597,7 +14597,7 @@ static IrInstruction *ir_analyze_array_mult(IrAnalyze *ira, IrInstructionBinOp *
     for (uint64_t x = 0; x < mult_amt; x += 1) {
         for (uint64_t y = 0; y < old_array_len; y += 1) {
             copy_const_val(&out_val->data.x_array.data.s_none.elements[i],
-                &array_val->data.x_array.data.s_none.elements[y], true);
+                &array_val->data.x_array.data.s_none.elements[y], false);
             i += 1;
         }
     }
@@ -17129,6 +17129,7 @@ static IrInstruction *ir_analyze_instruction_phi(IrAnalyze *ira, IrInstructionPh
     for (size_t i = 0; i < new_incoming_values.length; i += 1) {
         IrInstruction *new_value = new_incoming_values.at(i);
         IrBasicBlock *predecessor = new_incoming_blocks.at(i);
+        ir_assert(predecessor->instruction_list.length != 0, &phi_instruction->base);
         IrInstruction *branch_instruction = predecessor->instruction_list.pop();
         ir_set_cursor_at_end(&ira->new_irb, predecessor);
         IrInstruction *casted_value = ir_implicit_cast(ira, new_value, resolved_type);
@@ -17846,6 +17847,7 @@ static IrInstruction *ir_analyze_decl_ref(IrAnalyze *ira, IrInstruction *source_
     switch (tld->id) {
         case TldIdContainer:
         case TldIdCompTime:
+        case TldIdUsingNamespace:
             zig_unreachable();
         case TldIdVar:
         {
