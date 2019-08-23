@@ -206,7 +206,20 @@ fn renderTopLevelDecl(allocator: *mem.Allocator, stream: var, tree: *ast.Tree, i
             } else if (field.type_expr != null and field.value_expr == null) {
                 try renderToken(tree, stream, field.name_token, indent, start_col, Space.None); // name
                 try renderToken(tree, stream, tree.nextToken(field.name_token), indent, start_col, Space.Space); // :
-                return renderExpression(allocator, stream, tree, indent, start_col, field.type_expr.?, Space.Comma); // type,
+
+                if (field.align_expr) |align_value_expr| {
+                    try renderExpression(allocator, stream, tree, indent, start_col, field.type_expr.?, Space.Space); // type
+                    const lparen_token = tree.prevToken(align_value_expr.firstToken());
+                    const align_kw = tree.prevToken(lparen_token);
+                    const rparen_token = tree.nextToken(align_value_expr.lastToken());
+                    try renderToken(tree, stream, align_kw, indent, start_col, Space.None); // align
+                    try renderToken(tree, stream, lparen_token, indent, start_col, Space.None); // (
+                    try renderExpression(allocator, stream, tree, indent, start_col, align_value_expr, Space.None); // alignment
+                    try renderToken(tree, stream, rparen_token, indent, start_col, Space.Comma); // )
+                } else {
+                    try renderExpression(allocator, stream, tree, indent, start_col, field.type_expr.?, Space.Comma); // type,
+                }
+
             } else if (field.type_expr == null and field.value_expr != null) {
                 try renderToken(tree, stream, field.name_token, indent, start_col, Space.Space); // name
                 try renderToken(tree, stream, tree.nextToken(field.name_token), indent, start_col, Space.Space); // =
@@ -282,20 +295,6 @@ fn renderExpression(
 
             try renderToken(tree, stream, comptime_node.comptime_token, indent, start_col, Space.Space);
             return renderExpression(allocator, stream, tree, indent, start_col, comptime_node.expr, space);
-        },
-
-        ast.Node.Id.AsyncAttribute => {
-            const async_attr = @fieldParentPtr(ast.Node.AsyncAttribute, "base", base);
-
-            if (async_attr.allocator_type) |allocator_type| {
-                try renderToken(tree, stream, async_attr.async_token, indent, start_col, Space.None); // async
-
-                try renderToken(tree, stream, tree.nextToken(async_attr.async_token), indent, start_col, Space.None); // <
-                try renderExpression(allocator, stream, tree, indent, start_col, allocator_type, Space.None); // allocator
-                return renderToken(tree, stream, tree.nextToken(allocator_type.lastToken()), indent, start_col, space); // >
-            } else {
-                return renderToken(tree, stream, async_attr.async_token, indent, start_col, space); // async
-            }
         },
 
         ast.Node.Id.Suspend => {
@@ -459,8 +458,8 @@ fn renderExpression(
 
             switch (suffix_op.op) {
                 @TagType(ast.Node.SuffixOp.Op).Call => |*call_info| {
-                    if (call_info.async_attr) |async_attr| {
-                        try renderExpression(allocator, stream, tree, indent, start_col, &async_attr.base, Space.Space);
+                    if (call_info.async_token) |async_token| {
+                        try renderToken(tree, stream, async_token, indent, start_col, Space.Space);
                     }
 
                     try renderExpression(allocator, stream, tree, indent, start_col, suffix_op.lhs, Space.None);
@@ -1121,10 +1120,6 @@ fn renderExpression(
                 try renderToken(tree, stream, cc_token, indent, start_col, Space.Space); // stdcallcc
             }
 
-            if (fn_proto.async_attr) |async_attr| {
-                try renderExpression(allocator, stream, tree, indent, start_col, &async_attr.base, Space.Space);
-            }
-
             const lparen = if (fn_proto.name_token) |name_token| blk: {
                 try renderToken(tree, stream, fn_proto.fn_token, indent, start_col, Space.Space); // fn
                 try renderToken(tree, stream, name_token, indent, start_col, Space.None); // name
@@ -1205,15 +1200,15 @@ fn renderExpression(
             }
         },
 
-        ast.Node.Id.PromiseType => {
-            const promise_type = @fieldParentPtr(ast.Node.PromiseType, "base", base);
+        ast.Node.Id.AnyFrameType => {
+            const anyframe_type = @fieldParentPtr(ast.Node.AnyFrameType, "base", base);
 
-            if (promise_type.result) |result| {
-                try renderToken(tree, stream, promise_type.promise_token, indent, start_col, Space.None); // promise
+            if (anyframe_type.result) |result| {
+                try renderToken(tree, stream, anyframe_type.anyframe_token, indent, start_col, Space.None); // anyframe
                 try renderToken(tree, stream, result.arrow_token, indent, start_col, Space.None); // ->
                 return renderExpression(allocator, stream, tree, indent, start_col, result.return_type, space);
             } else {
-                return renderToken(tree, stream, promise_type.promise_token, indent, start_col, space); // promise
+                return renderToken(tree, stream, anyframe_type.anyframe_token, indent, start_col, space); // anyframe
             }
         },
 
@@ -2020,7 +2015,13 @@ fn renderTokenOffset(
 
                     const after_comment_token = tree.tokens.at(token_index + offset);
                     const next_line_indent = switch (after_comment_token.id) {
-                        Token.Id.RParen, Token.Id.RBrace, Token.Id.RBracket => indent - indent_delta,
+                        Token.Id.RParen, Token.Id.RBrace, Token.Id.RBracket => blk: {
+                            if (indent > indent_delta) {
+                                break :blk indent - indent_delta;
+                            } else {
+                                break :blk 0;
+                            }
+                        },
                         else => indent,
                     };
                     try stream.writeByteNTimes(' ', next_line_indent);

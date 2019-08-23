@@ -65,7 +65,7 @@ pub const CreateFileError = error{
     InvalidUtf8,
 
     /// On Windows, file paths cannot contain these characters:
-    /// '/', '*', '?', '"', '<', '>', '|'
+    /// '*', '?', '"', '<', '>', '|', and '/' (when the ABI is not GNU)
     BadPathName,
 
     Unexpected,
@@ -138,10 +138,19 @@ pub const RtlGenRandomError = error{Unexpected};
 /// https://github.com/rust-lang-nursery/rand/issues/111
 /// https://bugzilla.mozilla.org/show_bug.cgi?id=504270
 pub fn RtlGenRandom(output: []u8) RtlGenRandomError!void {
-    if (advapi32.RtlGenRandom(output.ptr, output.len) == 0) {
-        switch (kernel32.GetLastError()) {
-            else => |err| return unexpectedError(err),
+    var total_read: usize = 0;
+    var buff: []u8 = output[0..];
+    const max_read_size: ULONG = maxInt(ULONG);
+
+    while (total_read < output.len) {
+        const to_read: ULONG = math.min(buff.len, max_read_size);
+
+        if (advapi32.RtlGenRandom(buff.ptr, to_read) == 0) {
+            return unexpectedError(kernel32.GetLastError());
         }
+
+        total_read += to_read;
+        buff = buff[to_read..];
     }
 }
 
@@ -827,11 +836,10 @@ pub fn sliceToPrefixedSuffixedFileW(s: []const u8, comptime suffix: []const u16)
     // > converting the name to an NT-style name, except when using the "\\?\"
     // > prefix as detailed in the following sections.
     // from https://docs.microsoft.com/en-us/windows/desktop/FileIO/naming-a-file#maximum-path-length-limitation
-    // Because we want the larger maximum path length for absolute paths, we
-    // disallow forward slashes in zig std lib file functions on Windows.
     for (s) |byte| {
         switch (byte) {
-            '/', '*', '?', '"', '<', '>', '|' => return error.BadPathName,
+            '*', '?', '"', '<', '>', '|' => return error.BadPathName,
+            '/' => if (builtin.abi == .msvc) return error.BadPathName,
             else => {},
         }
     }
@@ -865,7 +873,6 @@ pub fn unexpectedError(err: DWORD) std.os.UnexpectedError {
     }
     return error.Unexpected;
 }
-
 
 /// Call this when you made a windows NtDll call
 /// and you get an unexpected status.
