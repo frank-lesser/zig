@@ -47,11 +47,11 @@ const hashes = [_]Hash{
         .name = "adler32",
     },
     Hash{
-        .ty = hash.crc.Crc32WithPoly(.IEEE),
+        .ty = hash.crc.Crc32WithPoly(hash.crc.Polynomial.IEEE),
         .name = "crc32-slicing-by-8",
     },
     Hash{
-        .ty = hash.crc.Crc32SmallWithPoly(.IEEE),
+        .ty = hash.crc.Crc32SmallWithPoly(hash.crc.Polynomial.IEEE),
         .name = "crc32-half-byte-lookup",
     },
     Hash{
@@ -86,7 +86,7 @@ const Result = struct {
     throughput: u64,
 };
 
-const block_size: usize = 8192;
+const block_size: usize = 8 * 8192;
 
 pub fn benchmarkHash(comptime H: var, bytes: usize) !Result {
     var h = blk: {

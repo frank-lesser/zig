@@ -1,4 +1,5 @@
-const expect = @import("std").testing.expect;
+const std = @import("std");
+const expect = std.testing.expect;
 const builtin = @import("builtin");
 
 var foo: u8 align(4) = 100;
@@ -289,4 +290,41 @@ var default_aligned_global = DefaultAligned{
 test "read 128-bit field from default aligned struct in global memory" {
     expect((@ptrToInt(&default_aligned_global.badguy) % 16) == 0);
     expect(12 == default_aligned_global.badguy);
+}
+
+test "struct field explicit alignment" {
+    const S = struct {
+        const Node = struct {
+            next: *Node,
+            massive_byte: u8 align(64),
+        };
+    };
+
+    var node: S.Node = undefined;
+    node.massive_byte = 100;
+    expect(node.massive_byte == 100);
+    comptime expect(@typeOf(&node.massive_byte) == *align(64) u8);
+    expect(@ptrToInt(&node.massive_byte) % 64 == 0);
+}
+
+test "align(@alignOf(T)) T does not force resolution of T" {
+    const S = struct {
+        const A = struct {
+            a: *align(@alignOf(A)) A,
+        };
+        fn doTheTest() void {
+            suspend {
+                resume @frame();
+            }
+            _ = bar(@Frame(doTheTest));
+        }
+        fn bar(comptime T: type) *align(@alignOf(T)) T {
+            ok = true;
+            return undefined;
+        }
+
+        var ok = false;
+    };
+    _ = async S.doTheTest();
+    expect(S.ok);
 }
