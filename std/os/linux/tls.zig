@@ -47,7 +47,7 @@ const TLSVariant = enum {
 };
 
 const tls_variant = switch (builtin.arch) {
-    .arm, .armeb, .aarch64, .aarch64_be => TLSVariant.VariantI,
+    .arm, .armeb, .aarch64, .aarch64_be, .riscv32, .riscv64, .mipsel => TLSVariant.VariantI,
     .x86_64, .i386 => TLSVariant.VariantII,
     else => @compileError("undefined tls_variant for this architecture"),
 };
@@ -57,13 +57,18 @@ const tls_tcb_size = switch (builtin.arch) {
     // ARM EABI mandates enough space for two pointers: the first one points to
     // the DTV while the second one is unspecified but reserved
     .arm, .armeb, .aarch64, .aarch64_be => 2 * @sizeOf(usize),
-    .i386, .x86_64 => @sizeOf(usize),
-    else => 0,
+    else => @sizeOf(usize),
 };
 
 // Controls if the TCB should be aligned according to the TLS segment p_align
 const tls_tcb_align_size = switch (builtin.arch) {
     .arm, .armeb, .aarch64, .aarch64_be => true,
+    else => false,
+};
+
+// Controls if the TP points to the end of the TCB instead of its beginning
+const tls_tp_points_past_tcb = switch (builtin.arch) {
+    .riscv32, .riscv64, .mipsel, .powerpc64, .powerpc64le => true,
     else => false,
 };
 
@@ -78,10 +83,12 @@ comptime {
 // make the generated code more efficient
 
 const tls_tp_offset = switch (builtin.arch) {
+    .mipsel => 0x7000,
     else => 0,
 };
 
 const tls_dtv_offset = switch (builtin.arch) {
+    .mipsel => 0x8000,
     else => 0,
 };
 
@@ -118,11 +125,22 @@ pub fn setThreadPointer(addr: usize) void {
                 : [addr] "r" (addr)
             );
         },
+        .arm => |arm| {
+            const rc = std.os.linux.syscall1(std.os.linux.SYS_set_tls, addr);
+            assert(rc == 0);
+        },
+        .riscv64 => {
+            asm volatile (
+                \\ mv tp, %[addr]
+                :
+                : [addr] "r" (addr)
+            );
+        },
         else => @compileError("Unsupported architecture"),
     }
 }
 
-pub fn initTLS() void {
+pub fn initTLS() ?*elf.Phdr {
     var tls_phdr: ?*elf.Phdr = null;
     var img_base: usize = 0;
 
@@ -130,6 +148,7 @@ pub fn initTLS() void {
     var at_phent: usize = undefined;
     var at_phnum: usize = undefined;
     var at_phdr: usize = undefined;
+    var at_hwcap: usize = undefined;
 
     var i: usize = 0;
     while (auxv[i].a_type != std.elf.AT_NULL) : (i += 1) {
@@ -137,6 +156,7 @@ pub fn initTLS() void {
             elf.AT_PHENT => at_phent = auxv[i].a_un.a_val,
             elf.AT_PHNUM => at_phnum = auxv[i].a_un.a_val,
             elf.AT_PHDR => at_phdr = auxv[i].a_un.a_val,
+            elf.AT_HWCAP => at_hwcap = auxv[i].a_un.a_val,
             else => continue,
         }
     }
@@ -147,15 +167,26 @@ pub fn initTLS() void {
     // Search the TLS section
     const phdrs = (@intToPtr([*]elf.Phdr, at_phdr))[0..at_phnum];
 
+    var gnu_stack: ?*elf.Phdr = null;
+
     for (phdrs) |*phdr| {
         switch (phdr.p_type) {
             elf.PT_PHDR => img_base = at_phdr - phdr.p_vaddr,
             elf.PT_TLS => tls_phdr = phdr,
+            elf.PT_GNU_STACK => gnu_stack = phdr,
             else => continue,
         }
     }
 
     if (tls_phdr) |phdr| {
+        // If the cpu is arm-based, check if it supports the TLS register
+        if (builtin.arch == builtin.Arch.arm and at_hwcap & std.os.linux.HWCAP_TLS == 0) {
+            // If the CPU does not support TLS via a coprocessor register,
+            // a kernel helper function can be used instead on certain linux kernels.
+            // See linux/arch/arm/include/asm/tls.h and musl/src/thread/arm/__set_thread_area.c.
+            @panic("TODO: Implement ARM fallback TLS functionality");
+        }
+
         // Offsets into the allocated TLS area
         var tcb_offset: usize = undefined;
         var dtv_offset: usize = undefined;
@@ -204,6 +235,8 @@ pub fn initTLS() void {
             .data_offset = data_offset,
         };
     }
+
+    return gnu_stack;
 }
 
 pub fn copyTLS(addr: usize) usize {
@@ -226,7 +259,8 @@ pub fn copyTLS(addr: usize) usize {
     @memcpy(@intToPtr([*]u8, addr + tls_img.data_offset), tls_img.data_src.ptr, tls_img.data_src.len);
 
     // Return the corrected (if needed) value for the tp register
-    return addr + tls_img.tcb_offset + tls_tp_offset;
+    return addr + tls_tp_offset +
+        if (tls_tp_points_past_tcb) tls_img.data_offset else tls_img.tcb_offset;
 }
 
 var main_thread_tls_buffer: [256]u8 align(32) = undefined;

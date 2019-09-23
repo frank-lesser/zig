@@ -330,14 +330,16 @@ pub fn writeCurrentStackTraceWindows(
     }
 }
 
+/// TODO once https://github.com/ziglang/zig/issues/3157 is fully implemented,
+/// make this `noasync fn` and remove the individual noasync calls.
 pub fn printSourceAtAddress(debug_info: *DebugInfo, out_stream: var, address: usize, tty_color: bool) !void {
     if (windows.is_the_target) {
-        return printSourceAtAddressWindows(debug_info, out_stream, address, tty_color);
+        return noasync printSourceAtAddressWindows(debug_info, out_stream, address, tty_color);
     }
     if (os.darwin.is_the_target) {
-        return printSourceAtAddressMacOs(debug_info, out_stream, address, tty_color);
+        return noasync printSourceAtAddressMacOs(debug_info, out_stream, address, tty_color);
     }
-    return printSourceAtAddressPosix(debug_info, out_stream, address, tty_color);
+    return noasync printSourceAtAddressPosix(debug_info, out_stream, address, tty_color);
 }
 
 fn printSourceAtAddressWindows(di: *DebugInfo, out_stream: var, relocated_address: usize, tty_color: bool) !void {
@@ -793,7 +795,7 @@ fn printLineInfo(
                 try out_stream.write(GREEN ++ "^" ++ RESET ++ "\n");
             }
         } else |err| switch (err) {
-            error.EndOfFile => {},
+            error.EndOfFile, error.FileNotFound => {},
             else => return err,
         }
     } else {
@@ -816,16 +818,18 @@ pub const OpenSelfDebugInfoError = error{
     UnsupportedOperatingSystem,
 };
 
+/// TODO once https://github.com/ziglang/zig/issues/3157 is fully implemented,
+/// make this `noasync fn` and remove the individual noasync calls.
 pub fn openSelfDebugInfo(allocator: *mem.Allocator) !DebugInfo {
     if (builtin.strip_debug_info)
         return error.MissingDebugInfo;
     if (windows.is_the_target) {
-        return openSelfDebugInfoWindows(allocator);
+        return noasync openSelfDebugInfoWindows(allocator);
     }
     if (os.darwin.is_the_target) {
-        return openSelfDebugInfoMacOs(allocator);
+        return noasync openSelfDebugInfoMacOs(allocator);
     }
-    return openSelfDebugInfoPosix(allocator);
+    return noasync openSelfDebugInfoPosix(allocator);
 }
 
 fn openSelfDebugInfoWindows(allocator: *mem.Allocator) !DebugInfo {
@@ -1053,7 +1057,8 @@ fn openSelfDebugInfoPosix(allocator: *mem.Allocator) !DwarfInfo {
     S.self_exe_file = try fs.openSelfExe();
     errdefer S.self_exe_file.close();
 
-    const self_exe_mmap_len = mem.alignForward(try S.self_exe_file.getEndPos(), mem.page_size);
+    const self_exe_len = math.cast(usize, try S.self_exe_file.getEndPos()) catch return error.DebugInfoTooLarge;
+    const self_exe_mmap_len = mem.alignForward(self_exe_len, mem.page_size);
     const self_exe_mmap = try os.mmap(
         null,
         self_exe_mmap_len,
@@ -1473,10 +1478,11 @@ const LineNumberProgram = struct {
     }
 };
 
+// TODO the noasyncs here are workarounds
 fn readStringRaw(allocator: *mem.Allocator, in_stream: var) ![]u8 {
     var buf = ArrayList(u8).init(allocator);
     while (true) {
-        const byte = try in_stream.readByte();
+        const byte = try noasync in_stream.readByte();
         if (byte == 0) break;
         try buf.append(byte);
     }
@@ -1489,10 +1495,11 @@ fn getString(di: *DwarfInfo, offset: u64) ![]u8 {
     return di.readString();
 }
 
+// TODO the noasyncs here are workarounds
 fn readAllocBytes(allocator: *mem.Allocator, in_stream: var, size: usize) ![]u8 {
     const buf = try allocator.alloc(u8, size);
     errdefer allocator.free(buf);
-    if ((try in_stream.read(buf)) < size) return error.EndOfFile;
+    if ((try noasync in_stream.read(buf)) < size) return error.EndOfFile;
     return buf;
 }
 
@@ -1501,48 +1508,69 @@ fn parseFormValueBlockLen(allocator: *mem.Allocator, in_stream: var, size: usize
     return FormValue{ .Block = buf };
 }
 
+// TODO the noasyncs here are workarounds
 fn parseFormValueBlock(allocator: *mem.Allocator, in_stream: var, size: usize) !FormValue {
-    const block_len = try in_stream.readVarInt(usize, builtin.Endian.Little, size);
+    const block_len = try noasync in_stream.readVarInt(usize, builtin.Endian.Little, size);
     return parseFormValueBlockLen(allocator, in_stream, block_len);
 }
 
 fn parseFormValueConstant(allocator: *mem.Allocator, in_stream: var, signed: bool, comptime size: i32) !FormValue {
+    // TODO: Please forgive me, I've worked around zig not properly spilling some intermediate values here.
+    // `noasync` should be removed from all the function calls once it is fixed.
     return FormValue{
         .Const = Constant{
             .signed = signed,
             .payload = switch (size) {
-                1 => try in_stream.readIntLittle(u8),
-                2 => try in_stream.readIntLittle(u16),
-                4 => try in_stream.readIntLittle(u32),
-                8 => try in_stream.readIntLittle(u64),
-                -1 => if (signed) @bitCast(u64, try leb.readILEB128(i64, in_stream)) else try leb.readULEB128(u64, in_stream),
+                1 => try noasync in_stream.readIntLittle(u8),
+                2 => try noasync in_stream.readIntLittle(u16),
+                4 => try noasync in_stream.readIntLittle(u32),
+                8 => try noasync in_stream.readIntLittle(u64),
+                -1 => blk: {
+                    if (signed) {
+                        const x = try noasync leb.readILEB128(i64, in_stream);
+                        break :blk @bitCast(u64, x);
+                    } else {
+                        const x = try noasync leb.readULEB128(u64, in_stream);
+                        break :blk x;
+                    }
+                },
                 else => @compileError("Invalid size"),
             },
         },
     };
 }
 
+// TODO the noasyncs here are workarounds
 fn parseFormValueDwarfOffsetSize(in_stream: var, is_64: bool) !u64 {
-    return if (is_64) try in_stream.readIntLittle(u64) else u64(try in_stream.readIntLittle(u32));
+    return if (is_64) try noasync in_stream.readIntLittle(u64) else u64(try noasync in_stream.readIntLittle(u32));
 }
 
+// TODO the noasyncs here are workarounds
 fn parseFormValueTargetAddrSize(in_stream: var) !u64 {
-    return if (@sizeOf(usize) == 4) u64(try in_stream.readIntLittle(u32)) else if (@sizeOf(usize) == 8) try in_stream.readIntLittle(u64) else unreachable;
+    if (@sizeOf(usize) == 4) {
+        return u64(try noasync in_stream.readIntLittle(u32));
+    } else if (@sizeOf(usize) == 8) {
+        return noasync in_stream.readIntLittle(u64);
+    } else {
+        unreachable;
+    }
 }
 
+// TODO the noasyncs here are workarounds
 fn parseFormValueRef(allocator: *mem.Allocator, in_stream: var, size: i32) !FormValue {
     return FormValue{
         .Ref = switch (size) {
-            1 => try in_stream.readIntLittle(u8),
-            2 => try in_stream.readIntLittle(u16),
-            4 => try in_stream.readIntLittle(u32),
-            8 => try in_stream.readIntLittle(u64),
-            -1 => try leb.readULEB128(u64, in_stream),
+            1 => try noasync in_stream.readIntLittle(u8),
+            2 => try noasync in_stream.readIntLittle(u16),
+            4 => try noasync in_stream.readIntLittle(u32),
+            8 => try noasync in_stream.readIntLittle(u64),
+            -1 => try noasync leb.readULEB128(u64, in_stream),
             else => unreachable,
         },
     };
 }
 
+// TODO the noasyncs here are workarounds
 fn parseFormValue(allocator: *mem.Allocator, in_stream: var, form_id: u64, is_64: bool) anyerror!FormValue {
     return switch (form_id) {
         DW.FORM_addr => FormValue{ .Address = try parseFormValueTargetAddrSize(in_stream) },
@@ -1550,7 +1578,7 @@ fn parseFormValue(allocator: *mem.Allocator, in_stream: var, form_id: u64, is_64
         DW.FORM_block2 => parseFormValueBlock(allocator, in_stream, 2),
         DW.FORM_block4 => parseFormValueBlock(allocator, in_stream, 4),
         DW.FORM_block => x: {
-            const block_len = try leb.readULEB128(usize, in_stream);
+            const block_len = try noasync leb.readULEB128(usize, in_stream);
             return parseFormValueBlockLen(allocator, in_stream, block_len);
         },
         DW.FORM_data1 => parseFormValueConstant(allocator, in_stream, false, 1),
@@ -1562,11 +1590,11 @@ fn parseFormValue(allocator: *mem.Allocator, in_stream: var, form_id: u64, is_64
             return parseFormValueConstant(allocator, in_stream, signed, -1);
         },
         DW.FORM_exprloc => {
-            const size = try leb.readULEB128(usize, in_stream);
+            const size = try noasync leb.readULEB128(usize, in_stream);
             const buf = try readAllocBytes(allocator, in_stream, size);
             return FormValue{ .ExprLoc = buf };
         },
-        DW.FORM_flag => FormValue{ .Flag = (try in_stream.readByte()) != 0 },
+        DW.FORM_flag => FormValue{ .Flag = (try noasync in_stream.readByte()) != 0 },
         DW.FORM_flag_present => FormValue{ .Flag = true },
         DW.FORM_sec_offset => FormValue{ .SecOffset = try parseFormValueDwarfOffsetSize(in_stream, is_64) },
 
@@ -1577,13 +1605,16 @@ fn parseFormValue(allocator: *mem.Allocator, in_stream: var, form_id: u64, is_64
         DW.FORM_ref_udata => parseFormValueRef(allocator, in_stream, -1),
 
         DW.FORM_ref_addr => FormValue{ .RefAddr = try parseFormValueDwarfOffsetSize(in_stream, is_64) },
-        DW.FORM_ref_sig8 => FormValue{ .Ref = try in_stream.readIntLittle(u64) },
+        DW.FORM_ref_sig8 => FormValue{ .Ref = try noasync in_stream.readIntLittle(u64) },
 
         DW.FORM_string => FormValue{ .String = try readStringRaw(allocator, in_stream) },
         DW.FORM_strp => FormValue{ .StrPtr = try parseFormValueDwarfOffsetSize(in_stream, is_64) },
         DW.FORM_indirect => {
-            const child_form_id = try leb.readULEB128(u64, in_stream);
-            return parseFormValue(allocator, in_stream, child_form_id, is_64);
+            const child_form_id = try noasync leb.readULEB128(u64, in_stream);
+            const F = @typeOf(async parseFormValue(allocator, in_stream, child_form_id, is_64));
+            var frame = try allocator.create(F);
+            defer allocator.destroy(frame);
+            return await @asyncCall(frame, {}, parseFormValue, allocator, in_stream, child_form_id, is_64);
         },
         else => error.InvalidDebugInfo,
     };
@@ -1637,28 +1668,9 @@ fn getAbbrevTableEntry(abbrev_table: *const AbbrevTable, abbrev_code: u64) ?*con
     return null;
 }
 
-fn parseDie1(di: *DwarfInfo, abbrev_table: *const AbbrevTable, is_64: bool) !?Die {
+fn parseDie(di: *DwarfInfo, abbrev_table: *const AbbrevTable, is_64: bool) !?Die {
     const abbrev_code = try leb.readULEB128(u64, di.dwarf_in_stream);
     if (abbrev_code == 0) return null;
-    const table_entry = getAbbrevTableEntry(abbrev_table, abbrev_code) orelse return error.InvalidDebugInfo;
-
-    var result = Die{
-        .tag_id = table_entry.tag_id,
-        .has_children = table_entry.has_children,
-        .attrs = ArrayList(Die.Attr).init(di.allocator()),
-    };
-    try result.attrs.resize(table_entry.attrs.len);
-    for (table_entry.attrs.toSliceConst()) |attr, i| {
-        result.attrs.items[i] = Die.Attr{
-            .id = attr.attr_id,
-            .value = try parseFormValue(di.allocator(), di.dwarf_in_stream, attr.form_id, is_64),
-        };
-    }
-    return result;
-}
-
-fn parseDie(di: *DwarfInfo, abbrev_table: *const AbbrevTable, is_64: bool) !Die {
-    const abbrev_code = try leb.readULEB128(u64, di.dwarf_in_stream);
     const table_entry = getAbbrevTableEntry(abbrev_table, abbrev_code) orelse return error.InvalidDebugInfo;
 
     var result = Die{
@@ -2085,7 +2097,7 @@ fn scanAllFunctions(di: *DwarfInfo) !void {
         const next_unit_pos = this_unit_offset + next_offset;
 
         while ((try di.dwarf_seekable_stream.getPos()) < next_unit_pos) {
-            const die_obj = (try parseDie1(di, abbrev_table, is_64)) orelse continue;
+            const die_obj = (try parseDie(di, abbrev_table, is_64)) orelse continue;
             const after_die_offset = try di.dwarf_seekable_stream.getPos();
 
             switch (die_obj.tag_id) {
@@ -2103,13 +2115,13 @@ fn scanAllFunctions(di: *DwarfInfo) !void {
                                 const ref_offset = try this_die_obj.getAttrRef(DW.AT_abstract_origin);
                                 if (ref_offset > next_offset) return error.InvalidDebugInfo;
                                 try di.dwarf_seekable_stream.seekTo(this_unit_offset + ref_offset);
-                                this_die_obj = (try parseDie1(di, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
+                                this_die_obj = (try parseDie(di, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
                             } else if (this_die_obj.getAttr(DW.AT_specification)) |ref| {
                                 // Follow the DIE it points to and repeat
                                 const ref_offset = try this_die_obj.getAttrRef(DW.AT_specification);
                                 if (ref_offset > next_offset) return error.InvalidDebugInfo;
                                 try di.dwarf_seekable_stream.seekTo(this_unit_offset + ref_offset);
-                                this_die_obj = (try parseDie1(di, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
+                                this_die_obj = (try parseDie(di, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
                             } else {
                                 break :x null;
                             }
@@ -2185,7 +2197,7 @@ fn scanAllCompileUnits(di: *DwarfInfo) !void {
         try di.dwarf_seekable_stream.seekTo(compile_unit_pos);
 
         const compile_unit_die = try di.allocator().create(Die);
-        compile_unit_die.* = try parseDie(di, abbrev_table, is_64);
+        compile_unit_die.* = (try parseDie(di, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
 
         if (compile_unit_die.tag_id != DW.TAG_compile_unit) return error.InvalidDebugInfo;
 
@@ -2401,3 +2413,9 @@ stdcallcc fn handleSegfaultWindows(info: *windows.EXCEPTION_POINTERS) c_long {
         else => return windows.EXCEPTION_CONTINUE_SEARCH,
     }
 }
+
+pub fn dumpStackPointerAddr(prefix: []const u8) void {
+    const sp = asm ("" : [argc] "={rsp}" (-> usize));
+    std.debug.warn("{} sp = 0x{x}\n", prefix, sp);
+}
+

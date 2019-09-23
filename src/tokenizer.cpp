@@ -132,6 +132,8 @@ static const struct ZigKeyword zig_keywords[] = {
     {"inline", TokenIdKeywordInline},
     {"nakedcc", TokenIdKeywordNakedCC},
     {"noalias", TokenIdKeywordNoAlias},
+    {"noasync", TokenIdKeywordNoAsync},
+    {"noinline", TokenIdKeywordNoInline},
     {"null", TokenIdKeywordNull},
     {"or", TokenIdKeywordOr},
     {"orelse", TokenIdKeywordOrElse},
@@ -405,9 +407,14 @@ void tokenize(Buf *buf, Tokenization *out) {
     t.buf = buf;
 
     out->line_offsets = allocate<ZigList<size_t>>(1);
-
     out->line_offsets->append(0);
-    for (t.pos = 0; t.pos < buf_len(t.buf); t.pos += 1) {
+
+    // Skip the UTF-8 BOM if present
+    if (buf_starts_with_mem(buf, "\xEF\xBB\xBF", 3)) {
+        t.pos += 3;
+    }
+
+    for (; t.pos < buf_len(t.buf); t.pos += 1) {
         uint8_t c = buf_ptr(t.buf)[t.pos];
         switch (t.state) {
             case TokenizeStateError:
@@ -1553,6 +1560,8 @@ const char * token_name(TokenId id) {
         case TokenIdKeywordInline: return "inline";
         case TokenIdKeywordNakedCC: return "nakedcc";
         case TokenIdKeywordNoAlias: return "noalias";
+        case TokenIdKeywordNoAsync: return "noasync";
+        case TokenIdKeywordNoInline: return "noinline";
         case TokenIdKeywordNull: return "null";
         case TokenIdKeywordOr: return "or";
         case TokenIdKeywordOrElse: return "orelse";

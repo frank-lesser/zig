@@ -1295,6 +1295,7 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
             c_file->args.append("-include");
             c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-modules.h"));
             c_file->args.append("-DMODULE_NAME=libc");
+            c_file->args.append("-Wno-nonportable-include-path");
             c_file->args.append("-include");
             c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-symbols.h"));
             c_file->args.append("-DTOP_NAMESPACE=glibc");
@@ -1321,6 +1322,7 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
             c_file->args.append("-include");
             c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-modules.h"));
             c_file->args.append("-DMODULE_NAME=libc");
+            c_file->args.append("-Wno-nonportable-include-path");
             c_file->args.append("-include");
             c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-symbols.h"));
             c_file->args.append("-DPIC");
@@ -1377,6 +1379,7 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
                 c_file->args.append("-include");
                 c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-modules.h"));
                 c_file->args.append("-DMODULE_NAME=libc");
+                c_file->args.append("-Wno-nonportable-include-path");
                 c_file->args.append("-include");
                 c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-symbols.h"));
                 c_file->args.append("-DPIC");
@@ -1420,6 +1423,7 @@ static const char *get_libc_crt_file(CodeGen *parent, const char *file) {
                 c_file->args.append("-include");
                 c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-modules.h"));
                 c_file->args.append("-DMODULE_NAME=libc");
+                c_file->args.append("-Wno-nonportable-include-path");
                 c_file->args.append("-include");
                 c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "include" OS_SEP "libc-symbols.h"));
                 c_file->args.append("-DPIC");
@@ -1615,6 +1619,11 @@ static void construct_linker_job_elf(LinkJob *lj) {
 
     lj->args.append("-error-limit=0");
 
+    if (g->out_type == OutTypeExe) {
+        lj->args.append("-z");
+        lj->args.append("stack-size=16777216"); // default to 16 MiB
+    }
+
     if (g->linker_script) {
         lj->args.append("-T");
         lj->args.append(g->linker_script);
@@ -1658,7 +1667,9 @@ static void construct_linker_job_elf(LinkJob *lj) {
             crt1o = "Scrt1.o";
         }
         lj->args.append(get_libc_crt_file(g, crt1o));
-        lj->args.append(get_libc_crt_file(g, "crti.o"));
+        if (target_libc_needs_crti_crtn(g->zig_target)) {
+            lj->args.append(get_libc_crt_file(g, "crti.o"));
+        }
     }
 
     for (size_t i = 0; i < g->rpath_list.length; i += 1) {
@@ -1774,6 +1785,10 @@ static void construct_linker_job_elf(LinkJob *lj) {
                 lj->args.append("-lgcc_s");
                 lj->args.append("--no-as-needed");
             }
+
+            if (g->zig_target->os == OsFreeBSD) {
+                lj->args.append("-lpthread");
+            }
         } else if (target_is_glibc(g->zig_target)) {
             if (target_supports_libunwind(g->zig_target)) {
                 lj->args.append(build_libunwind(g));
@@ -1791,7 +1806,7 @@ static void construct_linker_job_elf(LinkJob *lj) {
     }
 
     // crt end
-    if (lj->link_in_crt) {
+    if (lj->link_in_crt && target_libc_needs_crti_crtn(g->zig_target)) {
         lj->args.append(get_libc_crt_file(g, "crtn.o"));
     }
 
@@ -2526,6 +2541,7 @@ static void construct_linker_job_macho(LinkJob *lj) {
 static void construct_linker_job(LinkJob *lj) {
     switch (target_object_format(lj->codegen->zig_target)) {
         case ZigLLVM_UnknownObjectFormat:
+        case ZigLLVM_XCOFF:
             zig_unreachable();
 
         case ZigLLVM_COFF:

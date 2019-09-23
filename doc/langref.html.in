@@ -1303,7 +1303,7 @@ a ^= b{#endsyntax#}</pre></td>
             Bitwise NOT.
           </td>
           <td>
-            <pre>{#syntax#}~u8(0b0101111) == 0b1010000{#endsyntax#}</pre>
+            <pre>{#syntax#}~u8(0b10101111) == 0b01010000{#endsyntax#}</pre>
           </td>
         </tr>
         <tr>
@@ -1372,7 +1372,7 @@ unwrapped == 1234{#endsyntax#}</pre>
                           without evaluating {#syntax#}b{#endsyntax#}. Otherwise, returns {#syntax#}b{#endsyntax#}.
           </td>
           <td>
-            <pre>{#syntax#}false and true == false{#endsyntax#}</pre>
+            <pre>{#syntax#}(false and true) == false{#endsyntax#}</pre>
           </td>
         </tr>
         <tr>
@@ -5846,7 +5846,7 @@ volatile (
 // Next is the output constraint string. This feature is still
 // considered unstable in Zig, and so LLVM/GCC documentation
 // must be used to understand the semantics.
-// http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string
+// http://releases.llvm.org/9.0.0/docs/LangRef.html#inline-asm-constraint-string
 // https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html
 // In this example, the constraint string means "the result value of
 // this inline assembly instruction is whatever is in $rax".
@@ -5864,7 +5864,7 @@ volatile (
     : [number] "{rax}" (number),
         [arg1] "{rdi}" (arg1)
 // Next is the list of clobbers. These declare a set of registers whose
-// values will not be preserved by the execution of this assembly code. 
+// values will not be preserved by the execution of this assembly code.
 // These do not include output or input registers. The special clobber
 // value of "memory" means that the assembly writes to arbitrary undeclared
 // memory locations - not only the memory pointed to by a declared indirect
@@ -5885,9 +5885,9 @@ volatile (
       </p>
       {#header_open|Output Constraints#}
       <p>
-      Output constraints are still considered to be unstable in Zig, and 
+      Output constraints are still considered to be unstable in Zig, and
       so
-      <a href="http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
+      <a href="http://releases.llvm.org/9.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
       and
       <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html">GCC documentation</a>
       must be used to understand the semantics.
@@ -5900,9 +5900,9 @@ volatile (
 
       {#header_open|Input Constraints#}
       <p>
-      Input constraints are still considered to be unstable in Zig, and 
+      Input constraints are still considered to be unstable in Zig, and
       so
-      <a href="http://releases.llvm.org/8.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
+      <a href="http://releases.llvm.org/9.0.0/docs/LangRef.html#inline-asm-constraint-string">LLVM documentation</a>
       and
       <a href="https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html">GCC documentation</a>
       must be used to understand the semantics.
@@ -5919,7 +5919,7 @@ volatile (
       the assembly code. These do not include output or input registers. The special clobber
       value of {#syntax#}"memory"{#endsyntax#} means that the assembly causes writes to
       arbitrary undeclared memory locations - not only the memory pointed to by a declared
-      indirect output. 
+      indirect output.
       </p>
       <p>
       Failure to declare the full set of clobbers for a given inline assembly
@@ -6323,7 +6323,7 @@ fn readFile(allocator: *Allocator, filename: []const u8) ![]u8 {
       {#header_close#}
 
       {#header_close#}
-      {#header_open|Builtin Functions#}
+      {#header_open|Builtin Functions|3col#}
       <p>
       Builtin functions are provided by the compiler and are prefixed with <code>@</code>.
       The {#syntax#}comptime{#endsyntax#} keyword on a parameter means that the parameter must be known
@@ -6542,11 +6542,20 @@ async fn func(y: *i32) void {
       {#header_close#}
 
       {#header_open|@byteSwap#}
-      <pre>{#syntax#}@byteSwap(comptime T: type, integer: T) T{#endsyntax#}</pre>
+      <pre>{#syntax#}@byteSwap(comptime T: type, operand: T) T{#endsyntax#}</pre>
       <p>{#syntax#}T{#endsyntax#} must be an integer type with bit count evenly divisible by 8.</p>
+      <p>{#syntax#}operand{#endsyntax#} may be an {#link|integer|Integers#} or {#link|vector|Vectors#}.</p>
       <p>
       Swaps the byte order of the integer. This converts a big endian integer to a little endian integer,
       and converts a little endian integer to a big endian integer.
+      </p>
+      <p>
+      Note that for the purposes of memory layout with respect to endianness, the integer type should be
+      related to the number of bytes reported by {#link|@sizeOf#} bytes. This is demonstrated with
+      {#syntax#}u24{#endsyntax#}. {#syntax#}@sizeOf(u24) == 4{#endsyntax#}, which means that a
+      {#syntax#}u24{#endsyntax#} stored in memory takes 4 bytes, and those 4 bytes are what are swapped on
+      a little vs big endian system. On the other hand, if {#syntax#}T{#endsyntax#} is specified to
+      be {#syntax#}u24{#endsyntax#}, then only 3 bytes are reversed.
       </p>
       {#header_close#}
 
@@ -6641,7 +6650,7 @@ async fn func(y: *i32) void {
       {#header_open|@clz#}
       <pre>{#syntax#}@clz(comptime T: type, integer: T){#endsyntax#}</pre>
       <p>
-      This function counts the number of leading zeroes in {#syntax#}integer{#endsyntax#}.
+      This function counts the number of most-significant (leading in a big-Endian sense) zeroes in {#syntax#}integer{#endsyntax#}.
       </p>
       <p>
       If {#syntax#}integer{#endsyntax#} is known at {#link|comptime#},
@@ -6783,7 +6792,7 @@ test "main" {
       {#header_open|@ctz#}
       <pre>{#syntax#}@ctz(comptime T: type, integer: T){#endsyntax#}</pre>
       <p>
-      This function counts the number of trailing zeroes in {#syntax#}integer{#endsyntax#}.
+      This function counts the number of least-significant (trailing in a big-Endian sense) zeroes in {#syntax#}integer{#endsyntax#}.
       </p>
       <p>
       If {#syntax#}integer{#endsyntax#} is known at {#link|comptime#},
@@ -6976,10 +6985,28 @@ export fn @"A function name that is a complete sentence."() void {}
 
       {#header_open|@field#}
       <pre>{#syntax#}@field(lhs: var, comptime field_name: []const u8) (field){#endsyntax#}</pre>
-      <p>Preforms field access equivalent to {#syntax#}lhs.field_name{#endsyntax#}, except instead
-      of the field {#syntax#}"field_name"{#endsyntax#}, it accesses the field named by the string
-      value of {#syntax#}field_name{#endsyntax#}.
+      <p>Performs field access by a compile-time string.
       </p>
+       {#code_begin|test#}
+const std = @import("std");
+
+const Point = struct {
+    x: u32,
+    y: u32
+};
+
+test "field access by string" {
+    const assert = std.debug.assert;
+    var p = Point {.x = 0, .y = 0};
+
+    @field(p, "x") = 4;
+    @field(p, "y") = @field(p, "x") + 1;
+
+    assert(@field(p, "x") == 4);
+    assert(@field(p, "y") == 5);
+}
+      {#code_end#}
+
       {#header_close#}
 
       {#header_open|@fieldParentPtr#}
@@ -7231,6 +7258,9 @@ fn add(a: i32, b: i32) i32 { return a + b; }
       <p>
       This function returns an integer type with the given signness and bit count. The maximum
       bit count for an integer type is {#syntax#}65535{#endsyntax#}.
+      </p>
+      <p>
+      Deprecated. Use {#link|@Type#}.
       </p>
       {#header_close#}
 
@@ -7652,6 +7682,43 @@ test "@setRuntimeSafety" {
       {#see_also|@shlExact|@shlWithOverflow#}
       {#header_close#}
 
+      {#header_open|@shuffle#}
+      <pre>{#syntax#}@shuffle(comptime E: type, a: @Vector(a_len, E), b: @Vector(b_len, E), comptime mask: @Vector(mask_len, i32)) @Vector(mask_len, E){#endsyntax#}</pre>
+      <p>
+      Constructs a new {#link|vector|Vectors#} by selecting elements from {#syntax#}a{#endsyntax#} and
+      {#syntax#}b{#endsyntax#} based on {#syntax#}mask{#endsyntax#}.
+      </p>
+      <p>
+      Each element in {#syntax#}mask{#endsyntax#} selects an element from either {#syntax#}a{#endsyntax#} or
+      {#syntax#}b{#endsyntax#}. Positive numbers select from {#syntax#}a{#endsyntax#} starting at 0.
+      Negative values select from {#syntax#}b{#endsyntax#}, starting at {#syntax#}-1{#endsyntax#} and going down.
+      It is recommended to use the {#syntax#}~{#endsyntax#} operator from indexes from {#syntax#}b{#endsyntax#}
+      so that both indexes can start from {#syntax#}0{#endsyntax#} (i.e. {#syntax#}~i32(0){#endsyntax#} is
+      {#syntax#}-1{#endsyntax#}).
+      </p>
+      <p>
+      For each element of {#syntax#}mask{#endsyntax#}, if it or the selected value from
+      {#syntax#}a{#endsyntax#} or {#syntax#}b{#endsyntax#} is {#syntax#}undefined{#endsyntax#},
+      then the resulting element is {#syntax#}undefined{#endsyntax#}.
+      </p>
+      <p>
+      {#syntax#}a_len{#endsyntax#} and {#syntax#}b_len{#endsyntax#} may differ in length. Out-of-bounds element
+      indexes in {#syntax#}mask{#endsyntax#} result in compile errors.
+      </p>
+      <p>
+      If {#syntax#}a{#endsyntax#} or {#syntax#}b{#endsyntax#} is {#syntax#}undefined{#endsyntax#}, it
+      is equivalent to a vector of all {#syntax#}undefined{#endsyntax#} with the same length as the other vector.
+      If both vectors are {#syntax#}undefined{#endsyntax#}, {#syntax#}@shuffle{#endsyntax#} returns
+      a vector with all elements {#syntax#}undefined{#endsyntax#}.
+      </p>
+      <p>
+      {#syntax#}E{#endsyntax#} must be an {#link|integer|Integers#}, {#link|float|Floats#},
+      {#link|pointer|Pointers#}, or {#syntax#}bool{#endsyntax#}. The mask may be any vector length, and its
+      length determines the result length.
+      </p>
+      {#see_also|SIMD#}
+      {#header_close#}
+
       {#header_open|@sizeOf#}
       <pre>{#syntax#}@sizeOf(comptime T: type) comptime_int{#endsyntax#}</pre>
       <p>
@@ -7677,6 +7744,30 @@ test "@setRuntimeSafety" {
       Converts a slice or array to a slice of {#syntax#}u8{#endsyntax#}. The resulting slice has the same
       {#link|pointer|Pointers#} properties as the parameter.
       </p>
+      {#header_close#}
+
+      {#header_open|@splat#}
+      <pre>{#syntax#}@splat(comptime len: u32, scalar: var) @Vector(len, @typeOf(scalar)){#endsyntax#}</pre>
+      <p>
+      Produces a vector of length {#syntax#}len{#endsyntax#} where each element is the value
+      {#syntax#}scalar{#endsyntax#}:
+      </p>
+      {#code_begin|test#}
+const std = @import("std");
+const assert = std.debug.assert;
+
+test "vector @splat" {
+    const scalar: u32 = 5;
+    const result = @splat(4, scalar);
+    comptime assert(@typeOf(result) == @Vector(4, u32));
+    assert(std.mem.eql(u32, ([4]u32)(result), [_]u32{ 5, 5, 5, 5 }));
+}
+      {#code_end#}
+      <p>
+      {#syntax#}scalar{#endsyntax#} must be an {#link|integer|Integers#}, {#link|bool|Primitive Types#},
+      {#link|float|Floats#}, or {#link|pointer|Pointers#}.
+      </p>
+      {#see_also|Vectors|@shuffle#}
       {#header_close#}
 
       {#header_open|@sqrt#}
@@ -7869,6 +7960,57 @@ test "integer truncation" {
       If {#syntax#}T{#endsyntax#} is {#syntax#}comptime_int{#endsyntax#},
       then this is semantically equivalent to an {#link|implicit cast|Implicit Casts#}.
       </p>
+      {#header_close#}
+
+      {#header_open|@Type#}
+      <pre>{#syntax#}@Type(comptime info: @import("builtin").TypeInfo) type{#endsyntax#}</pre>
+      <p>
+      This function is the inverse of {#link|@typeInfo#}. It reifies type information
+      into a {#syntax#}type{#endsyntax#}.
+      </p>
+      <p>
+      It is available for the following types:
+      </p>
+      <ul>
+          <li>{#syntax#}type{#endsyntax#}</li>
+          <li>{#syntax#}noreturn{#endsyntax#}</li>
+          <li>{#syntax#}void{#endsyntax#}</li>
+          <li>{#syntax#}bool{#endsyntax#}</li>
+          <li>{#link|Integers#}</li> - The maximum bit count for an integer type is {#syntax#}65535{#endsyntax#}.
+          <li>{#link|Floats#}</li>
+          <li>{#link|Pointers#}</li>
+          <li>{#syntax#}comptime_int{#endsyntax#}</li>
+          <li>{#syntax#}comptime_float{#endsyntax#}</li>
+          <li>{#syntax#}@typeOf(undefined){#endsyntax#}</li>
+          <li>{#syntax#}@typeOf(null){#endsyntax#}</li>
+      </ul>
+      <p>
+      For these types it is a
+      <a href="https://github.com/ziglang/zig/issues/2907">TODO in the compiler to implement</a>:
+      </p>
+      <ul>
+          <li>Array</li>
+          <li>Optional</li>
+          <li>ErrorUnion</li>
+          <li>ErrorSet</li>
+          <li>Enum</li>
+          <li>Opaque</li>
+          <li>FnFrame</li>
+          <li>AnyFrame</li>
+          <li>Vector</li>
+          <li>EnumLiteral</li>
+      </ul>
+      <p>
+      For these types, {#syntax#}@Type{#endsyntax#} is not available.
+      <a href="https://github.com/ziglang/zig/issues/383">There is an open proposal to allow unions and structs</a>.
+      </p>
+      <ul>
+          <li>{#link|union#}</li>
+          <li>{#link|Functions#}</li>
+          <li>BoundFn</li>
+          <li>ArgTuple</li>
+          <li>{#link|struct#}</li>
+      </ul>
       {#header_close#}
 
       {#header_open|@typeId#}
@@ -9191,8 +9333,7 @@ pub fn assert(ok: bool) void {
       This means that when testing in ReleaseFast or ReleaseSmall mode, {#syntax#}assert{#endsyntax#}
       is not sufficient to check the result of a computation:
       </p>
-      {#code_begin|test|assert#}
-      {#code_release_fast#}
+      {#code_begin|syntax#}
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -9200,9 +9341,11 @@ test "assert in release fast mode" {
     assert(false);
 }
       {#code_end#}
-      <p>Note that although the above example shows the test passing, this is invoking
-      unchecked {#link|Undefined Behavior#}. This documentation is showing only one possible
-      outcome of this test.</p>
+      <p>
+      When compiling this test in {#link|ReleaseFast#} mode, it invokes unchecked
+      {#link|Undefined Behavior#}. Since that could do anything, this documentation
+      cannot show you the output.
+      </p>
       <p>
       Better practice for checking the output when testing is to use {#syntax#}std.testing.expect{#endsyntax#}:
       </p>
@@ -9338,8 +9481,8 @@ const c = @cImport({
         <li>Does not support Zig-only pointer attributes such as alignment. Use normal {#link|Pointers#}
         please!</li>
       </ul>
-      <p>When a C pointer is pointing to a single struct (not an array), deference the C pointer to 
-        access to the struct's fields or member data. That syntax looks like 
+      <p>When a C pointer is pointing to a single struct (not an array), deference the C pointer to
+        access to the struct's fields or member data. That syntax looks like
         this: </p>
         <p>{#syntax#}ptr_to_struct.*.struct_member{#endsyntax#}</p>
         <p>This is comparable to doing {#syntax#}->{#endsyntax#} in C.</p>

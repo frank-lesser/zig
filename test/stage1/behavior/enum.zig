@@ -993,3 +993,40 @@ test "enum with one member and custom tag type" {
     };
     expect(@enumToInt(E2.One) == 2);
 }
+
+test "enum literal casting to optional" {
+    var bar: ?Bar = undefined;
+    bar = .B;
+
+    expect(bar.? == Bar.B);
+}
+
+test "enum literal casting to error union with payload enum" {
+    var bar: error{B}!Bar = undefined;
+    bar = .B; // should never cast to the error set
+
+    expect((try bar) == Bar.B);
+}
+
+test "enum with one member and u1 tag type @enumToInt" {
+    const Enum = enum(u1) {
+        Test,
+    };
+    expect(@enumToInt(Enum.Test) == 0);
+}
+
+test "enum with comptime_int tag type" {
+    const Enum = enum(comptime_int) {
+        One = 3,
+        Two = 2,
+        Three = 1,
+    };
+    comptime expect(@TagType(Enum) == comptime_int);
+}
+
+test "enum with one member default to u0 tag type" {
+    const E0 = enum {
+        X,
+    };
+    comptime expect(@TagType(E0) == u0);
+}

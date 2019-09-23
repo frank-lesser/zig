@@ -16,27 +16,190 @@ const LibExeObjStep = build.LibExeObjStep;
 
 const compare_output = @import("compare_output.zig");
 const standalone = @import("standalone.zig");
+const stack_traces = @import("stack_traces.zig");
 const compile_errors = @import("compile_errors.zig");
 const assemble_and_link = @import("assemble_and_link.zig");
 const runtime_safety = @import("runtime_safety.zig");
 const translate_c = @import("translate_c.zig");
 const gen_h = @import("gen_h.zig");
 
-const test_targets = [_]CrossTarget{
-    CrossTarget{
-        .os = .linux,
-        .arch = .x86_64,
-        .abi = .gnu,
+const TestTarget = struct {
+    target: Target = .Native,
+    mode: builtin.Mode = .Debug,
+    link_libc: bool = false,
+    single_threaded: bool = false,
+    disable_native: bool = false,
+};
+
+const test_targets = [_]TestTarget{
+    TestTarget{},
+    TestTarget{
+        .link_libc = true,
     },
-    CrossTarget{
-        .os = .macosx,
-        .arch = .x86_64,
-        .abi = .gnu,
+    TestTarget{
+        .single_threaded = true,
     },
-    CrossTarget{
-        .os = .windows,
-        .arch = .x86_64,
-        .abi = .msvc,
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = .x86_64,
+                .abi = .none,
+            },
+        },
+    },
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = .x86_64,
+                .abi = .gnu,
+            },
+        },
+        .link_libc = true,
+    },
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = .x86_64,
+                .abi = .musl,
+            },
+        },
+        .link_libc = true,
+    },
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+                .abi = .none,
+            },
+        },
+    },
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+                .abi = .musl,
+            },
+        },
+        .link_libc = true,
+    },
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+                .abi = .gnu,
+            },
+        },
+        .link_libc = true,
+    },
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
+                .abi = .none,
+            },
+        },
+    },
+    // TODO https://github.com/ziglang/zig/issues/3286
+    //TestTarget{
+    //    .target = Target{
+    //        .Cross = CrossTarget{
+    //            .os = .linux,
+    //            .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
+    //            .abi = .musleabihf,
+    //        },
+    //    },
+    //    .link_libc = true,
+    //},
+    // TODO https://github.com/ziglang/zig/issues/3287
+    //TestTarget{
+    //    .target = Target{
+    //        .Cross = CrossTarget{
+    //            .os = .linux,
+    //            .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
+    //            .abi = .gnueabihf,
+    //        },
+    //    },
+    //    .link_libc = true,
+    //},
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .macosx,
+                .arch = .x86_64,
+                .abi = .gnu,
+            },
+        },
+        // TODO https://github.com/ziglang/zig/issues/3295
+        .disable_native = true,
+    },
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .windows,
+                .arch = .x86_64,
+                .abi = .msvc,
+            },
+        },
+    },
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .windows,
+                .arch = .x86_64,
+                .abi = .gnu,
+            },
+        },
+        .link_libc = true,
+    },
+
+    // Do the release tests last because they take a long time
+    TestTarget{
+        .mode = .ReleaseFast,
+    },
+    TestTarget{
+        .link_libc = true,
+        .mode = .ReleaseFast,
+    },
+    TestTarget{
+        .mode = .ReleaseFast,
+        .single_threaded = true,
+    },
+
+    TestTarget{
+        .mode = .ReleaseSafe,
+    },
+    TestTarget{
+        .link_libc = true,
+        .mode = .ReleaseSafe,
+    },
+    TestTarget{
+        .mode = .ReleaseSafe,
+        .single_threaded = true,
+    },
+
+    TestTarget{
+        .mode = .ReleaseSmall,
+    },
+    TestTarget{
+        .link_libc = true,
+        .mode = .ReleaseSmall,
+    },
+    TestTarget{
+        .mode = .ReleaseSmall,
+        .single_threaded = true,
     },
 };
 
@@ -53,6 +216,21 @@ pub fn addCompareOutputTests(b: *build.Builder, test_filter: ?[]const u8, modes:
     };
 
     compare_output.addCases(cases);
+
+    return cases.step;
+}
+
+pub fn addStackTraceTests(b: *build.Builder, test_filter: ?[]const u8, modes: []const Mode) *build.Step {
+    const cases = b.allocator.create(StackTracesContext) catch unreachable;
+    cases.* = StackTracesContext{
+        .b = b,
+        .step = b.step("test-stack-traces", "Run the stack trace tests"),
+        .test_index = 0,
+        .test_filter = test_filter,
+        .modes = modes,
+    };
+
+    stack_traces.addCases(cases);
 
     return cases.step;
 }
@@ -166,47 +344,77 @@ pub fn addPkgTests(
     name: []const u8,
     desc: []const u8,
     modes: []const Mode,
-    single_threaded_list: []const bool,
+    skip_single_threaded: bool,
     skip_non_native: bool,
+    skip_libc: bool,
+    is_wine_enabled: bool,
+    is_qemu_enabled: bool,
+    glibc_dir: ?[]const u8,
 ) *build.Step {
     const step = b.step(b.fmt("test-{}", name), desc);
+
     for (test_targets) |test_target| {
-        const is_native = (test_target.os == builtin.os and test_target.arch == builtin.arch);
-        if (skip_non_native and !is_native)
+        if (skip_non_native and test_target.target != .Native)
             continue;
-        for (modes) |mode| {
-            for ([_]bool{ false, true }) |link_libc| {
-                for (single_threaded_list) |single_threaded| {
-                    if (link_libc and !is_native) {
-                        // don't assume we have a cross-compiling libc set up
-                        continue;
-                    }
-                    const these_tests = b.addTest(root_src);
-                    these_tests.setNamePrefix(b.fmt(
-                        "{}-{}-{}-{}-{}-{} ",
-                        name,
-                        @tagName(test_target.os),
-                        @tagName(test_target.arch),
-                        @tagName(mode),
-                        if (link_libc) "c" else "bare",
-                        if (single_threaded) "single" else "multi",
-                    ));
-                    these_tests.single_threaded = single_threaded;
-                    these_tests.setFilter(test_filter);
-                    these_tests.setBuildMode(mode);
-                    if (!is_native) {
-                        these_tests.setTarget(test_target.arch, test_target.os, test_target.abi);
-                    }
-                    if (link_libc) {
-                        these_tests.linkSystemLibrary("c");
-                    }
-                    if (mem.eql(u8, name, "std")) {
-                        these_tests.overrideStdDir("std");
-                    }
-                    step.dependOn(&these_tests.step);
-                }
-            }
+
+        if (skip_libc and test_target.link_libc)
+            continue;
+
+        if (test_target.link_libc and test_target.target.osRequiresLibC()) {
+            // This would be a redundant test.
+            continue;
         }
+
+        if (skip_single_threaded and test_target.single_threaded)
+            continue;
+
+        const ArchTag = @TagType(builtin.Arch);
+        if (test_target.disable_native and
+            test_target.target.getOs() == builtin.os and
+            ArchTag(test_target.target.getArch()) == ArchTag(builtin.arch))
+        {
+            continue;
+        }
+
+        const want_this_mode = for (modes) |m| {
+            if (m == test_target.mode) break true;
+        } else false;
+        if (!want_this_mode) continue;
+
+        const libc_prefix = if (test_target.target.osRequiresLibC())
+            ""
+        else if (test_target.link_libc)
+            "c"
+        else
+            "bare";
+
+        const triple_prefix = if (test_target.target == .Native)
+            ([]const u8)("native")
+        else
+            test_target.target.zigTripleNoSubArch(b.allocator) catch unreachable;
+
+        const these_tests = b.addTest(root_src);
+        these_tests.setNamePrefix(b.fmt(
+            "{}-{}-{}-{}-{} ",
+            name,
+            triple_prefix,
+            @tagName(test_target.mode),
+            libc_prefix,
+            if (test_target.single_threaded) "single" else "multi",
+        ));
+        these_tests.single_threaded = test_target.single_threaded;
+        these_tests.setFilter(test_filter);
+        these_tests.setBuildMode(test_target.mode);
+        these_tests.setTheTarget(test_target.target);
+        if (test_target.link_libc) {
+            these_tests.linkSystemLibrary("c");
+        }
+        these_tests.overrideStdDir("std");
+        these_tests.enable_wine = is_wine_enabled;
+        these_tests.enable_qemu = is_qemu_enabled;
+        these_tests.glibc_multi_install_dir = glibc_dir;
+
+        step.dependOn(&these_tests.step);
     }
     return step;
 }
@@ -547,6 +755,200 @@ pub const CompareOutputContext = struct {
             },
         }
     }
+};
+
+pub const StackTracesContext = struct {
+    b: *build.Builder,
+    step: *build.Step,
+    test_index: usize,
+    test_filter: ?[]const u8,
+    modes: []const Mode,
+
+    const Expect = [@typeInfo(Mode).Enum.fields.len][]const u8;
+
+    pub fn addCase(
+        self: *StackTracesContext,
+        name: []const u8,
+        source: []const u8,
+        expect: Expect,
+    ) void {
+        const b = self.b;
+
+        const source_pathname = fs.path.join(
+            b.allocator,
+            [_][]const u8{ b.cache_root, "source.zig" },
+        ) catch unreachable;
+
+        for (self.modes) |mode| {
+            const expect_for_mode = expect[@enumToInt(mode)];
+            if (expect_for_mode.len == 0) continue;
+
+            const annotated_case_name = fmt.allocPrint(self.b.allocator, "{} {} ({})", "stack-trace", name, @tagName(mode)) catch unreachable;
+            if (self.test_filter) |filter| {
+                if (mem.indexOf(u8, annotated_case_name, filter) == null) continue;
+            }
+
+            const exe = b.addExecutable("test", source_pathname);
+            exe.setBuildMode(mode);
+
+            const write_source = b.addWriteFile(source_pathname, source);
+            exe.step.dependOn(&write_source.step);
+
+            const run_and_compare = RunAndCompareStep.create(
+                self,
+                exe,
+                annotated_case_name,
+                mode,
+                expect_for_mode,
+            );
+
+            self.step.dependOn(&run_and_compare.step);
+        }
+    }
+
+    const RunAndCompareStep = struct {
+        step: build.Step,
+        context: *StackTracesContext,
+        exe: *LibExeObjStep,
+        name: []const u8,
+        mode: Mode,
+        expect_output: []const u8,
+        test_index: usize,
+
+        pub fn create(
+            context: *StackTracesContext,
+            exe: *LibExeObjStep,
+            name: []const u8,
+            mode: Mode,
+            expect_output: []const u8,
+        ) *RunAndCompareStep {
+            const allocator = context.b.allocator;
+            const ptr = allocator.create(RunAndCompareStep) catch unreachable;
+            ptr.* = RunAndCompareStep{
+                .step = build.Step.init("StackTraceCompareOutputStep", allocator, make),
+                .context = context,
+                .exe = exe,
+                .name = name,
+                .mode = mode,
+                .expect_output = expect_output,
+                .test_index = context.test_index,
+            };
+            ptr.step.dependOn(&exe.step);
+            context.test_index += 1;
+            return ptr;
+        }
+
+        fn make(step: *build.Step) !void {
+            const self = @fieldParentPtr(RunAndCompareStep, "step", step);
+            const b = self.context.b;
+
+            const full_exe_path = self.exe.getOutputPath();
+            var args = ArrayList([]const u8).init(b.allocator);
+            defer args.deinit();
+            args.append(full_exe_path) catch unreachable;
+
+            warn("Test {}/{} {}...", self.test_index + 1, self.context.test_index, self.name);
+
+            const child = std.ChildProcess.init(args.toSliceConst(), b.allocator) catch unreachable;
+            defer child.deinit();
+
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Pipe;
+            child.env_map = b.env_map;
+
+            child.spawn() catch |err| debug.panic("Unable to spawn {}: {}\n", full_exe_path, @errorName(err));
+
+            var stdout = Buffer.initNull(b.allocator);
+            var stderr = Buffer.initNull(b.allocator);
+
+            var stdout_file_in_stream = child.stdout.?.inStream();
+            var stderr_file_in_stream = child.stderr.?.inStream();
+
+            stdout_file_in_stream.stream.readAllBuffer(&stdout, max_stdout_size) catch unreachable;
+            stderr_file_in_stream.stream.readAllBuffer(&stderr, max_stdout_size) catch unreachable;
+
+            const term = child.wait() catch |err| {
+                debug.panic("Unable to spawn {}: {}\n", full_exe_path, @errorName(err));
+            };
+
+            switch (term) {
+                .Exited => |code| {
+                    const expect_code: u32 = 1;
+                    if (code != expect_code) {
+                        warn("Process {} exited with error code {} but expected code {}\n", full_exe_path, code, expect_code);
+                        printInvocation(args.toSliceConst());
+                        return error.TestFailed;
+                    }
+                },
+                .Signal => |signum| {
+                    warn("Process {} terminated on signal {}\n", full_exe_path, signum);
+                    printInvocation(args.toSliceConst());
+                    return error.TestFailed;
+                },
+                .Stopped => |signum| {
+                    warn("Process {} stopped on signal {}\n", full_exe_path, signum);
+                    printInvocation(args.toSliceConst());
+                    return error.TestFailed;
+                },
+                .Unknown => |code| {
+                    warn("Process {} terminated unexpectedly with error code {}\n", full_exe_path, code);
+                    printInvocation(args.toSliceConst());
+                    return error.TestFailed;
+                },
+            }
+
+            // process result
+            // - keep only basename of source file path
+            // - replace address with symbolic string
+            // - skip empty lines
+            const got: []const u8 = got_result: {
+                var buf = try Buffer.initSize(b.allocator, 0);
+                defer buf.deinit();
+                var bytes = stderr.toSliceConst();
+                if (bytes.len != 0 and bytes[bytes.len - 1] == '\n') bytes = bytes[0 .. bytes.len - 1];
+                var it = mem.separate(bytes, "\n");
+                process_lines: while (it.next()) |line| {
+                    if (line.len == 0) continue;
+                    const delims = [_][]const u8{ ":", ":", ":", " in " };
+                    var marks = [_]usize{0} ** 4;
+                    // offset search past `[drive]:` on windows
+                    var pos: usize = if (builtin.os == .windows) 2 else 0;
+                    for (delims) |delim, i| {
+                        marks[i] = mem.indexOfPos(u8, line, pos, delim) orelse {
+                            try buf.append(line);
+                            try buf.append("\n");
+                            continue :process_lines;
+                        };
+                        pos = marks[i] + delim.len;
+                    }
+                    pos = mem.lastIndexOfScalar(u8, line[0..marks[0]], fs.path.sep) orelse {
+                        try buf.append(line);
+                        try buf.append("\n");
+                        continue :process_lines;
+                    };
+                    try buf.append(line[pos + 1 .. marks[2] + delims[2].len]);
+                    try buf.append(" [address]");
+                    try buf.append(line[marks[3]..]);
+                    try buf.append("\n");
+                }
+                break :got_result buf.toOwnedSlice();
+            };
+
+            if (!mem.eql(u8, self.expect_output, got)) {
+                warn(
+                    \\
+                    \\========= Expected this output: =========
+                    \\{}
+                    \\================================================
+                    \\{}
+                    \\
+                , self.expect_output, got);
+                return error.TestFailed;
+            }
+            warn("OK\n");
+        }
+    };
 };
 
 pub const CompileErrorContext = struct {

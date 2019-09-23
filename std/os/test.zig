@@ -95,6 +95,10 @@ test "cpu count" {
 }
 
 test "AtomicFile" {
+    if (builtin.arch == .aarch64 and builtin.glibc_version != null) {
+        // TODO https://github.com/ziglang/zig/issues/3288
+        return error.SkipZigTest;
+    }
     var buffer: [1024]u8 = undefined;
     const allocator = &std.heap.FixedBufferAllocator.init(buffer[0..]).allocator;
     const test_out_file = "tmp_atomic_file_test_dest.txt";
@@ -209,4 +213,13 @@ test "dl_iterate_phdr" {
     var counter: usize = 0;
     expect(os.dl_iterate_phdr(usize, iter_fn, &counter) != 0);
     expect(counter != 0);
+}
+
+test "gethostname" {
+    if (os.windows.is_the_target)
+        return error.SkipZigTest;
+
+    var buf: [os.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try os.gethostname(&buf);
+    expect(hostname.len != 0);
 }

@@ -4,10 +4,11 @@ const io = std.io;
 const fs = std.fs;
 const mem = std.mem;
 const debug = std.debug;
+const panic = std.debug.panic;
 const assert = debug.assert;
 const warn = std.debug.warn;
 const ArrayList = std.ArrayList;
-const HashMap = std.HashMap;
+const StringHashMap = std.StringHashMap;
 const Allocator = mem.Allocator;
 const process = std.process;
 const BufSet = std.BufSet;
@@ -42,8 +43,8 @@ pub const Builder = struct {
     top_level_steps: ArrayList(*TopLevelStep),
     install_prefix: ?[]const u8,
     dest_dir: ?[]const u8,
-    lib_dir: ?[]const u8,
-    exe_dir: ?[]const u8,
+    lib_dir: []const u8,
+    exe_dir: []const u8,
     install_path: []const u8,
     search_prefixes: ArrayList([]const u8),
     installed_files: ArrayList(InstalledFile),
@@ -60,8 +61,8 @@ pub const Builder = struct {
         C11,
     };
 
-    const UserInputOptionsMap = HashMap([]const u8, UserInputOption, mem.hash_slice_u8, mem.eql_slice_u8);
-    const AvailableOptionsMap = HashMap([]const u8, AvailableOption, mem.hash_slice_u8, mem.eql_slice_u8);
+    const UserInputOptionsMap = StringHashMap(UserInputOption);
+    const AvailableOptionsMap = StringHashMap(AvailableOption);
 
     const AvailableOption = struct {
         name: []const u8,
@@ -129,8 +130,8 @@ pub const Builder = struct {
             .env_map = env_map,
             .search_prefixes = ArrayList([]const u8).init(allocator),
             .install_prefix = null,
-            .lib_dir = null,
-            .exe_dir = null,
+            .lib_dir = undefined,
+            .exe_dir = undefined,
             .dest_dir = env_map.get("DESTDIR"),
             .installed_files = ArrayList(InstalledFile).init(allocator),
             .install_tls = TopLevelStep{
@@ -163,11 +164,13 @@ pub const Builder = struct {
         self.allocator.destroy(self);
     }
 
+    /// This function is intended to be called by std/special/build_runner.zig, not a build.zig file.
     pub fn setInstallPrefix(self: *Builder, optional_prefix: ?[]const u8) void {
         self.install_prefix = optional_prefix;
     }
 
-    fn resolveInstallPrefix(self: *Builder) void {
+    /// This function is intended to be called by std/special/build_runner.zig, not a build.zig file.
+    pub fn resolveInstallPrefix(self: *Builder) void {
         if (self.dest_dir) |dest_dir| {
             const install_prefix = self.install_prefix orelse "/usr";
             self.install_path = fs.path.join(self.allocator, [_][]const u8{ dest_dir, install_prefix }) catch unreachable;
@@ -437,7 +440,7 @@ pub const Builder = struct {
             .description = description,
         };
         if ((self.available_options_map.put(name, available_option) catch unreachable) != null) {
-            debug.panic("Option '{}' declared twice", name);
+            panic("Option '{}' declared twice", name);
         }
         self.available_options_list.append(available_option) catch unreachable;
 
@@ -463,8 +466,8 @@ pub const Builder = struct {
                     return null;
                 },
             },
-            TypeId.Int => debug.panic("TODO integer options to build script"),
-            TypeId.Float => debug.panic("TODO float options to build script"),
+            TypeId.Int => panic("TODO integer options to build script"),
+            TypeId.Float => panic("TODO float options to build script"),
             TypeId.String => switch (entry.value.value) {
                 UserValue.Flag => {
                     warn("Expected -D{} to be a string, but received a boolean.\n", name);
@@ -478,7 +481,7 @@ pub const Builder = struct {
                 },
                 UserValue.Scalar => |s| return s,
             },
-            TypeId.List => debug.panic("TODO list options to build script"),
+            TypeId.List => panic("TODO list options to build script"),
         }
     }
 
@@ -644,8 +647,6 @@ pub const Builder = struct {
     }
 
     pub fn validateUserInputDidItFail(self: *Builder) bool {
-        self.resolveInstallPrefix();
-
         // make sure all args are used
         var it = self.user_input_options.iterator();
         while (true) {
@@ -855,7 +856,7 @@ pub const Builder = struct {
         var stdout_file_in_stream = child.stdout.?.inStream();
         try stdout_file_in_stream.stream.readAllBuffer(&stdout, max_output_size);
 
-        const term = child.wait() catch |err| std.debug.panic("unable to spawn {}: {}", argv[0], err);
+        const term = child.wait() catch |err| panic("unable to spawn {}: {}", argv[0], err);
         switch (term) {
             .Exited => |code| {
                 if (code != 0) {
@@ -882,8 +883,8 @@ pub const Builder = struct {
     fn getInstallPath(self: *Builder, dir: InstallDir, dest_rel_path: []const u8) []const u8 {
         const base_dir = switch (dir) {
             .Prefix => self.install_path,
-            .Bin => self.exe_dir.?,
-            .Lib => self.lib_dir.?,
+            .Bin => self.exe_dir,
+            .Lib => self.lib_dir,
         };
         return fs.path.resolve(
             self.allocator,
@@ -1014,6 +1015,7 @@ pub const Target = union(enum) {
             => return .msvc,
             .linux,
             .wasi,
+            .emscripten,
             => return .musl,
         }
     }
@@ -1174,6 +1176,20 @@ pub const Target = union(enum) {
         };
     }
 
+    pub fn isLinux(self: Target) bool {
+        return switch (self.getOs()) {
+            .linux => true,
+            else => false,
+        };
+    }
+
+    pub fn isUefi(self: Target) bool {
+        return switch (self.getOs()) {
+            .uefi => true,
+            else => false,
+        };
+    }
+
     pub fn isWasm(self: Target) bool {
         return switch (self.getArch()) {
             .wasm32, .wasm64 => true,
@@ -1188,8 +1204,124 @@ pub const Target = union(enum) {
         };
     }
 
+    pub fn isNetBSD(self: Target) bool {
+        return switch (self.getOs()) {
+            .netbsd => true,
+            else => false,
+        };
+    }
+
     pub fn wantSharedLibSymLinks(self: Target) bool {
         return !self.isWindows();
+    }
+
+    pub fn osRequiresLibC(self: Target) bool {
+        return self.isDarwin() or self.isFreeBSD() or self.isNetBSD();
+    }
+
+    pub fn getArchPtrBitWidth(self: Target) u32 {
+        switch (self.getArch()) {
+            .avr,
+            .msp430,
+            => return 16,
+
+            .arc,
+            .arm,
+            .armeb,
+            .hexagon,
+            .le32,
+            .mips,
+            .mipsel,
+            .powerpc,
+            .r600,
+            .riscv32,
+            .sparc,
+            .sparcel,
+            .tce,
+            .tcele,
+            .thumb,
+            .thumbeb,
+            .i386,
+            .xcore,
+            .nvptx,
+            .amdil,
+            .hsail,
+            .spir,
+            .kalimba,
+            .shave,
+            .lanai,
+            .wasm32,
+            .renderscript32,
+            .aarch64_32,
+            => return 32,
+
+            .aarch64,
+            .aarch64_be,
+            .mips64,
+            .mips64el,
+            .powerpc64,
+            .powerpc64le,
+            .riscv64,
+            .x86_64,
+            .nvptx64,
+            .le64,
+            .amdil64,
+            .hsail64,
+            .spir64,
+            .wasm64,
+            .renderscript64,
+            .amdgcn,
+            .bpfel,
+            .bpfeb,
+            .sparcv9,
+            .s390x,
+            => return 64,
+        }
+    }
+
+    pub const Executor = union(enum) {
+        native,
+        qemu: []const u8,
+        wine: []const u8,
+        unavailable,
+    };
+
+    pub fn getExternalExecutor(self: Target) Executor {
+        if (@TagType(Target)(self) == .Native) return .native;
+
+        // If the target OS matches the host OS, we can use QEMU to emulate a foreign architecture.
+        if (self.getOs() == builtin.os) {
+            return switch (self.getArch()) {
+                .aarch64 => Executor{ .qemu = "qemu-aarch64" },
+                .aarch64_be => Executor{ .qemu = "qemu-aarch64_be" },
+                .arm => Executor{ .qemu = "qemu-arm" },
+                .armeb => Executor{ .qemu = "qemu-armeb" },
+                .i386 => Executor{ .qemu = "qemu-i386" },
+                .mips => Executor{ .qemu = "qemu-mips" },
+                .mipsel => Executor{ .qemu = "qemu-mipsel" },
+                .mips64 => Executor{ .qemu = "qemu-mips64" },
+                .mips64el => Executor{ .qemu = "qemu-mips64el" },
+                .powerpc => Executor{ .qemu = "qemu-ppc" },
+                .powerpc64 => Executor{ .qemu = "qemu-ppc64" },
+                .powerpc64le => Executor{ .qemu = "qemu-ppc64le" },
+                .riscv32 => Executor{ .qemu = "qemu-riscv32" },
+                .riscv64 => Executor{ .qemu = "qemu-riscv64" },
+                .s390x => Executor{ .qemu = "qemu-s390x" },
+                .sparc => Executor{ .qemu = "qemu-sparc" },
+                .x86_64 => Executor{ .qemu = "qemu-x86_64" },
+                else => return .unavailable,
+            };
+        }
+
+        if (self.isWindows()) {
+            switch (self.getArchPtrBitWidth()) {
+                32 => return Executor{ .wine = "wine" },
+                64 => return Executor{ .wine = "wine64" },
+                else => return .unavailable,
+            }
+        }
+
+        return .unavailable;
     }
 };
 
@@ -1258,6 +1390,7 @@ pub const LibExeObjStep = struct {
     include_dirs: ArrayList(IncludeDir),
     output_dir: ?[]const u8,
     need_system_paths: bool,
+    is_linking_libc: bool = false,
 
     installed_path: ?[]const u8,
     install_step: ?*InstallArtifactStep,
@@ -1266,6 +1399,20 @@ pub const LibExeObjStep = struct {
     target_glibc: ?Version = null,
 
     valgrind_support: ?bool = null,
+
+    /// Uses system Wine installation to run cross compiled Windows build artifacts.
+    enable_wine: bool = false,
+
+    /// Uses system QEMU installation to run cross compiled foreign architecture build artifacts.
+    enable_qemu: bool = false,
+
+    /// After following the steps in https://github.com/ziglang/zig/wiki/Updating-libc#glibc,
+    /// this will be the directory $glibc-build-dir/install/glibcs
+    /// Given the example of the aarch64 target, this is the directory
+    /// that contains the path `aarch64-linux-gnu/lib/ld-linux-aarch64.so.1`.
+    glibc_multi_install_dir: ?[]const u8 = null,
+
+    dynamic_linker: ?[]const u8 = null,
 
     const LinkObject = union(enum) {
         StaticPath: []const u8,
@@ -1318,6 +1465,9 @@ pub const LibExeObjStep = struct {
     }
 
     fn initExtraArgs(builder: *Builder, name: []const u8, root_src: ?[]const u8, kind: Kind, is_dynamic: bool, ver: Version) LibExeObjStep {
+        if (mem.indexOf(u8, name, "/") != null or mem.indexOf(u8, name, "\\") != null) {
+            panic("invalid name: '{}'. It looks like a file path, but it is supposed to be the library or application name.", name);
+        }
         var self = LibExeObjStep{
             .strip = false,
             .builder = builder,
@@ -1486,14 +1636,16 @@ pub const LibExeObjStep = struct {
     }
 
     pub fn producesPdbFile(self: *LibExeObjStep) bool {
-        if (!self.target.isWindows()) return false;
+        if (!self.target.isWindows() and !self.target.isUefi()) return false;
         if (self.strip) return false;
         return self.isDynamicLibrary() or self.kind == .Exe;
     }
 
     pub fn linkSystemLibrary(self: *LibExeObjStep, name: []const u8) void {
         self.link_objects.append(LinkObject{ .SystemLib = self.builder.dupe(name) }) catch unreachable;
-        if (!isLibCLibrary(name)) {
+        if (isLibCLibrary(name)) {
+            self.is_linking_libc = true;
+        } else {
             self.need_system_paths = true;
         }
     }
@@ -1583,7 +1735,7 @@ pub const LibExeObjStep = struct {
     /// Unless setOutputDir was called, this function must be called only in
     /// the make step, from a step that has declared a dependency on this one.
     pub fn getOutputPdbPath(self: *LibExeObjStep) []const u8 {
-        assert(self.target.isWindows());
+        assert(self.target.isWindows() or self.target.isUefi());
         return fs.path.join(
             self.builder.allocator,
             [_][]const u8{ self.output_dir.?, self.out_pdb_filename },
@@ -1829,6 +1981,11 @@ pub const LibExeObjStep = struct {
             zig_args.append(builder.pathFromRoot(linker_script)) catch unreachable;
         }
 
+        if (self.dynamic_linker) |dynamic_linker| {
+            try zig_args.append("--dynamic-linker");
+            try zig_args.append(dynamic_linker);
+        }
+
         if (self.version_script) |version_script| {
             try zig_args.append("--version-script");
             try zig_args.append(builder.pathFromRoot(version_script));
@@ -1843,6 +2000,34 @@ pub const LibExeObjStep = struct {
                     try zig_args.append("--test-cmd-bin");
                 }
             }
+        } else switch (self.target.getExternalExecutor()) {
+            .native, .unavailable => {},
+            .qemu => |bin_name| if (self.enable_qemu) qemu: {
+                const need_cross_glibc = self.target.isGnu() and self.target.isLinux() and self.is_linking_libc;
+                const glibc_dir_arg = if (need_cross_glibc)
+                    self.glibc_multi_install_dir orelse break :qemu
+                else
+                    null;
+                try zig_args.append("--test-cmd");
+                try zig_args.append(bin_name);
+                if (glibc_dir_arg) |dir| {
+                    const full_dir = try fs.path.join(builder.allocator, [_][]const u8{
+                        dir,
+                        try self.target.linuxTriple(builder.allocator),
+                    });
+
+                    try zig_args.append("--test-cmd");
+                    try zig_args.append("-L");
+                    try zig_args.append("--test-cmd");
+                    try zig_args.append(full_dir);
+                }
+                try zig_args.append("--test-cmd-bin");
+            },
+            .wine => |bin_name| if (self.enable_wine) {
+                try zig_args.append("--test-cmd");
+                try zig_args.append(bin_name);
+                try zig_args.append("--test-cmd-bin");
+            },
         }
         for (self.packages.toSliceConst()) |pkg| {
             zig_args.append("--pkg-begin") catch unreachable;

@@ -92,6 +92,7 @@ else()
     set(EMBEDDED_LLD_LIB_SOURCES
         "${CMAKE_SOURCE_DIR}/deps/lld/Common/Args.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/Common/ErrorHandler.cpp"
+        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Filesystem.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/Common/Memory.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/Common/Reproduce.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/Common/Strings.cpp"
@@ -152,7 +153,6 @@ else()
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Driver.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/DriverUtils.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/EhFrame.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Filesystem.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/ICF.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/InputFiles.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/ELF/InputSection.cpp"
@@ -175,6 +175,7 @@ else()
     set(EMBEDDED_LLD_COFF_SOURCES
         "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Chunks.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DLL.cpp"
+        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DebugTypes.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Driver.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DriverUtils.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/COFF/ICF.cpp"
@@ -198,8 +199,10 @@ else()
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/LTO.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/MarkLive.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/OutputSections.cpp"
+        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Relocations.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/SymbolTable.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Symbols.cpp"
+        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/SyntheticSections.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Writer.cpp"
         "${CMAKE_SOURCE_DIR}/deps/lld/wasm/WriterUtils.cpp"
     )
@@ -449,6 +452,7 @@ set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/os.cpp"
     "${CMAKE_SOURCE_DIR}/src/parser.cpp"
     "${CMAKE_SOURCE_DIR}/src/range_set.cpp"
+    "${CMAKE_SOURCE_DIR}/src/stack_report.cpp"
     "${CMAKE_SOURCE_DIR}/src/target.cpp"
     "${CMAKE_SOURCE_DIR}/src/tokenizer.cpp"
     "${CMAKE_SOURCE_DIR}/src/translate_c.cpp"
@@ -505,7 +509,7 @@ endif()
 if(MSVC)
     set(EXE_CFLAGS "${EXE_CFLAGS}")
 else()
-    set(EXE_CFLAGS "${EXE_CFLAGS} -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -D_GNU_SOURCE -fvisibility-inlines-hidden -fno-exceptions -fno-rtti -Werror=strict-prototypes -Werror=old-style-definition -Werror=type-limits -Wno-missing-braces")
+    set(EXE_CFLAGS "${EXE_CFLAGS} -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -D_GNU_SOURCE -fvisibility-inlines-hidden -fno-exceptions -fno-rtti -Werror=type-limits -Wno-missing-braces")
     if(MINGW)
         set(EXE_CFLAGS "${EXE_CFLAGS} -Wno-format")
     endif()
@@ -516,6 +520,9 @@ set(OPTIMIZED_C_FLAGS "-std=c99 -O3")
 set(EXE_LDFLAGS " ")
 if(MSVC)
     set(EXE_LDFLAGS "${EXE_LDFLAGS} /STACK:16777216")
+    if(NOT "${CMAKE_BUILD_TYPE}" STREQUAL "Release" AND NOT "${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
+        set(EXE_LDFLAGS "${EXE_LDFLAGS} /debug:fastlink")
+    endif()
 elseif(MINGW) 
     set(EXE_LDFLAGS "${EXE_LDFLAGS} -Wl,--stack,16777216")
 endif()
@@ -587,12 +594,18 @@ if(MSVC)
 else()
     set(LIBUSERLAND "${CMAKE_BINARY_DIR}/libuserland.a")
 endif()
+if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    set(LIBUSERLAND_RELEASE_MODE "false")
+else()
+    set(LIBUSERLAND_RELEASE_MODE "true")
+endif()
 add_custom_target(zig_build_libuserland ALL
     COMMAND zig0 build
         --override-std-dir std
         --override-lib-dir "${CMAKE_SOURCE_DIR}"
         libuserland install
         "-Doutput-dir=${CMAKE_BINARY_DIR}"
+        "-Drelease=${LIBUSERLAND_RELEASE_MODE}"
         "-Dlib-files-only"
         --prefix "${CMAKE_INSTALL_PREFIX}"
     DEPENDS zig0

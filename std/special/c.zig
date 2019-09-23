@@ -12,6 +12,10 @@ const is_wasm = switch (builtin.arch) {
     .wasm32, .wasm64 => true,
     else => false,
 };
+const is_msvc = switch (builtin.abi) {
+    .msvc => true,
+    else => false,
+};
 const is_freestanding = switch (builtin.os) {
     .freestanding => true,
     else => false,
@@ -25,8 +29,14 @@ comptime {
         @export("strncmp", strncmp, .Strong);
         @export("strerror", strerror, .Strong);
         @export("strlen", strlen, .Strong);
+    } else if (is_msvc) {
+        @export("_fltused", _fltused, .Strong);
+    } else if (builtin.arch == builtin.Arch.arm and builtin.os == .linux) {
+        @export("__aeabi_read_tp", std.os.linux.getThreadPointer, .Strong);
     }
 }
+
+extern var _fltused: c_int = 1;
 
 extern fn main(argc: c_int, argv: [*][*]u8) c_int;
 extern fn wasm_start() void {
@@ -172,7 +182,10 @@ comptime {
         @export("__stack_chk_fail", __stack_chk_fail, builtin.GlobalLinkage.Strong);
     }
     if (builtin.os == builtin.Os.linux) {
-        @export("clone", clone, builtin.GlobalLinkage.Strong);
+        // TODO implement clone for riscv64
+        if (builtin.arch != .riscv64) {
+            @export("clone", clone, builtin.GlobalLinkage.Strong);
+        }
     }
 }
 extern fn __stack_chk_fail() noreturn {
@@ -237,6 +250,30 @@ nakedcc fn clone() void {
             \\      blr x1
             \\      mov x8,#93 // SYS_exit
             \\      svc #0
+        );
+    } else if (builtin.arch == builtin.Arch.arm) {
+        asm volatile (
+            \\    stmfd sp!,{r4,r5,r6,r7}
+            \\    mov r7,#120
+            \\    mov r6,r3
+            \\    mov r5,r0
+            \\    mov r0,r2
+            \\    and r1,r1,#-16
+            \\    ldr r2,[sp,#16]
+            \\    ldr r3,[sp,#20]
+            \\    ldr r4,[sp,#24]
+            \\    svc 0
+            \\    tst r0,r0
+            \\    beq 1f
+            \\    ldmfd sp!,{r4,r5,r6,r7}
+            \\    bx lr
+            \\
+            \\1:  mov r0,r6
+            \\    bl 3f
+            \\2:  mov r7,#1
+            \\    svc 0
+            \\    b 2b
+            \\3:  bx r5
         );
     } else {
         @compileError("Implement clone() for this arch.");

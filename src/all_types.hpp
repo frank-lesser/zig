@@ -25,6 +25,7 @@ struct ZigFn;
 struct Scope;
 struct ScopeBlock;
 struct ScopeFnDef;
+struct ScopeExpr;
 struct ZigType;
 struct ZigVar;
 struct ErrorTableEntry;
@@ -47,11 +48,20 @@ struct ResultLoc;
 struct ResultLocPeer;
 struct ResultLocPeerParent;
 struct ResultLocBitCast;
+struct ResultLocReturn;
 
 enum PtrLen {
     PtrLenUnknown,
     PtrLenSingle,
     PtrLenC,
+};
+
+// This one corresponds to the builtin.zig enum.
+enum BuiltinPtrSize {
+    BuiltinPtrSizeOne,
+    BuiltinPtrSizeMany,
+    BuiltinPtrSizeSlice,
+    BuiltinPtrSizeC,
 };
 
 enum UndefAllowed {
@@ -595,6 +605,12 @@ enum CallingConvention {
     CallingConventionAsync,
 };
 
+enum FnInline {
+    FnInlineAuto,
+    FnInlineAlways,
+    FnInlineNever,
+};
+
 struct AstNodeFnProto {
     VisibMod visib_mod;
     Buf *name;
@@ -604,7 +620,7 @@ struct AstNodeFnProto {
     bool is_var_args;
     bool is_extern;
     bool is_export;
-    bool is_inline;
+    FnInline fn_inline;
     CallingConvention cc;
     AstNode *fn_def_node;
     // populated if this is an extern declaration
@@ -743,11 +759,17 @@ struct AstNodeUnwrapOptional {
     AstNode *expr;
 };
 
+enum CallModifier {
+    CallModifierNone,
+    CallModifierAsync,
+    CallModifierNoAsync,
+    CallModifierBuiltin,
+};
+
 struct AstNodeFnCallExpr {
     AstNode *fn_ref_expr;
     ZigList<AstNode *> params;
-    bool is_builtin;
-    bool is_async;
+    CallModifier modifier;
     bool seen; // used by @compileLog
 };
 
@@ -1329,7 +1351,7 @@ struct ZigTypeBoundFn {
 };
 
 struct ZigTypeVector {
-    // The type must be a pointer, integer, or float
+    // The type must be a pointer, integer, bool, or float
     ZigType *elem_type;
     uint32_t len;
 };
@@ -1445,12 +1467,6 @@ enum FnAnalState {
     FnAnalStateInvalid,
 };
 
-enum FnInline {
-    FnInlineAuto,
-    FnInlineAlways,
-    FnInlineNever,
-};
-
 struct GlobalExport {
     Buf name;
     GlobalLinkageId linkage;
@@ -1534,6 +1550,7 @@ enum BuiltinFnId {
     BuiltinFnIdMemberName,
     BuiltinFnIdField,
     BuiltinFnIdTypeInfo,
+    BuiltinFnIdType,
     BuiltinFnIdHasField,
     BuiltinFnIdTypeof,
     BuiltinFnIdAddWithOverflow,
@@ -1594,6 +1611,8 @@ enum BuiltinFnId {
     BuiltinFnIdIntToEnum,
     BuiltinFnIdIntType,
     BuiltinFnIdVectorType,
+    BuiltinFnIdShuffle,
+    BuiltinFnIdSplat,
     BuiltinFnIdSetCold,
     BuiltinFnIdSetRuntimeSafety,
     BuiltinFnIdSetFloatMode,
@@ -1664,6 +1683,7 @@ enum PanicMsgId {
     PanicMsgIdResumedAnAwaitingFn,
     PanicMsgIdFrameTooSmall,
     PanicMsgIdResumedFnPendingAwait,
+    PanicMsgIdBadNoAsyncCall,
 
     PanicMsgIdCount,
 };
@@ -1752,6 +1772,7 @@ struct ZigLLVMFnKey {
         } overflow_arithmetic;
         struct {
             uint32_t bit_count;
+            uint32_t vector_len; // 0 means not a vector
         } bswap;
         struct {
             uint32_t bit_count;
@@ -1954,6 +1975,8 @@ struct CodeGen {
     ZigFn *panic_fn;
     TldFn *panic_tld_fn;
 
+    ZigFn *largest_frame_fn;
+
     WantPIC want_pic;
     WantStackCheck want_stack_check;
     CacheHash cache_hash;
@@ -1986,6 +2009,7 @@ struct CodeGen {
     bool generate_error_name_table;
     bool enable_cache; // mutually exclusive with output_dir
     bool enable_time_report;
+    bool enable_stack_report;
     bool system_linker_hack;
     bool reported_bad_link_libc_error;
     bool is_dynamic; // shared library rather than static library. dynamic musl rather than static musl.
@@ -2052,7 +2076,7 @@ struct CodeGen {
 };
 
 struct ZigVar {
-    Buf name;
+    const char *name;
     ConstExprValue *const_value;
     ZigType *var_type;
     LLVMValueRef value_ref;
@@ -2067,7 +2091,6 @@ struct ZigVar {
     LLVMValueRef param_value_ref;
     size_t mem_slot_index;
     IrExecutable *owner_exec;
-    size_t ref_count;
 
     // In an inline loop, multiple variables may be created,
     // In this case, a reference to a variable should follow
@@ -2077,6 +2100,7 @@ struct ZigVar {
     ZigList<GlobalExport> export_list;
 
     uint32_t align_bytes;
+    uint32_t ref_count;
 
     bool shadowable;
     bool src_is_const;
@@ -2107,6 +2131,7 @@ enum ScopeId {
     ScopeIdCompTime,
     ScopeIdRuntime,
     ScopeIdTypeOf,
+    ScopeIdExpr,
 };
 
 struct Scope {
@@ -2212,6 +2237,7 @@ struct ScopeLoop {
     ZigList<IrInstruction *> *incoming_values;
     ZigList<IrBasicBlock *> *incoming_blocks;
     ResultLocPeerParent *peer_parent;
+    ScopeExpr *spill_scope;
 };
 
 // This scope blocks certain things from working such as comptime continue
@@ -2252,6 +2278,24 @@ struct ScopeFnDef {
 // NodeTypeFnCallExpr
 struct ScopeTypeOf {
     Scope base;
+};
+
+enum MemoizedBool {
+    MemoizedBoolUnknown,
+    MemoizedBoolFalse,
+    MemoizedBoolTrue,
+};
+
+// This scope is created for each expression.
+// It's used to identify when an instruction needs to be spilled,
+// so that it can be accessed after a suspend point.
+struct ScopeExpr {
+    Scope base;
+
+    ScopeExpr **children_ptr;
+    size_t children_len;
+
+    MemoizedBool need_spill;
 };
 
 // synchronized with code in define_builtin_compile_vars
@@ -2387,6 +2431,9 @@ enum IrInstructionId {
     IrInstructionIdBoolToInt,
     IrInstructionIdIntType,
     IrInstructionIdVectorType,
+    IrInstructionIdShuffleVector,
+    IrInstructionIdSplatSrc,
+    IrInstructionIdSplatGen,
     IrInstructionIdBoolNot,
     IrInstructionIdMemset,
     IrInstructionIdMemcpy,
@@ -2436,6 +2483,7 @@ enum IrInstructionId {
     IrInstructionIdByteOffsetOf,
     IrInstructionIdBitOffsetOf,
     IrInstructionIdTypeInfo,
+    IrInstructionIdType,
     IrInstructionIdHasField,
     IrInstructionIdTypeId,
     IrInstructionIdSetEvalBranchQuota,
@@ -2492,6 +2540,10 @@ struct IrInstruction {
     // with this child field.
     IrInstruction *child;
     IrBasicBlock *owner_bb;
+    // Nearly any instruction can have to be stored as a local variable before suspending
+    // and then loaded after resuming, in case there is an expression with a suspend point
+    // in it, such as: x + await y
+    IrInstruction *spill;
     IrInstructionId id;
     // true if this instruction was generated by zig and not from user code
     bool is_gen;
@@ -2719,8 +2771,10 @@ struct IrInstructionCallSrc {
     ResultLoc *result_loc;
 
     IrInstruction *new_stack;
+
     FnInline fn_inline;
-    bool is_async;
+    CallModifier modifier;
+
     bool is_async_call_builtin;
     bool is_comptime;
 };
@@ -2734,10 +2788,11 @@ struct IrInstructionCallGen {
     IrInstruction **args;
     IrInstruction *result_loc;
     IrInstruction *frame_result_loc;
-
     IrInstruction *new_stack;
+
     FnInline fn_inline;
-    bool is_async;
+    CallModifier modifier;
+
     bool is_async_call_builtin;
 };
 
@@ -3472,6 +3527,12 @@ struct IrInstructionTypeInfo {
     IrInstruction *type_value;
 };
 
+struct IrInstructionType {
+    IrInstruction base;
+
+    IrInstruction *type_info;
+};
+
 struct IrInstructionHasField {
     IrInstruction base;
 
@@ -3568,6 +3629,7 @@ struct IrInstructionAddImplicitReturnType {
     IrInstruction base;
 
     IrInstruction *value;
+    ResultLocReturn *result_loc_ret;
 };
 
 // For float ops which take a single argument
@@ -3611,6 +3673,28 @@ struct IrInstructionVectorToArray {
 
     IrInstruction *vector;
     IrInstruction *result_loc;
+};
+
+struct IrInstructionShuffleVector {
+    IrInstruction base;
+
+    IrInstruction *scalar_type;
+    IrInstruction *a;
+    IrInstruction *b;
+    IrInstruction *mask; // This is in zig-format, not llvm format
+};
+
+struct IrInstructionSplatSrc {
+    IrInstruction base;
+
+    IrInstruction *len;
+    IrInstruction *scalar;
+};
+
+struct IrInstructionSplatGen {
+    IrInstruction base;
+
+    IrInstruction *scalar;
 };
 
 struct IrInstructionAssertZero {
@@ -3794,6 +3878,8 @@ struct ResultLocVar {
 
 struct ResultLocReturn {
     ResultLoc base;
+
+    bool implicit_return_type_done;
 };
 
 struct IrSuspendPosition {
