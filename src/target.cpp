@@ -524,7 +524,7 @@ void get_native_target(ZigTarget *target) {
     }
     if (target_is_glibc(target)) {
         target->glibc_version = allocate<ZigGLibCVersion>(1);
-        *target->glibc_version = {2, 17, 0};
+        target_init_default_glibc_version(target);
 #ifdef ZIG_OS_LINUX
         Error err;
         if ((err = glibc_detect_native_version(target->glibc_version))) {
@@ -532,6 +532,10 @@ void get_native_target(ZigTarget *target) {
         }
 #endif
     }
+}
+
+void target_init_default_glibc_version(ZigTarget *target) {
+    *target->glibc_version = {2, 17, 0};
 }
 
 Error target_parse_archsub(ZigLLVM_ArchType *out_arch, ZigLLVM_SubArchType *out_sub,
@@ -1450,6 +1454,7 @@ const char *arch_stack_pointer_register_name(ZigLLVM_ArchType arch) {
         case ZigLLVM_aarch64_32:
         case ZigLLVM_riscv32:
         case ZigLLVM_riscv64:
+        case ZigLLVM_mipsel:
             return "sp";
 
         case ZigLLVM_amdgcn:
@@ -1469,7 +1474,6 @@ const char *arch_stack_pointer_register_name(ZigLLVM_ArchType arch) {
         case ZigLLVM_mips:
         case ZigLLVM_mips64:
         case ZigLLVM_mips64el:
-        case ZigLLVM_mipsel:
         case ZigLLVM_msp430:
         case ZigLLVM_nvptx:
         case ZigLLVM_nvptx64:
@@ -1590,8 +1594,12 @@ bool target_supports_stack_probing(const ZigTarget *target) {
 
 bool target_requires_pic(const ZigTarget *target, bool linking_libc) {
   // This function returns whether non-pic code is completely invalid on the given target.
-  return target->os == OsWindows || target->os == OsUefi || target_os_requires_libc(target->os) ||
+  return target_is_android(target) || target->os == OsWindows || target->os == OsUefi || target_os_requires_libc(target->os) ||
       (linking_libc && target_is_glibc(target));
+}
+
+bool target_requires_pie(const ZigTarget *target) {
+    return target_is_android(target);
 }
 
 bool target_is_glibc(const ZigTarget *target) {
@@ -1876,7 +1884,7 @@ bool target_supports_libunwind(const ZigTarget *target) {
 }
 
 bool target_libc_needs_crti_crtn(const ZigTarget *target) {
-    if (target->arch == ZigLLVM_riscv32 || target->arch == ZigLLVM_riscv64) {
+    if (target->arch == ZigLLVM_riscv32 || target->arch == ZigLLVM_riscv64 || target_is_android(target)) {
         return false;
     }
     return true;
@@ -1884,6 +1892,11 @@ bool target_libc_needs_crti_crtn(const ZigTarget *target) {
 
 bool target_is_riscv(const ZigTarget *target) {
     return target->arch == ZigLLVM_riscv32 || target->arch == ZigLLVM_riscv64;
+}
+
+bool target_is_mips(const ZigTarget *target) {
+    return target->arch == ZigLLVM_mips || target->arch == ZigLLVM_mipsel ||
+        target->arch == ZigLLVM_mips64 || target->arch == ZigLLVM_mips64el;
 }
 
 unsigned target_fn_align(const ZigTarget *target) {

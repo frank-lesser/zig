@@ -822,6 +822,10 @@ static void glibc_add_include_dirs(CodeGen *parent, CFile *c_file) {
     if (parent->zig_target->os == OsLinux) {
         c_file->args.append("-I");
         c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "sysdeps" OS_SEP
+                    "unix" OS_SEP "sysv" OS_SEP "linux" OS_SEP "generic"));
+
+        c_file->args.append("-I");
+        c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "sysdeps" OS_SEP
                     "unix" OS_SEP "sysv" OS_SEP "linux" OS_SEP "include"));
         c_file->args.append("-I");
         c_file->args.append(path_from_libc(parent, "glibc" OS_SEP "sysdeps" OS_SEP
@@ -951,11 +955,10 @@ static void musl_add_cc_args(CodeGen *parent, CFile *c_file, bool want_O3) {
 
     c_file->args.append("-I");
     c_file->args.append(buf_ptr(buf_sprintf(
-            "%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-%s-%s",
+            "%s" OS_SEP "libc" OS_SEP "include" OS_SEP "%s-%s-musl",
         buf_ptr(parent->zig_lib_dir),
-        target_arch_name(parent->zig_target->arch),
-        target_os_name(parent->zig_target->os),
-        target_abi_name(parent->zig_target->abi))));
+        target_arch_musl_name(parent->zig_target->arch),
+        target_os_name(parent->zig_target->os))));
 
     c_file->args.append("-I");
     c_file->args.append(buf_ptr(buf_sprintf("%s" OS_SEP "libc" OS_SEP "include" OS_SEP "generic-musl",
@@ -1654,6 +1657,10 @@ static void construct_linker_job_elf(LinkJob *lj) {
         soname = buf_sprintf("lib%s.so.%" ZIG_PRI_usize, buf_ptr(g->root_out_name), g->version_major);
     }
 
+    if (target_requires_pie(g->zig_target) && g->out_type == OutTypeExe) {
+        lj->args.append("-pie");
+    }
+
     lj->args.append("-o");
     lj->args.append(buf_ptr(&g->output_file_path));
 
@@ -1661,6 +1668,12 @@ static void construct_linker_job_elf(LinkJob *lj) {
         const char *crt1o;
         if (g->zig_target->os == OsNetBSD) {
             crt1o = "crt0.o";
+        } else if (target_is_android(g->zig_target)) {
+            if (g->have_dynamic_link) {
+                crt1o = "crtbegin_dynamic.o";
+            } else {
+                crt1o = "crtbegin_static.o";
+            }
         } else if (!g->have_dynamic_link) {
             crt1o = "crt1.o";
         } else {
@@ -1768,22 +1781,28 @@ static void construct_linker_job_elf(LinkJob *lj) {
         if (g->libc != nullptr) {
             if (!g->have_dynamic_link) {
                 lj->args.append("--start-group");
-                lj->args.append("-lgcc");
-                lj->args.append("-lgcc_eh");
+                if (!target_is_android(g->zig_target)) {
+                    lj->args.append("-lgcc");
+                    lj->args.append("-lgcc_eh");
+                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
                 lj->args.append("--end-group");
             } else {
-                lj->args.append("-lgcc");
-                lj->args.append("--as-needed");
-                lj->args.append("-lgcc_s");
-                lj->args.append("--no-as-needed");
+                if (!target_is_android(g->zig_target)) {
+                    lj->args.append("-lgcc");
+                    lj->args.append("--as-needed");
+                    lj->args.append("-lgcc_s");
+                    lj->args.append("--no-as-needed");
+                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
-                lj->args.append("-lgcc");
-                lj->args.append("--as-needed");
-                lj->args.append("-lgcc_s");
-                lj->args.append("--no-as-needed");
+                if (!target_is_android(g->zig_target)) {
+                    lj->args.append("-lgcc");
+                    lj->args.append("--as-needed");
+                    lj->args.append("-lgcc_s");
+                    lj->args.append("--no-as-needed");
+                }
             }
 
             if (g->zig_target->os == OsFreeBSD) {
@@ -1806,8 +1825,12 @@ static void construct_linker_job_elf(LinkJob *lj) {
     }
 
     // crt end
-    if (lj->link_in_crt && target_libc_needs_crti_crtn(g->zig_target)) {
-        lj->args.append(get_libc_crt_file(g, "crtn.o"));
+    if (lj->link_in_crt) {
+        if (target_is_android(g->zig_target)) {
+            lj->args.append(get_libc_crt_file(g, "crtend_android.o"));
+        } else if (target_libc_needs_crti_crtn(g->zig_target)) {
+            lj->args.append(get_libc_crt_file(g, "crtn.o"));
+        }
     }
 
     if (!g->zig_target->is_native) {
@@ -1817,7 +1840,6 @@ static void construct_linker_job_elf(LinkJob *lj) {
     if (g->zig_target->os == OsZen) {
         lj->args.append("-e");
         lj->args.append("_start");
-
         lj->args.append("--image-base=0x10000000");
     }
 }

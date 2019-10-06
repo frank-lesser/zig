@@ -109,17 +109,16 @@ const test_targets = [_]TestTarget{
             },
         },
     },
-    // TODO https://github.com/ziglang/zig/issues/3286
-    //TestTarget{
-    //    .target = Target{
-    //        .Cross = CrossTarget{
-    //            .os = .linux,
-    //            .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
-    //            .abi = .musleabihf,
-    //        },
-    //    },
-    //    .link_libc = true,
-    //},
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
+                .abi = .musleabihf,
+            },
+        },
+        .link_libc = true,
+    },
     // TODO https://github.com/ziglang/zig/issues/3287
     //TestTarget{
     //    .target = Target{
@@ -131,6 +130,26 @@ const test_targets = [_]TestTarget{
     //    },
     //    .link_libc = true,
     //},
+
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = .mipsel,
+                .abi = .none,
+            },
+        },
+    },
+    TestTarget{
+        .target = Target{
+            .Cross = CrossTarget{
+                .os = .linux,
+                .arch = .mipsel,
+                .abi = .musl,
+            },
+        },
+        .link_libc = true,
+    },
 
     TestTarget{
         .target = Target{
@@ -409,7 +428,7 @@ pub fn addPkgTests(
         if (test_target.link_libc) {
             these_tests.linkSystemLibrary("c");
         }
-        these_tests.overrideStdDir("std");
+        these_tests.overrideZigLibDir("lib");
         these_tests.enable_wine = is_wine_enabled;
         these_tests.enable_qemu = is_qemu_enabled;
         these_tests.glibc_multi_install_dir = glibc_dir;

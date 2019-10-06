@@ -15,7 +15,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
 
 
 set(ZIG_VERSION_MAJOR 0)
-set(ZIG_VERSION_MINOR 4)
+set(ZIG_VERSION_MINOR 5)
 set(ZIG_VERSION_PATCH 0)
 set(ZIG_VERSION "${ZIG_VERSION_MAJOR}.${ZIG_VERSION_MINOR}.${ZIG_VERSION_PATCH}")
 
@@ -41,6 +41,7 @@ message("Configuring zig version ${ZIG_VERSION}")
 
 set(ZIG_STATIC off CACHE BOOL "Attempt to build a static zig executable (not compatible with glibc)")
 set(ZIG_STATIC_LLVM off CACHE BOOL "Prefer linking against static LLVM libraries")
+set(ZIG_SKIP_INSTALL_LIB_FILES off CACHE BOOL "Disable copying lib/ files to install prefix")
 
 if(ZIG_STATIC)
     set(ZIG_STATIC_LLVM "on")
@@ -442,6 +443,7 @@ set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/cache_hash.cpp"
     "${CMAKE_SOURCE_DIR}/src/codegen.cpp"
     "${CMAKE_SOURCE_DIR}/src/compiler.cpp"
+    "${CMAKE_SOURCE_DIR}/src/dump_analysis.cpp"
     "${CMAKE_SOURCE_DIR}/src/errmsg.cpp"
     "${CMAKE_SOURCE_DIR}/src/error.cpp"
     "${CMAKE_SOURCE_DIR}/src/glibc.cpp"
@@ -452,7 +454,6 @@ set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/os.cpp"
     "${CMAKE_SOURCE_DIR}/src/parser.cpp"
     "${CMAKE_SOURCE_DIR}/src/range_set.cpp"
-    "${CMAKE_SOURCE_DIR}/src/stack_report.cpp"
     "${CMAKE_SOURCE_DIR}/src/target.cpp"
     "${CMAKE_SOURCE_DIR}/src/tokenizer.cpp"
     "${CMAKE_SOURCE_DIR}/src/translate_c.cpp"
@@ -599,11 +600,15 @@ if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
 else()
     set(LIBUSERLAND_RELEASE_MODE "true")
 endif()
+if(ZIG_SKIP_INSTALL_LIB_FILES)
+    set(ZIG_BUILD_INSTALL_STEP "")
+else()
+    set(ZIG_BUILD_INSTALL_STEP "install")
+endif()
 add_custom_target(zig_build_libuserland ALL
     COMMAND zig0 build
-        --override-std-dir std
-        --override-lib-dir "${CMAKE_SOURCE_DIR}"
-        libuserland install
+        --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
+        libuserland ${ZIG_BUILD_INSTALL_STEP}
         "-Doutput-dir=${CMAKE_BINARY_DIR}"
         "-Drelease=${LIBUSERLAND_RELEASE_MODE}"
         "-Dlib-files-only"

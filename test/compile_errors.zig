@@ -3,6 +3,29 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "switch with overlapping case ranges",
+        \\export fn entry() void {
+        \\    var q: u8 = 0;
+        \\    switch (q) {
+        \\        1...2 => {},
+        \\        0...255 => {},
+        \\    }
+        \\}
+    ,
+        "tmp.zig:5:9: error: duplicate switch value",
+    );
+
+    cases.add(
+        "invalid optional type in extern struct",
+        \\const stroo = extern struct {
+        \\    moo: ?[*c]u8,
+        \\};
+        \\export fn testf(fluff: *stroo) void {}
+    ,
+        "tmp.zig:2:5: error: extern structs cannot contain fields of type '?[*c]u8'",
+    );
+
+    cases.add(
         "attempt to negate a non-integer, non-float or non-vector type",
         \\fn foo() anyerror!u32 {
         \\    return 1;

@@ -6,6 +6,12 @@ var new_stack_bytes: [1024]u8 align(16) = undefined;
 test "calling a function with a new stack" {
     // TODO: https://github.com/ziglang/zig/issues/3268
     if (@import("builtin").arch == .aarch64) return error.SkipZigTest;
+    if (@import("builtin").arch == .mipsel) return error.SkipZigTest;
+
+    if (@import("builtin").arch == .riscv64) {
+        // TODO: https://github.com/ziglang/zig/issues/3338
+        return error.SkipZigTest;
+    }
 
     const arg = 1234;
 

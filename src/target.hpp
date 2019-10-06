@@ -114,6 +114,7 @@ Error target_parse_os(Os *os, const char *os_ptr, size_t os_len);
 Error target_parse_abi(ZigLLVM_EnvironmentType *abi, const char *abi_ptr, size_t abi_len);
 
 Error target_parse_glibc_version(ZigGLibCVersion *out, const char *text);
+void target_init_default_glibc_version(ZigTarget *target);
 
 size_t target_arch_count(void);
 ZigLLVM_ArchType target_arch_enum(size_t index);
@@ -172,6 +173,7 @@ bool target_can_exec(const ZigTarget *host_target, const ZigTarget *guest_target
 ZigLLVM_OSType get_llvm_os_type(Os os_type);
 
 bool target_is_arm(const ZigTarget *target);
+bool target_is_mips(const ZigTarget *target);
 bool target_allows_addr_zero(const ZigTarget *target);
 bool target_has_valgrind_support(const ZigTarget *target);
 bool target_os_is_darwin(Os os);
@@ -181,6 +183,7 @@ const char *target_libc_generic_name(const ZigTarget *target);
 bool target_is_libc_lib_name(const ZigTarget *target, const char *name);
 bool target_supports_fpic(const ZigTarget *target);
 bool target_requires_pic(const ZigTarget *target, bool linking_libc);
+bool target_requires_pie(const ZigTarget *target);
 bool target_abi_is_gnu(ZigLLVM_EnvironmentType abi);
 bool target_abi_is_musl(ZigLLVM_EnvironmentType abi);
 bool target_is_glibc(const ZigTarget *target);

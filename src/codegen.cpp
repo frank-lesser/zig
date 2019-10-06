@@ -20,6 +20,7 @@
 #include "util.hpp"
 #include "zig_llvm.h"
 #include "userland.h"
+#include "dump_analysis.hpp"
 
 #include <stdio.h>
 #include <errno.h>
@@ -29,6 +30,11 @@ enum ResumeId {
     ResumeIdReturn,
     ResumeIdCall,
 };
+
+// TODO https://github.com/ziglang/zig/issues/2883
+// Until then we have this same default as Clang.
+// This avoids https://github.com/ziglang/zig/issues/3275
+static const char *riscv_default_features = "+a,+c,+d,+f,+m,+relax";
 
 static void init_darwin_native(CodeGen *g) {
     char *osx_target = getenv("MACOSX_DEPLOYMENT_TARGET");
@@ -1718,8 +1724,7 @@ static LLVMValueRef ir_llvm_value(CodeGen *g, IrInstruction *instruction) {
     return instruction->llvm_value;
 }
 
-ATTRIBUTE_NORETURN
-static void report_errors_and_exit(CodeGen *g) {
+void codegen_report_errors_and_exit(CodeGen *g) {
     assert(g->errors.length != 0);
     for (size_t i = 0; i < g->errors.length; i += 1) {
         ErrorMsg *err = g->errors.at(i);
@@ -1730,7 +1735,7 @@ static void report_errors_and_exit(CodeGen *g) {
 
 static void report_errors_and_maybe_exit(CodeGen *g) {
     if (g->errors.length != 0) {
-        report_errors_and_exit(g);
+        codegen_report_errors_and_exit(g);
     }
 }
 
@@ -1740,7 +1745,7 @@ static void give_up_with_c_abi_error(CodeGen *g, AstNode *source_node) {
             buf_sprintf("TODO: support C ABI for more targets. https://github.com/ziglang/zig/issues/1481"));
     add_error_note(g, msg, source_node,
         buf_sprintf("pointers, integers, floats, bools, and enums work on all targets"));
-    report_errors_and_exit(g);
+    codegen_report_errors_and_exit(g);
 }
 
 static LLVMValueRef build_alloca(CodeGen *g, ZigType *type_entry, const char *name, uint32_t alignment) {
@@ -3451,7 +3456,7 @@ static bool value_is_all_undef(CodeGen *g, ConstExprValue *const_val) {
     Error err;
     if (const_val->special == ConstValSpecialLazy &&
         (err = ir_resolve_lazy(g, nullptr, const_val)))
-        report_errors_and_exit(g);
+        codegen_report_errors_and_exit(g);
 
     switch (const_val->special) {
         case ConstValSpecialLazy:
@@ -4248,7 +4253,7 @@ static LLVMValueRef ir_render_struct_field_ptr(CodeGen *g, IrExecutable *executa
     ZigType *struct_type = (struct_ptr_type->id == ZigTypeIdPointer) ?
         struct_ptr_type->data.pointer.child_type : struct_ptr_type;
     if ((err = type_resolve(g, struct_type, ResolveStatusLLVMFull)))
-        report_errors_and_exit(g);
+        codegen_report_errors_and_exit(g);
 
     assert(field->gen_index != SIZE_MAX);
     return LLVMBuildStructGEP(g->builder, struct_ptr, (unsigned)field->gen_index, "");
@@ -6620,7 +6625,7 @@ static LLVMValueRef gen_const_val(CodeGen *g, ConstExprValue *const_val, const c
 check: switch (const_val->special) {
         case ConstValSpecialLazy:
             if ((err = ir_resolve_lazy(g, nullptr, const_val))) {
-                report_errors_and_exit(g);
+                codegen_report_errors_and_exit(g);
             }
             goto check;
         case ConstValSpecialRuntime:
@@ -6759,13 +6764,12 @@ check: switch (const_val->special) {
                                 assert(LLVMGetTypeKind(field_ty) == LLVMIntegerTypeKind);
                                 fields[type_struct_field->gen_index] = val;
                             } else {
-                                const LLVMValueRef MASK = LLVMConstInt(LLVMInt8Type(), 255, false);
-                                const LLVMValueRef AMT = LLVMConstInt(LLVMInt8Type(), 8, false);
+                                const LLVMValueRef AMT = LLVMConstInt(LLVMTypeOf(val), 8, false);
 
                                 LLVMValueRef *values = allocate<LLVMValueRef>(size_in_bytes);
                                 for (size_t i = 0; i < size_in_bytes; i++) {
                                     const size_t idx = is_big_endian ? size_in_bytes - 1 - i : i;
-                                    values[idx] = LLVMConstTruncOrBitCast(LLVMConstAnd(val, MASK), LLVMInt8Type());
+                                    values[idx] = LLVMConstTruncOrBitCast(val, LLVMInt8Type());
                                     val = LLVMConstLShr(val, AMT);
                                 }
 
@@ -8720,8 +8724,9 @@ static void init(CodeGen *g) {
         }
     } else if (target_is_riscv(g->zig_target)) {
         // TODO https://github.com/ziglang/zig/issues/2883
+        // Be aware of https://github.com/ziglang/zig/issues/3275
         target_specific_cpu_args = "";
-        target_specific_features = "+a";
+        target_specific_features = riscv_default_features;
     } else {
         target_specific_cpu_args = "";
         target_specific_features = "";
@@ -8915,13 +8920,29 @@ static void detect_libc(CodeGen *g) {
             }
         }
         bool want_sys_dir = !buf_eql_buf(&g->libc->include_dir, &g->libc->sys_include_dir);
-        size_t dir_count = 1 + want_sys_dir;
-        g->libc_include_dir_len = dir_count;
+        size_t want_um_and_shared_dirs = (g->zig_target->os == OsWindows) ? 2 : 0;
+        size_t dir_count = 1 + want_sys_dir + want_um_and_shared_dirs;
+        g->libc_include_dir_len = 0;
         g->libc_include_dir_list = allocate<Buf*>(dir_count);
-        g->libc_include_dir_list[0] = &g->libc->include_dir;
+
+        g->libc_include_dir_list[g->libc_include_dir_len] = &g->libc->include_dir;
+        g->libc_include_dir_len += 1;
+
         if (want_sys_dir) {
-            g->libc_include_dir_list[1] = &g->libc->sys_include_dir;
+            g->libc_include_dir_list[g->libc_include_dir_len] = &g->libc->sys_include_dir;
+            g->libc_include_dir_len += 1;
         }
+
+        if (want_um_and_shared_dirs != 0) {
+            g->libc_include_dir_list[g->libc_include_dir_len] = buf_sprintf("%s" OS_SEP ".." OS_SEP "um",
+                    buf_ptr(&g->libc->include_dir));
+            g->libc_include_dir_len += 1;
+
+            g->libc_include_dir_list[g->libc_include_dir_len] = buf_sprintf("%s" OS_SEP ".." OS_SEP "shared",
+                    buf_ptr(&g->libc->include_dir));
+            g->libc_include_dir_len += 1;
+        }
+        assert(g->libc_include_dir_len == dir_count);
     } else if ((g->out_type == OutTypeExe || (g->out_type == OutTypeLib && g->is_dynamic)) &&
         !target_os_is_darwin(g->zig_target->os))
     {
@@ -9007,7 +9028,7 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
             args.append("-Xclang");
             args.append("-target-feature");
             args.append("-Xclang");
-            args.append("+a");
+            args.append(riscv_default_features);
         }
     }
     if (g->zig_target->os == OsFreestanding) {
@@ -10136,6 +10157,8 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->have_stack_probing);
     cache_bool(ch, g->is_dummy_so);
     cache_bool(ch, g->function_sections);
+    cache_bool(ch, g->enable_dump_analysis);
+    cache_bool(ch, g->enable_doc_generation);
     cache_buf_opt(ch, g->mmacosx_version_min);
     cache_buf_opt(ch, g->mios_version_min);
     cache_usize(ch, g->version_major);
@@ -10238,8 +10261,13 @@ void codegen_build_and_link(CodeGen *g) {
     Error err;
     assert(g->out_type != OutTypeUnknown);
 
-    if (!g->enable_cache && g->output_dir == nullptr) {
-        g->output_dir = buf_create_from_str(".");
+    if (!g->enable_cache) {
+        if (g->output_dir == nullptr) {
+            g->output_dir = buf_create_from_str(".");
+        } else if ((err = os_make_path(g->output_dir))) {
+            fprintf(stderr, "Unable to create output directory: %s\n", err_str(err));
+            exit(1);
+        }
     }
 
     g->have_dynamic_link = detect_dynamic_link(g);
@@ -10312,6 +10340,57 @@ void codegen_build_and_link(CodeGen *g) {
                 gen_h_file(g);
             }
         }
+        if (g->enable_dump_analysis) {
+            const char *analysis_json_filename = buf_ptr(buf_sprintf("%s" OS_SEP "%s-analysis.json",
+                        buf_ptr(g->output_dir), buf_ptr(g->root_out_name)));
+            FILE *f = fopen(analysis_json_filename, "wb");
+            if (f == nullptr) {
+                fprintf(stderr, "Unable to open '%s': %s\n", analysis_json_filename, strerror(errno));
+                exit(1);
+            }
+            zig_print_analysis_dump(g, f, " ", "\n");
+            if (fclose(f) != 0) {
+                fprintf(stderr, "Unable to write '%s': %s\n", analysis_json_filename, strerror(errno));
+                exit(1);
+            }
+        }
+        if (g->enable_doc_generation) {
+            Buf *doc_dir_path = buf_sprintf("%s" OS_SEP "doc", buf_ptr(g->output_dir));
+            if ((err = os_make_path(doc_dir_path))) {
+                fprintf(stderr, "Unable to create directory %s: %s\n", buf_ptr(doc_dir_path), err_str(err));
+                exit(1);
+            }
+            Buf *index_html_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "doc" OS_SEP "index.html",
+                    buf_ptr(g->zig_std_dir));
+            Buf *index_html_dest_path = buf_sprintf("%s" OS_SEP "index.html", buf_ptr(doc_dir_path));
+            Buf *main_js_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "doc" OS_SEP "main.js",
+                    buf_ptr(g->zig_std_dir));
+            Buf *main_js_dest_path = buf_sprintf("%s" OS_SEP "main.js", buf_ptr(doc_dir_path));
+
+            if ((err = os_copy_file(index_html_src_path, index_html_dest_path))) {
+                fprintf(stderr, "Unable to copy %s to %s: %s\n", buf_ptr(index_html_src_path),
+                        buf_ptr(index_html_dest_path), err_str(err));
+                exit(1);
+            }
+            if ((err = os_copy_file(main_js_src_path, main_js_dest_path))) {
+                fprintf(stderr, "Unable to copy %s to %s: %s\n", buf_ptr(main_js_src_path),
+                        buf_ptr(main_js_dest_path), err_str(err));
+                exit(1);
+            }
+            const char *data_js_filename = buf_ptr(buf_sprintf("%s" OS_SEP "data.js", buf_ptr(doc_dir_path)));
+            FILE *f = fopen(data_js_filename, "wb");
+            if (f == nullptr) {
+                fprintf(stderr, "Unable to open '%s': %s\n", data_js_filename, strerror(errno));
+                exit(1);
+            }
+            fprintf(f, "zigAnalysis=");
+            zig_print_analysis_dump(g, f, "", "");
+            fprintf(f, ";");
+            if (fclose(f) != 0) {
+                fprintf(stderr, "Unable to write '%s': %s\n", data_js_filename, strerror(errno));
+                exit(1);
+            }
+        }
 
         // If we're outputting assembly or llvm IR we skip linking.
         // If we're making a library or executable we must link.
@@ -10356,8 +10435,7 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
         ZigLibCInstallation *libc)
 {
     CodeGen *child_gen = codegen_create(nullptr, root_src_path, parent_gen->zig_target, out_type,
-        parent_gen->build_mode, parent_gen->zig_lib_dir, parent_gen->zig_std_dir, libc, get_stage1_cache_path(),
-        false);
+        parent_gen->build_mode, parent_gen->zig_lib_dir, libc, get_stage1_cache_path(), false);
     child_gen->disable_gen_h = true;
     child_gen->want_stack_check = WantStackCheckDisabled;
     child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
@@ -10385,7 +10463,7 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
 }
 
 CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget *target,
-    OutType out_type, BuildMode build_mode, Buf *override_lib_dir, Buf *override_std_dir,
+    OutType out_type, BuildMode build_mode, Buf *override_lib_dir,
     ZigLibCInstallation *libc, Buf *cache_dir, bool is_test_build)
 {
     CodeGen *g = allocate<CodeGen>(1);
@@ -10403,12 +10481,8 @@ CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget 
         g->zig_lib_dir = override_lib_dir;
     }
 
-    if (override_std_dir == nullptr) {
-        g->zig_std_dir = buf_alloc();
-        os_path_join(g->zig_lib_dir, buf_create_from_str("std"), g->zig_std_dir);
-    } else {
-        g->zig_std_dir = override_std_dir;
-    }
+    g->zig_std_dir = buf_alloc();
+    os_path_join(g->zig_lib_dir, buf_create_from_str("std"), g->zig_std_dir);
 
     g->zig_c_headers_dir = buf_alloc();
     os_path_join(g->zig_lib_dir, buf_create_from_str("include"), g->zig_c_headers_dir);

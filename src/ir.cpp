@@ -14837,6 +14837,8 @@ static IrInstruction *ir_analyze_instruction_decl_var(IrAnalyze *ira,
 }
 
 static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructionExport *instruction) {
+    Error err;
+
     IrInstruction *name = instruction->name->child;
     Buf *symbol_name = ir_resolve_str(ira, name);
     if (symbol_name == nullptr) {
@@ -14933,8 +14935,12 @@ static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructio
                 want_var_export = true;
             }
             break;
-        case ZigTypeIdArray:
-            if (!type_allowed_in_extern(ira->codegen, target->value.type->data.array.child_type)) {
+        case ZigTypeIdArray: {
+            bool ok_type;
+            if ((err = type_allowed_in_extern(ira->codegen, target->value.type->data.array.child_type, &ok_type)))
+                return ira->codegen->invalid_instruction;
+
+            if (!ok_type) {
                 ir_add_error(ira, target,
                     buf_sprintf("array element type '%s' not extern-compatible",
                         buf_ptr(&target->value.type->data.array.child_type->name)));
@@ -14942,6 +14948,7 @@ static IrInstruction *ir_analyze_instruction_export(IrAnalyze *ira, IrInstructio
                 want_var_export = true;
             }
             break;
+        }
         case ZigTypeIdMetaType: {
             ZigType *type_value = target->value.data.x_type;
             switch (type_value->id) {
@@ -15480,6 +15487,7 @@ static IrInstruction *ir_resolve_result(IrAnalyze *ira, IrInstruction *suspend_s
     if (actual_elem_type->id == ZigTypeIdOptional && value_type->id != ZigTypeIdOptional &&
             value_type->id != ZigTypeIdNull)
     {
+        result_loc_pass1->written = false;
         return ir_analyze_unwrap_optional_payload(ira, suspend_source_instr, result_loc, false, true);
     } else if (actual_elem_type->id == ZigTypeIdErrorUnion && value_type->id != ZigTypeIdErrorUnion) {
         if (value_type->id == ZigTypeIdErrorSet) {
@@ -15488,7 +15496,8 @@ static IrInstruction *ir_resolve_result(IrAnalyze *ira, IrInstruction *suspend_s
             IrInstruction *unwrapped_err_ptr = ir_analyze_unwrap_error_payload(ira, suspend_source_instr,
                     result_loc, false, true);
             ZigType *actual_payload_type = actual_elem_type->data.error_union.payload_type;
-            if (actual_payload_type->id == ZigTypeIdOptional && value_type->id != ZigTypeIdOptional) {
+            if (actual_payload_type->id == ZigTypeIdOptional && value_type->id != ZigTypeIdOptional &&
+                value_type->id != ZigTypeIdNull) {
                 return ir_analyze_unwrap_optional_payload(ira, suspend_source_instr, unwrapped_err_ptr, false, true);
             } else {
                 return unwrapped_err_ptr;
@@ -17664,20 +17673,37 @@ static IrInstruction *ir_analyze_container_member_access_inner(IrAnalyze *ira,
     if (!is_slice(bare_struct_type)) {
         ScopeDecls *container_scope = get_container_scope(bare_struct_type);
         assert(container_scope != nullptr);
-        auto entry = container_scope->decl_table.maybe_get(field_name);
-        Tld *tld = entry ? entry->value : nullptr;
-        if (tld && tld->id == TldIdFn) {
-            resolve_top_level_decl(ira->codegen, tld, source_instr->source_node, false);
-            if (tld->resolution == TldResolutionInvalid)
-                return ira->codegen->invalid_instruction;
-            TldFn *tld_fn = (TldFn *)tld;
-            ZigFn *fn_entry = tld_fn->fn_entry;
-            if (type_is_invalid(fn_entry->type_entry))
-                return ira->codegen->invalid_instruction;
+        auto tld = find_container_decl(ira->codegen, container_scope, field_name);
+        if (tld) {
+            if (tld->id == TldIdFn) {
+                resolve_top_level_decl(ira->codegen, tld, source_instr->source_node, false);
+                if (tld->resolution == TldResolutionInvalid)
+                    return ira->codegen->invalid_instruction;
+                TldFn *tld_fn = (TldFn *)tld;
+                ZigFn *fn_entry = tld_fn->fn_entry;
+                if (type_is_invalid(fn_entry->type_entry))
+                    return ira->codegen->invalid_instruction;
 
-            IrInstruction *bound_fn_value = ir_build_const_bound_fn(&ira->new_irb, source_instr->scope,
-                source_instr->source_node, fn_entry, container_ptr);
-            return ir_get_ref(ira, source_instr, bound_fn_value, true, false);
+                IrInstruction *bound_fn_value = ir_build_const_bound_fn(&ira->new_irb, source_instr->scope,
+                    source_instr->source_node, fn_entry, container_ptr);
+                return ir_get_ref(ira, source_instr, bound_fn_value, true, false);
+            } else if (tld->id == TldIdVar) {
+                resolve_top_level_decl(ira->codegen, tld, source_instr->source_node, false);
+                if (tld->resolution == TldResolutionInvalid)
+                    return ira->codegen->invalid_instruction;
+                TldVar *tld_var = (TldVar *)tld;
+                ZigVar *var = tld_var->var;
+                if (type_is_invalid(var->var_type))
+                    return ira->codegen->invalid_instruction;
+
+                if (var->const_value->type->id == ZigTypeIdFn) {
+                    ir_assert(var->const_value->data.x_ptr.special == ConstPtrSpecialFunction, source_instr);
+                    ZigFn *fn = var->const_value->data.x_ptr.data.fn.fn_entry;
+                    IrInstruction *bound_fn_value = ir_build_const_bound_fn(&ira->new_irb, source_instr->scope,
+                        source_instr->source_node, fn, container_ptr);
+                    return ir_get_ref(ira, source_instr, bound_fn_value, true, false);
+                }
+            }
         }
     }
     const char *prefix_name;
@@ -26720,7 +26746,10 @@ static Error ir_resolve_lazy_raw(AstNode *source_node, ConstExprValue *val) {
                         buf_create_from_str("unknown-length pointer to opaque"));
                 return ErrorSemanticAnalyzeFail;
             } else if (lazy_ptr_type->ptr_len == PtrLenC) {
-                if (!type_allowed_in_extern(ira->codegen, elem_type)) {
+                bool ok_type;
+                if ((err = type_allowed_in_extern(ira->codegen, elem_type, &ok_type)))
+                    return err;
+                if (!ok_type) {
                     ir_add_error(ira, lazy_ptr_type->elem_type,
                         buf_sprintf("C pointers cannot point to non-C-ABI-compatible type '%s'",
                             buf_ptr(&elem_type->name)));

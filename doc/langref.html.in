@@ -2,9 +2,8 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>Documentation - The Zig Programming Language</title>
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNSAxMCIgZmlsbD0iI2Y3YTQxZCI+PHBhdGggZD0iTTAsMSBIMy41IFYzIEgyIFY3IEgzLjY4MiBMMS44ODEsOSBIMCBaIE0xNSw5IEgxMS41IFY3IEgxMyBWMyBIMTEuMzE4IEwxMy4xMTksMSBIMTUgWiBNNCwxIEg5LjkxMiBMMTMuMzI4LDAuMDIxIEw3LjA0NSw3IEgxMSBWOSBINS4wODggTDEuNjcyLDkuOTc5IEw3Ljk1NSwzIEg0IFoiLz48L3N2Zz4="/>
+    <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAgklEQVR4AWMYWuD7EllJIM4G4g4g5oIJ/odhOJ8wToOxSTXgNxDHoeiBMfA4+wGShjyYOCkG/IGqWQziEzYAoUAeiF9D5U+DxEg14DRU7jWIT5IBIOdCxf+A+CQZAAoopEB7QJwBCBwHiip8UYmRdrAlDpIMgApwQZNnNii5Dq0MBgCxxycBnwEd+wAAAABJRU5ErkJggg=="/>
     <style type="text/css">
       body{
         font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
@@ -160,6 +159,7 @@
     <a href="https://ziglang.org/documentation/0.2.0">0.2.0</a> |
     <a href="https://ziglang.org/documentation/0.3.0">0.3.0</a> |
     <a href="https://ziglang.org/documentation/0.4.0">0.4.0</a> |
+    <a href="https://ziglang.org/documentation/0.5.0">0.5.0</a> |
     master
     <div id="contents">
       {#header_open|Introduction#}
@@ -5187,6 +5187,41 @@ test "@intToPtr for pointer to zero bit type" {
       </p>
       {#header_close#}
 
+      {#header_open|usingnamespace#}
+      <p>
+      {#syntax#}usingnamespace{#endsyntax#} is a top level declaration that imports all the public declarations of
+      the operand, which must be a {#link|struct#}, {#link|union#}, or {#link|enum#}, into the current scope:
+      </p>
+      {#code_begin|test|usingnamespace#}
+usingnamespace @import("std");
+
+test "using std namespace" {
+    debug.assert(true);
+}
+      {#code_end#}
+      <p>
+      Instead of the above pattern, it is generally recommended to explicitly alias individual declarations.
+      However, {#syntax#}usingnamespace{#endsyntax#} has an important use case when organizing the public
+      API of a file or package. For example, one might have <code>c.zig</code> with all of the
+      {#link|C imports|Import from C Header File#}:
+      </p>
+      <pre>{#syntax#}
+pub usingnamespace @cImport({
+    @cInclude("epoxy/gl.h");
+    @cInclude("GLFW/glfw3.h");
+    @cDefine("STBI_ONLY_PNG", "");
+    @cDefine("STBI_NO_STDIO", "");
+    @cInclude("stb_image.h");
+});
+      {#endsyntax#}</pre>
+      <p>
+      The above example demonstrates using {#syntax#}pub{#endsyntax#} to qualify the
+      {#syntax#}usingnamespace{#endsyntax#} additionally makes the imported declarations
+      {#syntax#}pub{#endsyntax#}. This can be used to forward declarations, giving precise control
+      over what declarations a given file exposes.
+      </p>
+      {#header_close#}
+
       {#header_open|comptime#}
       <p>
       Zig places importance on the concept of whether an expression is known at compile-time.
@@ -7102,7 +7137,7 @@ fn func() void {
       {#header_close#}
 
       {#header_open|@hasDecl#}
-      <pre>{#syntax#}@hasDecl(comptime container: type, comptime name: []const u8) bool{#endsyntax#}</pre>
+      <pre>{#syntax#}@hasDecl(comptime Container: type, comptime name: []const u8) bool{#endsyntax#}</pre>
       <p>
       Returns whether or not a {#link|struct#}, {#link|enum#}, or {#link|union#} has a declaration
       matching {#syntax#}name{#endsyntax#}.
@@ -7135,7 +7170,7 @@ test "@hasDecl" {
       {#header_close#}
 
       {#header_open|@hasField#}
-      <pre>{#syntax#}@hasField(comptime T: type, comptime name: []const u8) bool{#endsyntax#}</pre>
+      <pre>{#syntax#}@hasField(comptime Container: type, comptime name: []const u8) bool{#endsyntax#}</pre>
       <p>Returns whether the field name of a struct, union, or enum exists.</p>
       <p>
       The result is a compile time constant.
@@ -8388,8 +8423,9 @@ pub fn build(b: *Builder) void {
       detected at compile-time, Zig emits a compile error and refuses to continue.
       Most undefined behavior that cannot be detected at compile-time can be detected
       at runtime. In these cases, Zig has safety checks. Safety checks can be disabled
-      on a per-block basis with {#link|setRuntimeSafety#}. The {#link|ReleaseFast#}
-      build mode disables all safety checks in order to facilitate optimizations.
+      on a per-block basis with {#link|@setRuntimeSafety#}. The {#link|ReleaseFast#}
+      and {#link|ReleaseSmall#} build modes disable all safety checks (except where overridden
+      by {#link|@setRuntimeSafety#}) in order to facilitate optimizations.
       </p>
       <p>
       When a safety check fails, Zig crashes with a stack trace, like this:
