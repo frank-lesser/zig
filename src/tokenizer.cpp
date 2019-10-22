@@ -193,9 +193,12 @@ enum TokenizeState {
     TokenizeStateStringEscapeUnicodeStart,
     TokenizeStateCharLiteral,
     TokenizeStateCharLiteralEnd,
+    TokenizeStateCharLiteralUnicode,
     TokenizeStateSawStar,
     TokenizeStateSawStarPercent,
     TokenizeStateSawSlash,
+    TokenizeStateSawSlash2,
+    TokenizeStateSawSlash3,
     TokenizeStateSawBackslash,
     TokenizeStateSawPercent,
     TokenizeStateSawPlus,
@@ -206,6 +209,7 @@ enum TokenizeState {
     TokenizeStateSawCaret,
     TokenizeStateSawBar,
     TokenizeStateSawBarBar,
+    TokenizeStateDocComment,
     TokenizeStateLineComment,
     TokenizeStateLineString,
     TokenizeStateLineStringEnd,
@@ -247,6 +251,7 @@ struct Tokenize {
     int exponent_in_bin_or_dec;
     BigInt specified_exponent;
     BigInt significand;
+    size_t remaining_code_units;
 };
 
 ATTRIBUTE_PRINTF(2, 3)
@@ -910,8 +915,7 @@ void tokenize(Buf *buf, Tokenization *out) {
             case TokenizeStateSawSlash:
                 switch (c) {
                     case '/':
-                        cancel_token(&t);
-                        t.state = TokenizeStateLineComment;
+                        t.state = TokenizeStateSawSlash2;
                         break;
                     case '=':
                         set_token_id(&t, t.cur_tok, TokenIdDivEq);
@@ -923,6 +927,38 @@ void tokenize(Buf *buf, Tokenization *out) {
                         end_token(&t);
                         t.state = TokenizeStateStart;
                         continue;
+                }
+                break;
+            case TokenizeStateSawSlash2:
+                switch (c) {
+                    case '/':
+                        t.state = TokenizeStateSawSlash3;
+                        break;
+                    case '\n':
+                        cancel_token(&t);
+                        t.state = TokenizeStateStart;
+                        break;
+                    default:
+                        cancel_token(&t);
+                        t.state = TokenizeStateLineComment;
+                        break;
+                }
+                break;
+            case TokenizeStateSawSlash3:
+                switch (c) {
+                    case '/':
+                        cancel_token(&t);
+                        t.state = TokenizeStateLineComment;
+                        break;
+                    case '\n':
+                        set_token_id(&t, t.cur_tok, TokenIdDocComment);
+                        end_token(&t);
+                        t.state = TokenizeStateStart;
+                        break;
+                    default:
+                        set_token_id(&t, t.cur_tok, TokenIdDocComment);
+                        t.state = TokenizeStateDocComment;
+                        break;
                 }
                 break;
             case TokenizeStateSawBackslash:
@@ -997,6 +1033,17 @@ void tokenize(Buf *buf, Tokenization *out) {
             case TokenizeStateLineComment:
                 switch (c) {
                     case '\n':
+                        t.state = TokenizeStateStart;
+                        break;
+                    default:
+                        // do nothing
+                        break;
+                }
+                break;
+            case TokenizeStateDocComment:
+                switch (c) {
+                    case '\n':
+                        end_token(&t);
                         t.state = TokenizeStateStart;
                         break;
                     default:
@@ -1176,17 +1223,32 @@ void tokenize(Buf *buf, Tokenization *out) {
                 }
                 break;
             case TokenizeStateCharLiteral:
-                switch (c) {
-                    case '\'':
-                        tokenize_error(&t, "expected character");
-                        break;
-                    case '\\':
-                        t.state = TokenizeStateStringEscape;
-                        break;
-                    default:
-                        t.cur_tok->data.char_lit.c = c;
-                        t.state = TokenizeStateCharLiteralEnd;
-                        break;
+                if (c == '\'') {
+                    tokenize_error(&t, "expected character");
+                } else if (c == '\\') {
+                    t.state = TokenizeStateStringEscape;
+                } else if ((c >= 0x80 && c <= 0xbf) || c >= 0xf8) {
+                    // 10xxxxxx
+                    // 11111xxx
+                    invalid_char_error(&t, c);
+                } else if (c >= 0xc0 && c <= 0xdf) {
+                    // 110xxxxx
+                    t.cur_tok->data.char_lit.c = c & 0x1f;
+                    t.remaining_code_units = 1;
+                    t.state = TokenizeStateCharLiteralUnicode;
+                } else if (c >= 0xe0 && c <= 0xef) {
+                    // 1110xxxx
+                    t.cur_tok->data.char_lit.c = c & 0x0f;
+                    t.remaining_code_units = 2;
+                    t.state = TokenizeStateCharLiteralUnicode;
+                } else if (c >= 0xf0 && c <= 0xf7) {
+                    // 11110xxx
+                    t.cur_tok->data.char_lit.c = c & 0x07;
+                    t.remaining_code_units = 3;
+                    t.state = TokenizeStateCharLiteralUnicode;
+                } else {
+                    t.cur_tok->data.char_lit.c = c;
+                    t.state = TokenizeStateCharLiteralEnd;
                 }
                 break;
             case TokenizeStateCharLiteralEnd:
@@ -1197,6 +1259,17 @@ void tokenize(Buf *buf, Tokenization *out) {
                         break;
                     default:
                         invalid_char_error(&t, c);
+                }
+                break;
+            case TokenizeStateCharLiteralUnicode:
+                if (c <= 0x7f || c >= 0xc0) {
+                    invalid_char_error(&t, c);
+                }
+                t.cur_tok->data.char_lit.c <<= 6;
+                t.cur_tok->data.char_lit.c += c & 0x3f;
+                t.remaining_code_units--;
+                if (t.remaining_code_units == 0) {
+                    t.state = TokenizeStateCharLiteralEnd;
                 }
                 break;
             case TokenizeStateZero:
@@ -1434,6 +1507,7 @@ void tokenize(Buf *buf, Tokenization *out) {
             break;
         case TokenizeStateCharLiteral:
         case TokenizeStateCharLiteralEnd:
+        case TokenizeStateCharLiteralUnicode:
             tokenize_error(&t, "unterminated character literal");
             break;
         case TokenizeStateSymbol:
@@ -1466,6 +1540,7 @@ void tokenize(Buf *buf, Tokenization *out) {
         case TokenizeStateLineStringEnd:
         case TokenizeStateSawBarBar:
         case TokenizeStateLBracket:
+        case TokenizeStateDocComment:
             end_token(&t);
             break;
         case TokenizeStateSawDotDot:
@@ -1478,6 +1553,8 @@ void tokenize(Buf *buf, Tokenization *out) {
             tokenize_error(&t, "unexpected EOF");
             break;
         case TokenizeStateLineComment:
+        case TokenizeStateSawSlash2:
+        case TokenizeStateSawSlash3:
             break;
     }
     if (t.state != TokenizeStateError) {
@@ -1524,6 +1601,7 @@ const char * token_name(TokenId id) {
         case TokenIdComma: return ",";
         case TokenIdDash: return "-";
         case TokenIdDivEq: return "/=";
+        case TokenIdDocComment: return "DocComment";
         case TokenIdDot: return ".";
         case TokenIdEllipsis2: return "..";
         case TokenIdEllipsis3: return "...";

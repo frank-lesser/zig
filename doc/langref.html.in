@@ -552,8 +552,7 @@ pub fn main() void {
       <p>
       Character literals have type {#syntax#}comptime_int{#endsyntax#}, the same as
       {#link|Integer Literals#}. All {#link|Escape Sequences#} are valid in both string literals
-      and character literals. Once https://github.com/ziglang/zig/issues/2097 is implemented,
-      character literals will be allowed to have a single UTF-8 encoded codepoint.
+      and character literals.
       </p>
       {#code_begin|test#}
 const assert = @import("std").debug.assert;
@@ -567,6 +566,7 @@ test "string literals" {
     assert(normal_bytes[1] == 'e');
     assert('e' == '\x65');
     assert('\u{1f4a9}' == 128169);
+    assert('💯' == 128175);
     assert(mem.eql(u8, "hello", "h\x65llo"));
 
     // A C string literal is a null terminated pointer.
@@ -3886,6 +3886,29 @@ test "pass struct to function" {
       <p>
       For extern functions, Zig follows the C ABI for passing structs and unions by value.
       </p>
+      {#header_close#}
+      {#header_open|Function Parameter Type Inference#}
+      <p> 
+      Function parameters can be declared with {#syntax#}var{#endsyntax#} in place of the type. 
+      In this case the parameter types will be inferred when the function is called.
+      Use {#link|@typeOf#} and {#link|@typeInfo#} to get information about the inferred type.
+      </p>
+      {#code_begin|test#}
+const assert = @import("std").debug.assert;
+
+fn addFortyTwo(x: var) @typeOf(x) {
+    return x + 42;
+}
+
+test "fn type inference" {
+    assert(addFortyTwo(1) == 43);
+    assert(@typeOf(addFortyTwo(1)) == comptime_int);
+    var y: i64 = 2;
+    assert(addFortyTwo(y) == 44);
+    assert(@typeOf(addFortyTwo(y)) == i64);
+}
+      {#code_end#}
+      
       {#header_close#}
       {#header_open|Function Reflection#}
       {#code_begin|test#}
@@ -10062,7 +10085,7 @@ fn readU32Be() u32 {}
         <li>Ascii control characters, except for U+000a (LF): U+0000 - U+0009, U+000b - U+0001f, U+007f. (Note that Windows line endings (CRLF) are not allowed, and hard tabs are not allowed.)</li>
         <li>Non-Ascii Unicode line endings: U+0085 (NEL), U+2028 (LS), U+2029 (PS).</li>
       </ul>
-      <p>The codepoint U+000a (LF) (which is encoded as the single-byte value 0x0a) is the line terminator character. This character always terminates a line of zig source code (except possbly the last line of the file).</p>
+      <p>The codepoint U+000a (LF) (which is encoded as the single-byte value 0x0a) is the line terminator character. This character always terminates a line of zig source code (except possibly the last line of the file).</p>
       <p>For some discussion on the rationale behind these design decisions, see <a href="https://github.com/ziglang/zig/issues/663">issue #663</a></p>
       {#header_close#}
 
@@ -10086,8 +10109,8 @@ ContainerMembers
     &lt;- TestDecl ContainerMembers
      / TopLevelComptime ContainerMembers
      / KEYWORD_pub? TopLevelDecl ContainerMembers
-     / KEYWORD_pub? ContainerField COMMA ContainerMembers
-     / KEYWORD_pub? ContainerField
+     / ContainerField COMMA ContainerMembers
+     / ContainerField
      /
 
 TestDecl &lt;- KEYWORD_test STRINGLITERAL Block
@@ -10097,7 +10120,7 @@ TopLevelComptime &lt;- KEYWORD_comptime BlockExpr
 TopLevelDecl
     &lt;- (KEYWORD_export / KEYWORD_extern STRINGLITERAL? / KEYWORD_inline)? FnProto (SEMICOLON / Block)
      / (KEYWORD_export / KEYWORD_extern STRINGLITERAL?)? KEYWORD_threadlocal? VarDecl
-     / KEYWORD_use Expr SEMICOLON
+     / KEYWORD_usingnamespace Expr SEMICOLON
 
 FnProto &lt;- FnCC? KEYWORD_fn IDENTIFIER? LPAREN ParamDeclList RPAREN ByteAlign? LinkSection? EXCLAMATIONMARK? (KEYWORD_var / TypeExpr)
 

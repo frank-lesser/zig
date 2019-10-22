@@ -413,17 +413,8 @@ static LLVMValueRef make_fn_llvm_value(CodeGen *g, ZigFn *fn) {
         linkage = fn_export->linkage;
     }
 
-    bool external_linkage = linkage != GlobalLinkageIdInternal;
     CallingConvention cc = fn->type_entry->data.fn.fn_type_id.cc;
-    if (cc == CallingConventionStdcall && external_linkage &&
-        g->zig_target->arch == ZigLLVM_x86)
-    {
-        // prevent llvm name mangling
-        symbol_name = buf_ptr(buf_sprintf("\x01_%s", symbol_name));
-    }
-
     bool is_async = fn_is_async(fn);
-
 
     ZigType *fn_type = fn->type_entry;
     // Make the raw_type_ref populated
@@ -2776,7 +2767,6 @@ static LLVMValueRef ir_render_bin_op(CodeGen *g, IrExecutable *executable,
         case IrBinOpArrayCat:
         case IrBinOpArrayMult:
         case IrBinOpRemUnspecified:
-        case IrBinOpMergeErrorSets:
             zig_unreachable();
         case IrBinOpBoolOr:
             return LLVMBuildOr(g->builder, op1_value, op2_value, "");
@@ -4255,8 +4245,19 @@ static LLVMValueRef ir_render_struct_field_ptr(CodeGen *g, IrExecutable *executa
     if ((err = type_resolve(g, struct_type, ResolveStatusLLVMFull)))
         codegen_report_errors_and_exit(g);
 
-    assert(field->gen_index != SIZE_MAX);
-    return LLVMBuildStructGEP(g->builder, struct_ptr, (unsigned)field->gen_index, "");
+    src_assert(field->gen_index != SIZE_MAX, instruction->base.source_node);
+    LLVMValueRef field_ptr_val = LLVMBuildStructGEP(g->builder, struct_ptr, (unsigned)field->gen_index, "");
+    ZigType *res_type = instruction->base.value.type;
+    src_assert(res_type->id == ZigTypeIdPointer, instruction->base.source_node);
+    if (res_type->data.pointer.host_int_bytes != 0) {
+        // We generate packed structs with get_llvm_type_of_n_bytes, which is
+        // u8 for 1 byte or [n]u8 for multiple bytes. But the pointer to the type
+        // is supposed to be a pointer to the integer. So we bitcast it here.
+        LLVMTypeRef int_elem_type = LLVMIntType(8*res_type->data.pointer.host_int_bytes);
+        LLVMTypeRef integer_ptr_type = LLVMPointerType(int_elem_type, 0);
+        return LLVMBuildBitCast(g->builder, field_ptr_val, integer_ptr_type, "");
+    }
+    return field_ptr_val;
 }
 
 static LLVMValueRef ir_render_union_field_ptr(CodeGen *g, IrExecutable *executable,
@@ -6040,6 +6041,7 @@ static LLVMValueRef ir_render_instruction(CodeGen *g, IrExecutable *executable, 
         case IrInstructionIdAllocaGen:
         case IrInstructionIdAwaitSrc:
         case IrInstructionIdSplatSrc:
+        case IrInstructionIdMergeErrSets:
             zig_unreachable();
 
         case IrInstructionIdDeclVarGen:
@@ -6353,12 +6355,17 @@ static LLVMValueRef gen_const_ptr_union_recursive(CodeGen *g, ConstExprValue *un
     ConstParent *parent = &union_const_val->parent;
     LLVMValueRef base_ptr = gen_parent_ptr(g, union_const_val, parent);
 
+    // Slot in the structure where the payload is stored, if equal to SIZE_MAX
+    // the union has no tag and a single field and is collapsed into the field
+    // itself
+    size_t union_payload_index = union_const_val->type->data.unionation.gen_union_index;
+
     ZigType *u32 = g->builtin_types.entry_u32;
     LLVMValueRef indices[] = {
         LLVMConstNull(get_llvm_type(g, u32)),
-        LLVMConstInt(get_llvm_type(g, u32), 0, false), // TODO test const union with more aligned tag type than payload
+        LLVMConstInt(get_llvm_type(g, u32), union_payload_index, false),
     };
-    return LLVMConstInBoundsGEP(base_ptr, indices, 2);
+    return LLVMConstInBoundsGEP(base_ptr, indices, (union_payload_index != SIZE_MAX) ? 2 : 1);
 }
 
 static LLVMValueRef pack_const_int(CodeGen *g, LLVMTypeRef big_int_type_ref, ConstExprValue *const_val) {
@@ -7595,6 +7602,8 @@ static void zig_llvm_emit_output(CodeGen *g) {
     char *err_msg = nullptr;
     switch (g->emit_file_type) {
         case EmitFileTypeBinary:
+            if (g->disable_bin_generation)
+                return;
             if (ZigLLVMTargetMachineEmitToFile(g->target_machine, g->module, buf_ptr(output_path),
                         ZigLLVM_EmitBinary, &err_msg, g->build_mode == BuildModeDebug, is_small,
                         g->enable_time_report))
@@ -7606,7 +7615,7 @@ static void zig_llvm_emit_output(CodeGen *g) {
             if (g->bundle_compiler_rt && (g->out_type == OutTypeObj ||
                 (g->out_type == OutTypeLib && !g->is_dynamic)))
             {
-                zig_link_add_compiler_rt(g);
+                zig_link_add_compiler_rt(g, g->progress_node);
             }
             break;
 
@@ -8727,6 +8736,14 @@ static void init(CodeGen *g) {
         // Be aware of https://github.com/ziglang/zig/issues/3275
         target_specific_cpu_args = "";
         target_specific_features = riscv_default_features;
+    } else if (g->zig_target->arch == ZigLLVM_x86) {
+        // This is because we're really targeting i686 rather than i386.
+        // It's pretty much impossible to use many of the language features
+        // such as fp16 if you stick use the x87 only. This is also what clang
+        // uses as base cpu.
+        // TODO https://github.com/ziglang/zig/issues/2883
+        target_specific_cpu_args = "pentium4";
+        target_specific_features = "";
     } else {
         target_specific_cpu_args = "";
         target_specific_features = "";
@@ -9441,7 +9458,7 @@ Error create_c_object_cache(CodeGen *g, CacheHash **out_cache_hash, bool verbose
 }
 
 // returns true if it was a cache miss
-static void gen_c_object(CodeGen *g, Buf *self_exe_path, CFile *c_file) {
+static void gen_c_object(CodeGen *g, Buf *self_exe_path, CFile *c_file, Stage2ProgressNode *parent_prog_node) {
     Error err;
 
     Buf *artifact_dir;
@@ -9452,6 +9469,10 @@ static void gen_c_object(CodeGen *g, Buf *self_exe_path, CFile *c_file) {
     Buf *c_source_file = buf_create_from_str(c_file->source_path);
     Buf *c_source_basename = buf_alloc();
     os_path_split(c_source_file, nullptr, c_source_basename);
+
+    Stage2ProgressNode *child_prog_node = stage2_progress_start(parent_prog_node, buf_ptr(c_source_basename),
+            buf_len(c_source_basename), 0);
+
     Buf *final_o_basename = buf_alloc();
     os_path_extname(c_source_basename, final_o_basename, nullptr);
     buf_append_str(final_o_basename, target_o_file_ext(g->zig_target));
@@ -9568,6 +9589,8 @@ static void gen_c_object(CodeGen *g, Buf *self_exe_path, CFile *c_file) {
 
     g->link_objects.append(o_final_path);
     g->caches_to_release.append(cache_hash);
+
+    stage2_progress_end(child_prog_node);
 }
 
 // returns true if we had any cache misses
@@ -9584,11 +9607,16 @@ static void gen_c_objects(CodeGen *g) {
     }
 
     codegen_add_time_event(g, "Compile C Code");
+    const char *c_prog_name = "compiling C objects";
+    Stage2ProgressNode *c_prog_node = stage2_progress_start(g->progress_node, c_prog_name, strlen(c_prog_name),
+            g->c_source_files.length);
 
     for (size_t c_file_i = 0; c_file_i < g->c_source_files.length; c_file_i += 1) {
         CFile *c_file = g->c_source_files.at(c_file_i);
-        gen_c_object(g, self_exe_path, c_file);
+        gen_c_object(g, self_exe_path, c_file, c_prog_node);
     }
+
+    stage2_progress_end(c_prog_node);
 }
 
 void codegen_add_object(CodeGen *g, Buf *object_path) {
@@ -10159,6 +10187,7 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->function_sections);
     cache_bool(ch, g->enable_dump_analysis);
     cache_bool(ch, g->enable_doc_generation);
+    cache_bool(ch, g->disable_bin_generation);
     cache_buf_opt(ch, g->mmacosx_version_min);
     cache_buf_opt(ch, g->mios_version_min);
     cache_usize(ch, g->version_major);
@@ -10307,6 +10336,10 @@ void codegen_build_and_link(CodeGen *g) {
             init(g);
 
             codegen_add_time_event(g, "Semantic Analysis");
+            const char *progress_name = "Semantic Analysis";
+            Stage2ProgressNode *child_progress_node = stage2_progress_start(g->progress_node,
+                    progress_name, strlen(progress_name), 0);
+            (void)child_progress_node;
 
             gen_root_source(g);
 
@@ -10330,13 +10363,31 @@ void codegen_build_and_link(CodeGen *g) {
 
         if (need_llvm_module(g)) {
             codegen_add_time_event(g, "Code Generation");
+            {
+                const char *progress_name = "Code Generation";
+                Stage2ProgressNode *child_progress_node = stage2_progress_start(g->progress_node,
+                        progress_name, strlen(progress_name), 0);
+                (void)child_progress_node;
+            }
 
             do_code_gen(g);
             codegen_add_time_event(g, "LLVM Emit Output");
+            {
+                const char *progress_name = "LLVM Emit Output";
+                Stage2ProgressNode *child_progress_node = stage2_progress_start(g->progress_node,
+                        progress_name, strlen(progress_name), 0);
+                (void)child_progress_node;
+            }
             zig_llvm_emit_output(g);
 
             if (!g->disable_gen_h && (g->out_type == OutTypeObj || g->out_type == OutTypeLib)) {
                 codegen_add_time_event(g, "Generate .h");
+                {
+                    const char *progress_name = "Generate .h";
+                    Stage2ProgressNode *child_progress_node = stage2_progress_start(g->progress_node,
+                            progress_name, strlen(progress_name), 0);
+                    (void)child_progress_node;
+                }
                 gen_h_file(g);
             }
         }
@@ -10355,15 +10406,15 @@ void codegen_build_and_link(CodeGen *g) {
             }
         }
         if (g->enable_doc_generation) {
-            Buf *doc_dir_path = buf_sprintf("%s" OS_SEP "doc", buf_ptr(g->output_dir));
+            Buf *doc_dir_path = buf_sprintf("%s" OS_SEP "docs", buf_ptr(g->output_dir));
             if ((err = os_make_path(doc_dir_path))) {
                 fprintf(stderr, "Unable to create directory %s: %s\n", buf_ptr(doc_dir_path), err_str(err));
                 exit(1);
             }
-            Buf *index_html_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "doc" OS_SEP "index.html",
+            Buf *index_html_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "docs" OS_SEP "index.html",
                     buf_ptr(g->zig_std_dir));
             Buf *index_html_dest_path = buf_sprintf("%s" OS_SEP "index.html", buf_ptr(doc_dir_path));
-            Buf *main_js_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "doc" OS_SEP "main.js",
+            Buf *main_js_src_path = buf_sprintf("%s" OS_SEP "special" OS_SEP "docs" OS_SEP "main.js",
                     buf_ptr(g->zig_std_dir));
             Buf *main_js_dest_path = buf_sprintf("%s" OS_SEP "main.js", buf_ptr(doc_dir_path));
 
@@ -10397,7 +10448,8 @@ void codegen_build_and_link(CodeGen *g) {
         // If there is more than one object, we have to link them (with -r).
         // Finally, if we didn't make an object from zig source, and we don't have caching enabled,
         // then we have an object from C source that we must copy to the output dir which we do with a -r link.
-        if (g->emit_file_type == EmitFileTypeBinary && (g->out_type != OutTypeObj || g->link_objects.length > 1 ||
+        if (!g->disable_bin_generation && g->emit_file_type == EmitFileTypeBinary &&
+                (g->out_type != OutTypeObj || g->link_objects.length > 1 ||
                     (!need_llvm_module(g) && !g->enable_cache)))
         {
             codegen_link(g);
@@ -10432,10 +10484,15 @@ ZigPackage *codegen_create_package(CodeGen *g, const char *root_src_dir, const c
 }
 
 CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType out_type,
-        ZigLibCInstallation *libc)
+        ZigLibCInstallation *libc, const char *name, Stage2ProgressNode *parent_progress_node)
 {
+    Stage2ProgressNode *child_progress_node = stage2_progress_start(
+            parent_progress_node ? parent_progress_node : parent_gen->progress_node,
+            name, strlen(name), 0);
+
     CodeGen *child_gen = codegen_create(nullptr, root_src_path, parent_gen->zig_target, out_type,
-        parent_gen->build_mode, parent_gen->zig_lib_dir, libc, get_stage1_cache_path(), false);
+        parent_gen->build_mode, parent_gen->zig_lib_dir, libc, get_stage1_cache_path(), false, child_progress_node);
+    child_gen->root_out_name = buf_create_from_str(name);
     child_gen->disable_gen_h = true;
     child_gen->want_stack_check = WantStackCheckDisabled;
     child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
@@ -10464,9 +10521,10 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
 
 CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget *target,
     OutType out_type, BuildMode build_mode, Buf *override_lib_dir,
-    ZigLibCInstallation *libc, Buf *cache_dir, bool is_test_build)
+    ZigLibCInstallation *libc, Buf *cache_dir, bool is_test_build, Stage2ProgressNode *progress_node)
 {
     CodeGen *g = allocate<CodeGen>(1);
+    g->progress_node = progress_node;
 
     codegen_add_time_event(g, "Initialize");
 

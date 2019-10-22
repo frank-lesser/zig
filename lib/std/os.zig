@@ -183,7 +183,7 @@ pub fn abort() noreturn {
     exit(127);
 }
 
-pub const RaiseError = error{Unexpected};
+pub const RaiseError = UnexpectedError;
 
 pub fn raise(sig: u8) RaiseError!void {
     if (builtin.link_libc) {
@@ -215,10 +215,7 @@ pub fn raise(sig: u8) RaiseError!void {
     @compileError("std.os.raise unimplemented for this target");
 }
 
-pub const KillError = error{
-    PermissionDenied,
-    Unexpected,
-};
+pub const KillError = error{PermissionDenied} || UnexpectedError;
 
 pub fn kill(pid: pid_t, sig: u8) KillError!void {
     switch (errno(system.kill(pid, sig))) {
@@ -266,9 +263,7 @@ pub const ReadError = error{
     /// This error occurs when no global event loop is configured,
     /// and reading from the file descriptor would block.
     WouldBlock,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Returns the number of bytes that were read, which can be less than
 /// buf.len. If 0 bytes were read, that means EOF.
@@ -385,8 +380,7 @@ pub const WriteError = error{
     BrokenPipe,
     SystemResources,
     OperationAborted,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Write to a file descriptor. Keeps trying if it gets interrupted.
 /// This function is for blocking file descriptors only.
@@ -535,21 +529,39 @@ pub fn pwritev(fd: fd_t, iov: []const iovec_const, offset: u64) WriteError!void 
 
 pub const OpenError = error{
     AccessDenied,
-    FileTooBig,
-    IsDir,
     SymLinkLoop,
     ProcessFdQuotaExceeded,
-    NameTooLong,
     SystemFdQuotaExceeded,
     NoDevice,
     FileNotFound,
+
+    /// The path exceeded `MAX_PATH_BYTES` bytes.
+    NameTooLong,
+
+    /// Insufficient kernel memory was available, or
+    /// the named file is a FIFO and per-user hard limit on
+    /// memory allocation for pipes has been reached.
     SystemResources,
+
+    /// The file is too large to be opened. This error is unreachable
+    /// for 64-bit targets, as well as when opening directories.
+    FileTooBig,
+
+    /// The path refers to directory but the `O_DIRECTORY` flag was not provided.
+    IsDir,
+
+    /// A new path cannot be created because the device has no room for the new file.
+    /// This error is only reachable when the `O_CREAT` flag is provided.
     NoSpaceLeft,
+
+    /// A component used as a directory in the path was not, in fact, a directory, or
+    /// `O_DIRECTORY` was specified and the path was not a directory.
     NotDir,
+
+    /// The path already exists and the `O_CREAT` and `O_EXCL` flags were provided.
     PathAlreadyExists,
     DeviceBusy,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Open and possibly create a file. Keeps trying if it gets interrupted.
 /// See also `openC`.
@@ -644,13 +656,86 @@ pub fn dup2(old_fd: fd_t, new_fd: fd_t) !void {
     }
 }
 
+pub const ExecveError = error{
+    SystemResources,
+    AccessDenied,
+    InvalidExe,
+    FileSystem,
+    IsDir,
+    FileNotFound,
+    NotDir,
+    FileBusy,
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+    NameTooLong,
+} || UnexpectedError;
+
+/// Like `execve` except the parameters are null-terminated,
+/// matching the syscall API on all targets. This removes the need for an allocator.
+/// This function ignores PATH environment variable. See `execvpeC` for that.
+pub fn execveC(path: [*]const u8, child_argv: [*]const ?[*]const u8, envp: [*]const ?[*]const u8) ExecveError {
+    switch (errno(system.execve(path, child_argv, envp))) {
+        0 => unreachable,
+        EFAULT => unreachable,
+        E2BIG => return error.SystemResources,
+        EMFILE => return error.ProcessFdQuotaExceeded,
+        ENAMETOOLONG => return error.NameTooLong,
+        ENFILE => return error.SystemFdQuotaExceeded,
+        ENOMEM => return error.SystemResources,
+        EACCES => return error.AccessDenied,
+        EPERM => return error.AccessDenied,
+        EINVAL => return error.InvalidExe,
+        ENOEXEC => return error.InvalidExe,
+        EIO => return error.FileSystem,
+        ELOOP => return error.FileSystem,
+        EISDIR => return error.IsDir,
+        ENOENT => return error.FileNotFound,
+        ENOTDIR => return error.NotDir,
+        ETXTBSY => return error.FileBusy,
+        else => |err| return unexpectedErrno(err),
+    }
+}
+
+/// Like `execvpe` except the parameters are null-terminated,
+/// matching the syscall API on all targets. This removes the need for an allocator.
+/// This function also uses the PATH environment variable to get the full path to the executable.
+/// If `file` is an absolute path, this is the same as `execveC`.
+pub fn execvpeC(file: [*]const u8, child_argv: [*]const ?[*]const u8, envp: [*]const ?[*]const u8) ExecveError {
+    const file_slice = mem.toSliceConst(u8, file);
+    if (mem.indexOfScalar(u8, file_slice, '/') != null) return execveC(file, child_argv, envp);
+
+    const PATH = getenv("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
+    var path_buf: [MAX_PATH_BYTES]u8 = undefined;
+    var it = mem.tokenize(PATH, ":");
+    var seen_eacces = false;
+    var err: ExecveError = undefined;
+    while (it.next()) |search_path| {
+        if (path_buf.len < search_path.len + file_slice.len + 1) return error.NameTooLong;
+        mem.copy(u8, &path_buf, search_path);
+        path_buf[search_path.len] = '/';
+        mem.copy(u8, path_buf[search_path.len + 1 ..], file_slice);
+        path_buf[search_path.len + file_slice.len + 1] = 0;
+        err = execveC(&path_buf, child_argv, envp);
+        switch (err) {
+            error.AccessDenied => seen_eacces = true,
+            error.FileNotFound, error.NotDir => {},
+            else => |e| return e,
+        }
+    }
+    if (seen_eacces) return error.AccessDenied;
+    return err;
+}
+
 /// This function must allocate memory to add a null terminating bytes on path and each arg.
 /// It must also convert to KEY=VALUE\0 format for environment variables, and include null
 /// pointers after the args and after the environment variables.
-/// `argv[0]` is the executable path.
+/// `argv_slice[0]` is the executable path.
 /// This function also uses the PATH environment variable to get the full path to the executable.
-/// TODO provide execveC which does not take an allocator
-pub fn execve(allocator: *mem.Allocator, argv_slice: []const []const u8, env_map: *const std.BufMap) !void {
+pub fn execvpe(
+    allocator: *mem.Allocator,
+    argv_slice: []const []const u8,
+    env_map: *const std.BufMap,
+) (ExecveError || error{OutOfMemory}) {
     const argv_buf = try allocator.alloc(?[*]u8, argv_slice.len + 1);
     mem.set(?[*]u8, argv_buf, null);
     defer {
@@ -672,37 +757,7 @@ pub fn execve(allocator: *mem.Allocator, argv_slice: []const []const u8, env_map
     const envp_buf = try createNullDelimitedEnvMap(allocator, env_map);
     defer freeNullDelimitedEnvMap(allocator, envp_buf);
 
-    const exe_path = argv_slice[0];
-    if (mem.indexOfScalar(u8, exe_path, '/') != null) {
-        return execveErrnoToErr(errno(system.execve(argv_buf[0].?, argv_buf.ptr, envp_buf.ptr)));
-    }
-
-    const PATH = getenv("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
-    // PATH.len because it is >= the largest search_path
-    // +1 for the / to join the search path and exe_path
-    // +1 for the null terminating byte
-    const path_buf = try allocator.alloc(u8, PATH.len + exe_path.len + 2);
-    defer allocator.free(path_buf);
-    var it = mem.tokenize(PATH, ":");
-    var seen_eacces = false;
-    var err: usize = undefined;
-    while (it.next()) |search_path| {
-        mem.copy(u8, path_buf, search_path);
-        path_buf[search_path.len] = '/';
-        mem.copy(u8, path_buf[search_path.len + 1 ..], exe_path);
-        path_buf[search_path.len + exe_path.len + 1] = 0;
-        err = errno(system.execve(path_buf.ptr, argv_buf.ptr, envp_buf.ptr));
-        assert(err > 0);
-        if (err == EACCES) {
-            seen_eacces = true;
-        } else if (err != ENOENT) {
-            return execveErrnoToErr(err);
-        }
-    }
-    if (seen_eacces) {
-        err = EACCES;
-    }
-    return execveErrnoToErr(err);
+    return execvpeC(argv_buf.ptr[0].?, argv_buf.ptr, envp_buf.ptr);
 }
 
 pub fn createNullDelimitedEnvMap(allocator: *mem.Allocator, env_map: *const std.BufMap) ![]?[*]u8 {
@@ -734,45 +789,6 @@ pub fn freeNullDelimitedEnvMap(allocator: *mem.Allocator, envp_buf: []?[*]u8) vo
         allocator.free(env_buf);
     }
     allocator.free(envp_buf);
-}
-
-pub const ExecveError = error{
-    SystemResources,
-    AccessDenied,
-    InvalidExe,
-    FileSystem,
-    IsDir,
-    FileNotFound,
-    NotDir,
-    FileBusy,
-    ProcessFdQuotaExceeded,
-    SystemFdQuotaExceeded,
-    NameTooLong,
-
-    Unexpected,
-};
-
-fn execveErrnoToErr(err: usize) ExecveError {
-    assert(err > 0);
-    switch (err) {
-        EFAULT => unreachable,
-        E2BIG => return error.SystemResources,
-        EMFILE => return error.ProcessFdQuotaExceeded,
-        ENAMETOOLONG => return error.NameTooLong,
-        ENFILE => return error.SystemFdQuotaExceeded,
-        ENOMEM => return error.SystemResources,
-        EACCES => return error.AccessDenied,
-        EPERM => return error.AccessDenied,
-        EINVAL => return error.InvalidExe,
-        ENOEXEC => return error.InvalidExe,
-        EIO => return error.FileSystem,
-        ELOOP => return error.FileSystem,
-        EISDIR => return error.IsDir,
-        ENOENT => return error.FileNotFound,
-        ENOTDIR => return error.NotDir,
-        ETXTBSY => return error.FileBusy,
-        else => return unexpectedErrno(err),
-    }
 }
 
 /// Get an environment variable.
@@ -808,8 +824,7 @@ pub fn getenvC(key: [*]const u8) ?[]const u8 {
 pub const GetCwdError = error{
     NameTooLong,
     CurrentWorkingDirectoryUnlinked,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// The result is a slice of out_buffer, indexed from 0.
 pub fn getcwd(out_buffer: []u8) GetCwdError![]u8 {
@@ -846,8 +861,7 @@ pub const SymLinkError = error{
     NameTooLong,
     InvalidUtf8,
     BadPathName,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Creates a symbolic link named `sym_link_path` which contains the string `target_path`.
 /// A symbolic link (also known as a soft link) may point to an existing file or to a nonexistent
@@ -932,7 +946,6 @@ pub const UnlinkError = error{
     NotDir,
     SystemResources,
     ReadOnlyFileSystem,
-    Unexpected,
 
     /// On Windows, file paths must be valid Unicode.
     InvalidUtf8,
@@ -940,7 +953,7 @@ pub const UnlinkError = error{
     /// On Windows, file paths cannot contain these characters:
     /// '/', '*', '?', '"', '<', '>', '|'
     BadPathName,
-};
+} || UnexpectedError;
 
 /// Delete a name and possibly the file it refers to.
 /// See also `unlinkC`.
@@ -979,6 +992,114 @@ pub fn unlinkC(file_path: [*]const u8) UnlinkError!void {
     }
 }
 
+pub const UnlinkatError = UnlinkError || error{
+    /// When passing `AT_REMOVEDIR`, this error occurs when the named directory is not empty.
+    DirNotEmpty,
+};
+
+/// Delete a file name and possibly the file it refers to, based on an open directory handle.
+pub fn unlinkat(dirfd: fd_t, file_path: []const u8, flags: u32) UnlinkatError!void {
+    if (windows.is_the_target) {
+        const file_path_w = try windows.sliceToPrefixedFileW(file_path);
+        return unlinkatW(dirfd, &file_path_w, flags);
+    }
+    const file_path_c = try toPosixPath(file_path);
+    return unlinkatC(dirfd, &file_path_c, flags);
+}
+
+/// Same as `unlinkat` but `file_path` is a null-terminated string.
+pub fn unlinkatC(dirfd: fd_t, file_path_c: [*]const u8, flags: u32) UnlinkatError!void {
+    if (windows.is_the_target) {
+        const file_path_w = try windows.cStrToPrefixedFileW(file_path_c);
+        return unlinkatW(dirfd, &file_path_w, flags);
+    }
+    switch (errno(system.unlinkat(dirfd, file_path_c, flags))) {
+        0 => return,
+        EACCES => return error.AccessDenied,
+        EPERM => return error.AccessDenied,
+        EBUSY => return error.FileBusy,
+        EFAULT => unreachable,
+        EIO => return error.FileSystem,
+        EISDIR => return error.IsDir,
+        ELOOP => return error.SymLinkLoop,
+        ENAMETOOLONG => return error.NameTooLong,
+        ENOENT => return error.FileNotFound,
+        ENOTDIR => return error.NotDir,
+        ENOMEM => return error.SystemResources,
+        EROFS => return error.ReadOnlyFileSystem,
+        ENOTEMPTY => return error.DirNotEmpty,
+
+        EINVAL => unreachable, // invalid flags, or pathname has . as last component
+        EBADF => unreachable, // always a race condition
+
+        else => |err| return unexpectedErrno(err),
+    }
+}
+
+/// Same as `unlinkat` but `sub_path_w` is UTF16LE, NT prefixed. Windows only.
+pub fn unlinkatW(dirfd: fd_t, sub_path_w: [*]const u16, flags: u32) UnlinkatError!void {
+    const w = windows;
+
+    const want_rmdir_behavior = (flags & AT_REMOVEDIR) != 0;
+    const create_options_flags = if (want_rmdir_behavior)
+        w.ULONG(w.FILE_DELETE_ON_CLOSE)
+    else
+        w.ULONG(w.FILE_DELETE_ON_CLOSE | w.FILE_NON_DIRECTORY_FILE);
+
+    const path_len_bytes = @intCast(u16, mem.toSliceConst(u16, sub_path_w).len * 2);
+    var nt_name = w.UNICODE_STRING{
+        .Length = path_len_bytes,
+        .MaximumLength = path_len_bytes,
+        // The Windows API makes this mutable, but it will not mutate here.
+        .Buffer = @intToPtr([*]u16, @ptrToInt(sub_path_w)),
+    };
+
+    if (sub_path_w[0] == '.' and sub_path_w[1] == 0) {
+        // Windows does not recognize this, but it does work with empty string.
+        nt_name.Length = 0;
+    }
+    if (sub_path_w[0] == '.' and sub_path_w[1] == '.' and sub_path_w[2] == 0) {
+        // Can't remove the parent directory with an open handle.
+        return error.FileBusy;
+    }
+
+
+    var attr = w.OBJECT_ATTRIBUTES{
+        .Length = @sizeOf(w.OBJECT_ATTRIBUTES),
+        .RootDirectory = dirfd,
+        .Attributes = 0, // Note we do not use OBJ_CASE_INSENSITIVE here.
+        .ObjectName = &nt_name,
+        .SecurityDescriptor = null,
+        .SecurityQualityOfService = null,
+    };
+    var io: w.IO_STATUS_BLOCK = undefined;
+    var tmp_handle: w.HANDLE = undefined;
+    var rc = w.ntdll.NtCreateFile(
+        &tmp_handle,
+        w.SYNCHRONIZE | w.DELETE,
+        &attr,
+        &io,
+        null,
+        0,
+        w.FILE_SHARE_READ | w.FILE_SHARE_WRITE | w.FILE_SHARE_DELETE,
+        w.FILE_OPEN,
+        create_options_flags,
+        null,
+        0,
+    );
+    if (rc == w.STATUS.SUCCESS) {
+        rc = w.ntdll.NtClose(tmp_handle);
+    }
+    switch (rc) {
+        w.STATUS.SUCCESS => return,
+        w.STATUS.OBJECT_NAME_INVALID => unreachable,
+        w.STATUS.OBJECT_NAME_NOT_FOUND => return error.FileNotFound,
+        w.STATUS.INVALID_PARAMETER => unreachable,
+        w.STATUS.FILE_IS_A_DIRECTORY => return error.IsDir,
+        else => return w.unexpectedStatus(rc),
+    }
+}
+
 const RenameError = error{
     AccessDenied,
     FileBusy,
@@ -996,8 +1117,7 @@ const RenameError = error{
     RenameAcrossMountPoints,
     InvalidUtf8,
     BadPathName,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Change the name or location of a file.
 pub fn rename(old_path: []const u8, new_path: []const u8) RenameError!void {
@@ -1064,8 +1184,7 @@ pub const MakeDirError = error{
     ReadOnlyFileSystem,
     InvalidUtf8,
     BadPathName,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Create a directory.
 /// `mode` is ignored on Windows.
@@ -1116,8 +1235,7 @@ pub const DeleteDirError = error{
     ReadOnlyFileSystem,
     InvalidUtf8,
     BadPathName,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Deletes an empty directory.
 pub fn rmdir(dir_path: []const u8) DeleteDirError!void {
@@ -1163,8 +1281,7 @@ pub const ChangeCurDirError = error{
     FileNotFound,
     SystemResources,
     NotDir,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Changes the current working directory of the calling process.
 /// `dir_path` is recommended to be a UTF-8 encoded string.
@@ -1206,8 +1323,7 @@ pub const ReadLinkError = error{
     FileNotFound,
     SystemResources,
     NotDir,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Read value of a symbolic link.
 /// The return value is a slice of `out_buffer` from index 0.
@@ -1243,12 +1359,32 @@ pub fn readlinkC(file_path: [*]const u8, out_buffer: []u8) ReadLinkError![]u8 {
     }
 }
 
+pub fn readlinkatC(dirfd: fd_t, file_path: [*]const u8, out_buffer: []u8) ReadLinkError![]u8 {
+    if (windows.is_the_target) {
+        const file_path_w = try windows.cStrToPrefixedFileW(file_path);
+        @compileError("TODO implement readlink for Windows");
+    }
+    const rc = system.readlinkat(dirfd, file_path, out_buffer.ptr, out_buffer.len);
+    switch (errno(rc)) {
+        0 => return out_buffer[0..@bitCast(usize, rc)],
+        EACCES => return error.AccessDenied,
+        EFAULT => unreachable,
+        EINVAL => unreachable,
+        EIO => return error.FileSystem,
+        ELOOP => return error.SymLinkLoop,
+        ENAMETOOLONG => return error.NameTooLong,
+        ENOENT => return error.FileNotFound,
+        ENOMEM => return error.SystemResources,
+        ENOTDIR => return error.NotDir,
+        else => |err| return unexpectedErrno(err),
+    }
+}
+
 pub const SetIdError = error{
     ResourceLimitReached,
     InvalidUserId,
     PermissionDenied,
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn setuid(uid: u32) SetIdError!void {
     switch (errno(system.setuid(uid))) {
@@ -1357,9 +1493,7 @@ pub const SocketError = error{
 
     /// The protocol type or the specified protocol is not supported within this domain.
     ProtocolNotSupported,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn socket(domain: u32, socket_type: u32, protocol: u32) SocketError!i32 {
     const rc = system.socket(domain, socket_type, protocol);
@@ -1409,9 +1543,7 @@ pub const BindError = error{
 
     /// The socket inode would reside on a read-only filesystem.
     ReadOnlyFileSystem,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// addr is `*const T` where T is one of the sockaddr
 pub fn bind(fd: i32, addr: *const sockaddr) BindError!void {
@@ -1448,9 +1580,7 @@ const ListenError = error{
 
     /// The socket is not of a type that supports the listen() operation.
     OperationNotSupported,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn listen(sockfd: i32, backlog: u32) ListenError!void {
     const rc = system.listen(sockfd, backlog);
@@ -1487,22 +1617,48 @@ pub const AcceptError = error{
 
     /// Firewall rules forbid connection.
     BlockedByFirewall,
+} || UnexpectedError;
 
-    Unexpected,
-};
-
-/// Accept a connection on a socket. `fd` must be opened in blocking mode.
-/// See also `accept4_async`.
-pub fn accept4(fd: i32, addr: *sockaddr, flags: u32) AcceptError!i32 {
+/// Accept a connection on a socket.
+/// If the application has a global event loop enabled, EAGAIN is handled
+/// via the event loop. Otherwise EAGAIN results in error.WouldBlock.
+pub fn accept4(
+    /// This argument is a socket that has been created with `socket`, bound to a local address
+    /// with `bind`, and is listening for connections after a `listen`.
+    sockfd: i32,
+    /// This argument is a pointer to a sockaddr structure.  This structure is filled in with  the
+    /// address  of  the  peer  socket, as known to the communications layer.  The exact format of the
+    /// address returned addr is determined by the socket's address  family  (see  `socket`  and  the
+    /// respective  protocol  man  pages).
+    addr: *sockaddr,
+    /// This argument is a value-result argument: the caller must initialize it to contain  the
+    /// size (in bytes) of the structure pointed to by addr; on return it will contain the actual size
+    /// of the peer address.
+    ///
+    /// The returned address is truncated if the buffer provided is too small; in this  case,  `addr_size`
+    /// will return a value greater than was supplied to the call.
+    addr_size: *usize,
+    /// If  flags  is  0, then `accept4` is the same as `accept`.  The following values can be bitwise
+    /// ORed in flags to obtain different behavior:
+    /// * `SOCK_NONBLOCK` - Set the `O_NONBLOCK` file status flag on the open file description (see `open`)
+    ///   referred  to by the new file descriptor.  Using this flag saves extra calls to `fcntl` to achieve
+    ///   the same result.
+    /// * `SOCK_CLOEXEC`  - Set the close-on-exec (`FD_CLOEXEC`) flag on the new file descriptor.   See  the
+    ///   description  of the `O_CLOEXEC` flag in `open` for reasons why this may be useful.
+    flags: u32,
+) AcceptError!i32 {
     while (true) {
-        var sockaddr_size = u32(@sizeOf(sockaddr));
-        const rc = system.accept4(fd, addr, &sockaddr_size, flags);
+        const rc = system.accept4(sockfd, addr, addr_size, flags);
         switch (errno(rc)) {
             0 => return @intCast(i32, rc),
             EINTR => continue,
-            else => |err| return unexpectedErrno(err),
 
-            EAGAIN => unreachable, // This function is for blocking only.
+            EAGAIN => if (std.event.Loop.instance) |loop| {
+                loop.waitUntilFdReadable(sockfd) catch return error.WouldBlock;
+                continue;
+            } else {
+                return error.WouldBlock;
+            },
             EBADF => unreachable, // always a race condition
             ECONNABORTED => return error.ConnectionAborted,
             EFAULT => unreachable,
@@ -1515,34 +1671,8 @@ pub fn accept4(fd: i32, addr: *sockaddr, flags: u32) AcceptError!i32 {
             EOPNOTSUPP => return error.OperationNotSupported,
             EPROTO => return error.ProtocolFailure,
             EPERM => return error.BlockedByFirewall,
-        }
-    }
-}
 
-/// This is the same as `accept4` except `fd` is expected to be non-blocking.
-/// Returns -1 if would block.
-pub fn accept4_async(fd: i32, addr: *sockaddr, flags: u32) AcceptError!i32 {
-    while (true) {
-        var sockaddr_size = u32(@sizeOf(sockaddr));
-        const rc = system.accept4(fd, addr, &sockaddr_size, flags);
-        switch (errno(rc)) {
-            0 => return @intCast(i32, rc),
-            EINTR => continue,
             else => |err| return unexpectedErrno(err),
-
-            EAGAIN => return -1,
-            EBADF => unreachable, // always a race condition
-            ECONNABORTED => return error.ConnectionAborted,
-            EFAULT => unreachable,
-            EINVAL => unreachable,
-            EMFILE => return error.ProcessFdQuotaExceeded,
-            ENFILE => return error.SystemFdQuotaExceeded,
-            ENOBUFS => return error.SystemResources,
-            ENOMEM => return error.SystemResources,
-            ENOTSOCK => return error.FileDescriptorNotASocket,
-            EOPNOTSUPP => return error.OperationNotSupported,
-            EPROTO => return error.ProtocolFailure,
-            EPERM => return error.BlockedByFirewall,
         }
     }
 }
@@ -1559,9 +1689,7 @@ pub const EpollCreateError = error{
 
     /// There was insufficient memory to create the kernel object.
     SystemResources,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn epoll_create1(flags: u32) EpollCreateError!i32 {
     const rc = system.epoll_create1(flags);
@@ -1600,9 +1728,7 @@ pub const EpollCtlError = error{
     /// The target file fd does not support epoll.  This error can occur if fd refers to,
     /// for example, a regular file or a directory.
     FileDescriptorIncompatibleWithEpoll,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn epoll_ctl(epfd: i32, op: u32, fd: i32, event: ?*epoll_event) EpollCtlError!void {
     const rc = system.epoll_ctl(epfd, op, fd, event);
@@ -1643,8 +1769,7 @@ pub const EventFdError = error{
     SystemResources,
     ProcessFdQuotaExceeded,
     SystemFdQuotaExceeded,
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn eventfd(initval: u32, flags: u32) EventFdError!i32 {
     const rc = system.eventfd(initval, flags);
@@ -1663,9 +1788,7 @@ pub fn eventfd(initval: u32, flags: u32) EventFdError!i32 {
 pub const GetSockNameError = error{
     /// Insufficient resources were available in the system to perform the operation.
     SystemResources,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn getsockname(sockfd: i32) GetSockNameError!sockaddr {
     var addr: sockaddr = undefined;
@@ -1714,9 +1837,7 @@ pub const ConnectError = error{
     /// Timeout  while  attempting  connection.   The server may be too busy to accept new connections.  Note
     /// that for IP sockets the timeout may be very long when syncookies are enabled on the server.
     ConnectionTimedOut,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Initiate a connection on a socket.
 /// This is for blocking file descriptors only.
@@ -1747,7 +1868,7 @@ pub fn connect(sockfd: i32, sock_addr: *sockaddr, len: socklen_t) ConnectError!v
     }
 }
 
-/// Same as `connect` except it is for blocking socket file descriptors.
+/// Same as `connect` except it is for non-blocking socket file descriptors.
 /// It expects to receive EINPROGRESS`.
 pub fn connect_async(sockfd: i32, sock_addr: *sockaddr, len: socklen_t) ConnectError!void {
     while (true) {
@@ -1824,10 +1945,7 @@ pub fn waitpid(pid: i32, flags: u32) u32 {
     }
 }
 
-pub const FStatError = error{
-    SystemResources,
-    Unexpected,
-};
+pub const FStatError = error{SystemResources} || UnexpectedError;
 
 pub fn fstat(fd: fd_t) FStatError!Stat {
     var stat: Stat = undefined;
@@ -1856,9 +1974,7 @@ pub const KQueueError = error{
 
     /// The system-wide limit on the total number of open files has been reached.
     SystemFdQuotaExceeded,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn kqueue() KQueueError!i32 {
     const rc = system.kqueue();
@@ -1922,8 +2038,7 @@ pub const INotifyInitError = error{
     ProcessFdQuotaExceeded,
     SystemFdQuotaExceeded,
     SystemResources,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// initialize an inotify instance
 pub fn inotify_init1(flags: u32) INotifyInitError!i32 {
@@ -1944,8 +2059,7 @@ pub const INotifyAddWatchError = error{
     FileNotFound,
     SystemResources,
     UserResourceLimitReached,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// add a watch to an initialized inotify instance
 pub fn inotify_add_watch(inotify_fd: i32, pathname: []const u8, mask: u32) INotifyAddWatchError!i32 {
@@ -1992,8 +2106,7 @@ pub const MProtectError = error{
     /// dle of a region currently protected as PROT_READ|PROT_WRITE would result in three map‐
     /// pings: two read/write mappings at each end and a read-only mapping in the middle.)
     OutOfMemory,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// `memory.len` must be page-aligned.
 pub fn mprotect(memory: []align(mem.page_size) u8, protection: u32) MProtectError!void {
@@ -2007,10 +2120,7 @@ pub fn mprotect(memory: []align(mem.page_size) u8, protection: u32) MProtectErro
     }
 }
 
-pub const ForkError = error{
-    SystemResources,
-    Unexpected,
-};
+pub const ForkError = error{SystemResources} || UnexpectedError;
 
 pub fn fork() ForkError!pid_t {
     const rc = system.fork();
@@ -2037,8 +2147,7 @@ pub const MMapError = error{
     PermissionDenied,
     LockedMemoryLimitExceeded,
     OutOfMemory,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Map files or devices into memory.
 /// Use of a mapped region can result in these signals:
@@ -2101,9 +2210,7 @@ pub const AccessError = error{
 
     /// On Windows, file paths must be valid Unicode.
     InvalidUtf8,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// check user's permissions for a file
 /// TODO currently this assumes `mode` is `F_OK` on Windows.
@@ -2161,8 +2268,7 @@ pub fn accessW(path: [*]const u16, mode: u32) windows.GetFileAttributesError!voi
 pub const PipeError = error{
     SystemFdQuotaExceeded,
     ProcessFdQuotaExceeded,
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Creates a unidirectional data channel that can be used for interprocess communication.
 pub fn pipe() PipeError![2]fd_t {
@@ -2193,8 +2299,7 @@ pub const SysCtlError = error{
     PermissionDenied,
     SystemResources,
     NameTooLong,
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn sysctl(
     name: []const c_int,
@@ -2237,10 +2342,7 @@ pub fn gettimeofday(tv: ?*timeval, tz: ?*timezone) void {
     }
 }
 
-pub const SeekError = error{
-    Unseekable,
-    Unexpected,
-};
+pub const SeekError = error{Unseekable} || UnexpectedError;
 
 /// Repositions read/write file offset relative to the beginning.
 pub fn lseek_SET(fd: fd_t, offset: u64) SeekError!void {
@@ -2382,9 +2484,7 @@ pub const RealPathError = error{
     InvalidUtf8,
 
     PathAlreadyExists,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 /// Return the canonicalized absolute pathname.
 /// Expands all symbolic links and resolves references to `.`, `..`, and
@@ -2548,10 +2648,7 @@ pub fn dl_iterate_phdr(comptime T: type, callback: extern fn (info: *dl_phdr_inf
     return last_r;
 }
 
-pub const ClockGetTimeError = error{
-    UnsupportedClock,
-    Unexpected,
-};
+pub const ClockGetTimeError = error{UnsupportedClock} || UnexpectedError;
 
 pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
     switch (errno(system.clock_gettime(clk_id, tp))) {
@@ -2571,10 +2668,7 @@ pub fn clock_getres(clk_id: i32, res: *timespec) ClockGetTimeError!void {
     }
 }
 
-pub const SchedGetAffinityError = error{
-    PermissionDenied,
-    Unexpected,
-};
+pub const SchedGetAffinityError = error{PermissionDenied} || UnexpectedError;
 
 pub fn sched_getaffinity(pid: pid_t) SchedGetAffinityError!cpu_set_t {
     var set: cpu_set_t = undefined;
@@ -2628,8 +2722,7 @@ pub const SigaltstackError = error{
 
     /// Attempted to change the signal stack while it was active.
     PermissionDenied,
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn sigaltstack(ss: ?*stack_t, old_ss: ?*stack_t) SigaltstackError!void {
     if (windows.is_the_target or uefi.is_the_target or wasi.is_the_target)
@@ -2677,9 +2770,7 @@ pub const FutimensError = error{
     PermissionDenied,
 
     ReadOnlyFileSystem,
-
-    Unexpected,
-};
+} || UnexpectedError;
 
 pub fn futimens(fd: fd_t, times: *const [2]timespec) FutimensError!void {
     switch (errno(system.futimens(fd, times))) {
@@ -2694,10 +2785,7 @@ pub fn futimens(fd: fd_t, times: *const [2]timespec) FutimensError!void {
     }
 }
 
-pub const GetHostNameError = error{
-    PermissionDenied,
-    Unexpected,
-};
+pub const GetHostNameError = error{PermissionDenied} || UnexpectedError;
 
 pub fn gethostname(name_buffer: *[HOST_NAME_MAX]u8) GetHostNameError![]u8 {
     if (builtin.link_libc) {

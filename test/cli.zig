@@ -37,7 +37,7 @@ pub fn main() !void {
         testMissingOutputPath,
     };
     for (test_fns) |testFn| {
-        try fs.deleteTree(a, dir_path);
+        try fs.deleteTree(dir_path);
         try fs.makeDir(dir_path);
         try testFn(zig_exe, dir_path);
     }
@@ -136,6 +136,6 @@ fn testMissingOutputPath(zig_exe: []const u8, dir_path: []const u8) !void {
     const output_path = try fs.path.join(a, [_][]const u8{ "does", "not", "exist" });
     const source_path = try fs.path.join(a, [_][]const u8{ "src", "main.zig" });
     _ = try exec(dir_path, [_][]const u8{
-        zig_exe, "build-exe", source_path, "--output-dir", output_path
+        zig_exe, "build-exe", source_path, "--output-dir", output_path,
     });
 }

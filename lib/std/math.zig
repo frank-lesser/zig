@@ -4,8 +4,44 @@ const TypeId = builtin.TypeId;
 const assert = std.debug.assert;
 const testing = std.testing;
 
+/// Euler's number (e)
 pub const e = 2.71828182845904523536028747135266249775724709369995;
+
+/// Archimedes' constant (π)
 pub const pi = 3.14159265358979323846264338327950288419716939937510;
+
+/// log2(e)
+pub const log2e = 1.442695040888963407359924681001892137;
+
+/// log10(e)
+pub const log10e = 0.434294481903251827651128918916605082;
+
+/// ln(2)
+pub const ln2 = 0.693147180559945309417232121458176568;
+
+/// ln(10)
+pub const ln10 = 2.302585092994045684017991454684364208;
+
+/// π/2
+pub const pi_2 = 1.570796326794896619231321691639751442;
+
+/// π/4
+pub const pi_4 = 0.785398163397448309615660845819875721;
+
+/// 1/π
+pub const one_pi = 0.318309886183790671537767526745028724;
+
+/// 2/π
+pub const two_pi = 0.636619772367581343075535053490057448;
+
+/// 2/sqrt(π)
+pub const two_sqrtpi = 1.128379167095512573896158903121545172;
+
+/// sqrt(2)
+pub const sqrt2 = 1.414213562373095048801688724209698079;
+
+/// 1/sqrt(2)
+pub const sqrt1_2 = 0.707106781186547524400844362104849039;
 
 // From a small c++ [program using boost float128](https://github.com/winksaville/cpp_boost_float128)
 pub const f128_true_min = @bitCast(f128, u128(0x00000000000000000000000000000001));
@@ -166,54 +202,8 @@ pub const Complex = complex.Complex;
 
 pub const big = @import("math/big.zig");
 
-test "math" {
-    _ = @import("math/nan.zig");
-    _ = @import("math/isnan.zig");
-    _ = @import("math/fabs.zig");
-    _ = @import("math/ceil.zig");
-    _ = @import("math/floor.zig");
-    _ = @import("math/trunc.zig");
-    _ = @import("math/round.zig");
-    _ = @import("math/frexp.zig");
-    _ = @import("math/modf.zig");
-    _ = @import("math/copysign.zig");
-    _ = @import("math/isfinite.zig");
-    _ = @import("math/isinf.zig");
-    _ = @import("math/isnormal.zig");
-    _ = @import("math/signbit.zig");
-    _ = @import("math/scalbn.zig");
-    _ = @import("math/pow.zig");
-    _ = @import("math/powi.zig");
-    _ = @import("math/sqrt.zig");
-    _ = @import("math/cbrt.zig");
-    _ = @import("math/acos.zig");
-    _ = @import("math/asin.zig");
-    _ = @import("math/atan.zig");
-    _ = @import("math/atan2.zig");
-    _ = @import("math/hypot.zig");
-    _ = @import("math/exp.zig");
-    _ = @import("math/exp2.zig");
-    _ = @import("math/expm1.zig");
-    _ = @import("math/ilogb.zig");
-    _ = @import("math/ln.zig");
-    _ = @import("math/log.zig");
-    _ = @import("math/log2.zig");
-    _ = @import("math/log10.zig");
-    _ = @import("math/log1p.zig");
-    _ = @import("math/fma.zig");
-    _ = @import("math/asinh.zig");
-    _ = @import("math/acosh.zig");
-    _ = @import("math/atanh.zig");
-    _ = @import("math/sinh.zig");
-    _ = @import("math/cosh.zig");
-    _ = @import("math/tanh.zig");
-    _ = @import("math/sin.zig");
-    _ = @import("math/cos.zig");
-    _ = @import("math/tan.zig");
-
-    _ = @import("math/complex.zig");
-
-    _ = @import("math/big.zig");
+comptime {
+    std.meta.refAllDecls(@This());
 }
 
 pub fn floatMantissaBits(comptime T: type) comptime_int {

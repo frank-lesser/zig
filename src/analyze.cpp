@@ -913,7 +913,10 @@ bool want_first_arg_sret(CodeGen *g, FnTypeId *fn_type_id) {
     if (type_is_c_abi_int(g, fn_type_id->return_type)) {
         return false;
     }
-    if (g->zig_target->arch == ZigLLVM_x86_64) {
+    if (g->zig_target->arch == ZigLLVM_x86) {
+        X64CABIClass abi_class = type_c_abi_x86_64_class(g, fn_type_id->return_type);
+        return abi_class == X64CABIClass_MEMORY;
+    } else if (g->zig_target->arch == ZigLLVM_x86_64) {
         X64CABIClass abi_class = type_c_abi_x86_64_class(g, fn_type_id->return_type);
         return abi_class == X64CABIClass_MEMORY;
     } else if (target_is_arm(g->zig_target) || target_is_riscv(g->zig_target)) {
@@ -996,7 +999,12 @@ static ZigType *get_root_container_type(CodeGen *g, const char *full_name, Buf *
     entry->data.structure.root_struct = root_struct;
     entry->data.structure.layout = ContainerLayoutAuto;
 
-    buf_init_from_str(&entry->name, full_name);
+    if (full_name[0] == '\0') {
+        buf_init_from_str(&entry->name, "(root)");
+    } else {
+        buf_init_from_str(&entry->name, full_name);
+    }
+
     return entry;
 }
 
@@ -1633,6 +1641,7 @@ ZigType *get_auto_err_set_type(CodeGen *g, ZigFn *fn_entry) {
     err_set_type->data.error_set.err_count = 0;
     err_set_type->data.error_set.errors = nullptr;
     err_set_type->data.error_set.infer_fn = fn_entry;
+    err_set_type->data.error_set.incomplete = true;
     err_set_type->size_in_bits = g->builtin_types.entry_global_error_set->size_in_bits;
     err_set_type->abi_align = g->builtin_types.entry_global_error_set->abi_align;
     err_set_type->abi_size = g->builtin_types.entry_global_error_set->abi_size;
@@ -1778,6 +1787,7 @@ static ZigType *analyze_fn_type(CodeGen *g, AstNode *proto_node, Scope *child_sc
         if (!analyze_const_align(g, child_scope, fn_proto->align_expr, &fn_type_id.alignment)) {
             return g->builtin_types.entry_invalid;
         }
+        fn_entry->align_bytes = fn_type_id.alignment;
     }
 
     if (fn_proto->return_var_token != nullptr) {
@@ -3152,7 +3162,13 @@ static Error resolve_union_zero_bits(CodeGen *g, ZigType *union_type) {
     return ErrorNone;
 }
 
-static void get_fully_qualified_decl_name(Buf *buf, Tld *tld, bool is_test) {
+void append_namespace_qualification(CodeGen *g, Buf *buf, ZigType *container_type) {
+    if (g->root_import == container_type || buf_len(&container_type->name) == 0) return;
+    buf_append_buf(buf, &container_type->name);
+    buf_append_char(buf, NAMESPACE_SEP_CHAR);
+}
+
+static void get_fully_qualified_decl_name(CodeGen *g, Buf *buf, Tld *tld, bool is_test) {
     buf_resize(buf, 0);
 
     Scope *scope = tld->parent_scope;
@@ -3160,8 +3176,7 @@ static void get_fully_qualified_decl_name(Buf *buf, Tld *tld, bool is_test) {
         scope = scope->parent;
     }
     ScopeDecls *decls_scope = reinterpret_cast<ScopeDecls *>(scope);
-    buf_append_buf(buf, &decls_scope->container_type->name);
-    if (buf_len(buf) != 0) buf_append_char(buf, NAMESPACE_SEP_CHAR);
+    append_namespace_qualification(g, buf, decls_scope->container_type);
     if (is_test) {
         buf_append_str(buf, "test \"");
         buf_append_buf(buf, tld->name);
@@ -3284,7 +3299,7 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
         if (fn_proto->is_export || is_extern) {
             buf_init_from_buf(&fn_table_entry->symbol_name, tld_fn->base.name);
         } else {
-            get_fully_qualified_decl_name(&fn_table_entry->symbol_name, &tld_fn->base, false);
+            get_fully_qualified_decl_name(g, &fn_table_entry->symbol_name, &tld_fn->base, false);
         }
 
         if (fn_proto->is_export) {
@@ -3313,7 +3328,9 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
         fn_table_entry->type_entry = analyze_fn_type(g, source_node, child_scope, fn_table_entry);
 
         if (fn_proto->section_expr != nullptr) {
-            analyze_const_string(g, child_scope, fn_proto->section_expr, &fn_table_entry->section_name);
+            if (!analyze_const_string(g, child_scope, fn_proto->section_expr, &fn_table_entry->section_name)) {
+                fn_table_entry->type_entry = g->builtin_types.entry_invalid;
+            }
         }
 
         if (fn_table_entry->type_entry->id == ZigTypeIdInvalid) {
@@ -3348,7 +3365,7 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
     } else if (source_node->type == NodeTypeTestDecl) {
         ZigFn *fn_table_entry = create_fn_raw(g, FnInlineAuto);
 
-        get_fully_qualified_decl_name(&fn_table_entry->symbol_name, &tld_fn->base, true);
+        get_fully_qualified_decl_name(g, &fn_table_entry->symbol_name, &tld_fn->base, true);
 
         tld_fn->fn_entry = fn_table_entry;
 
@@ -3572,6 +3589,7 @@ void scan_decls(CodeGen *g, ScopeDecls *decls_scope, AstNode *node) {
         case NodeTypeSuspend:
         case NodeTypeEnumLiteral:
         case NodeTypeAnyFrameType:
+        case NodeTypeErrorSetField:
             zig_unreachable();
     }
 }
@@ -4276,12 +4294,12 @@ static void define_local_param_variables(CodeGen *g, ZigFn *fn_table_entry) {
 bool resolve_inferred_error_set(CodeGen *g, ZigType *err_set_type, AstNode *source_node) {
     assert(err_set_type->id == ZigTypeIdErrorSet);
     ZigFn *infer_fn = err_set_type->data.error_set.infer_fn;
-    if (infer_fn != nullptr) {
+    if (infer_fn != nullptr && err_set_type->data.error_set.incomplete) {
         if (infer_fn->anal_state == FnAnalStateInvalid) {
             return false;
         } else if (infer_fn->anal_state == FnAnalStateReady) {
             analyze_fn_body(g, infer_fn);
-            if (err_set_type->data.error_set.infer_fn != nullptr) {
+            if (err_set_type->data.error_set.incomplete) {
                 assert(g->errors.length != 0);
                 return false;
             }
@@ -4508,7 +4526,9 @@ static void analyze_fn_ir(CodeGen *g, ZigFn *fn, AstNode *return_type_node) {
 
     if (fn_type_id->return_type->id == ZigTypeIdErrorUnion) {
         ZigType *return_err_set_type = fn_type_id->return_type->data.error_union.err_set_type;
-        if (return_err_set_type->data.error_set.infer_fn != nullptr) {
+        if (return_err_set_type->data.error_set.infer_fn != nullptr &&
+            return_err_set_type->data.error_set.incomplete)
+        {
             ZigType *inferred_err_set_type;
             if (fn->src_implicit_return_type->id == ZigTypeIdErrorSet) {
                 inferred_err_set_type = fn->src_implicit_return_type;
@@ -4521,14 +4541,16 @@ static void analyze_fn_ir(CodeGen *g, ZigFn *fn, AstNode *return_type_node) {
                 return;
             }
 
-            if (inferred_err_set_type->data.error_set.infer_fn != nullptr) {
+            if (inferred_err_set_type->data.error_set.infer_fn != nullptr &&
+                inferred_err_set_type->data.error_set.incomplete)
+            {
                 if (!resolve_inferred_error_set(g, inferred_err_set_type, return_type_node)) {
                     fn->anal_state = FnAnalStateInvalid;
                     return;
                 }
             }
 
-            return_err_set_type->data.error_set.infer_fn = nullptr;
+            return_err_set_type->data.error_set.incomplete = false;
             if (type_is_global_error_set(inferred_err_set_type)) {
                 return_err_set_type->data.error_set.err_count = UINT32_MAX;
             } else {
@@ -5761,8 +5783,8 @@ ConstExprValue *create_const_arg_tuple(CodeGen *g, size_t arg_index_start, size_
 
 
 ConstExprValue *create_const_vals(size_t count) {
-    ConstGlobalRefs *global_refs = allocate<ConstGlobalRefs>(count);
-    ConstExprValue *vals = allocate<ConstExprValue>(count);
+    ConstGlobalRefs *global_refs = allocate<ConstGlobalRefs>(count, "ConstGlobalRefs");
+    ConstExprValue *vals = allocate<ConstExprValue>(count, "ConstExprValue");
     for (size_t i = 0; i < count; i += 1) {
         vals[i].global_refs = &global_refs[i];
     }
@@ -7319,6 +7341,30 @@ bool tld_ptr_eql(const Tld *a, const Tld *b) {
     return a == b;
 }
 
+uint32_t node_ptr_hash(const AstNode *ptr) {
+    return hash_ptr((void*)ptr);
+}
+
+bool node_ptr_eql(const AstNode *a, const AstNode *b) {
+    return a == b;
+}
+
+uint32_t fn_ptr_hash(const ZigFn *ptr) {
+    return hash_ptr((void*)ptr);
+}
+
+bool fn_ptr_eql(const ZigFn *a, const ZigFn *b) {
+    return a == b;
+}
+
+uint32_t err_ptr_hash(const ErrorTableEntry *ptr) {
+    return hash_ptr((void*)ptr);
+}
+
+bool err_ptr_eql(const ErrorTableEntry *a, const ErrorTableEntry *b) {
+    return a == b;
+}
+
 ConstExprValue *get_builtin_value(CodeGen *codegen, const char *name) {
     Tld *tld = get_container_scope(codegen->compile_var_import)->decl_table.get(buf_create_from_str(name));
     resolve_top_level_decl(codegen, tld, nullptr, false);
@@ -7331,7 +7377,7 @@ ConstExprValue *get_builtin_value(CodeGen *codegen, const char *name) {
 
 bool type_is_global_error_set(ZigType *err_set_type) {
     assert(err_set_type->id == ZigTypeIdErrorSet);
-    assert(err_set_type->data.error_set.infer_fn == nullptr);
+    assert(!err_set_type->data.error_set.incomplete);
     return err_set_type->data.error_set.err_count == UINT32_MAX;
 }
 
@@ -8261,7 +8307,8 @@ static void resolve_llvm_types_integer(CodeGen *g, ZigType *type) {
         }
     }
 
-    type->llvm_di_type = ZigLLVMCreateDebugBasicType(g->dbuilder, buf_ptr(&type->name), type->size_in_bits, dwarf_tag);
+    type->llvm_di_type = ZigLLVMCreateDebugBasicType(g->dbuilder, buf_ptr(&type->name),
+            type->abi_size * 8, dwarf_tag);
     type->llvm_type = LLVMIntType(type->size_in_bits);
 }
 
@@ -8555,6 +8602,9 @@ static void resolve_llvm_types_fn_type(CodeGen *g, ZigType *fn_type) {
     fn_type->llvm_di_type = ZigLLVMCreateDebugPointerType(g->dbuilder, fn_type->data.fn.raw_di_type,
             LLVMStoreSizeOfType(g->target_data_ref, fn_type->llvm_type),
             LLVMABIAlignmentOfType(g->target_data_ref, fn_type->llvm_type), "");
+
+    gen_param_types.deinit();
+    param_di_types.deinit();
 }
 
 void resolve_llvm_types_fn(CodeGen *g, ZigFn *fn) {
@@ -8589,6 +8639,9 @@ void resolve_llvm_types_fn(CodeGen *g, ZigFn *fn) {
     fn->raw_type_ref = LLVMFunctionType(get_llvm_type(g, gen_return_type),
             gen_param_types.items, gen_param_types.length, false);
     fn->raw_di_type = ZigLLVMCreateSubroutineType(g->dbuilder, param_di_types.items, (int)param_di_types.length, 0);
+
+    param_di_types.deinit();
+    gen_param_types.deinit();
 }
 
 static void resolve_llvm_types_anyerror(CodeGen *g) {
@@ -8613,6 +8666,8 @@ static void resolve_llvm_types_anyerror(CodeGen *g) {
             tag_debug_align_in_bits,
             err_enumerators.items, err_enumerators.length,
             get_llvm_di_type(g, g->err_tag_type), "");
+
+    err_enumerators.deinit();
 }
 
 static void resolve_llvm_types_async_frame(CodeGen *g, ZigType *frame_type, ResolveStatus wanted_resolve_status) {
@@ -8758,6 +8813,9 @@ static void resolve_llvm_types_any_frame(CodeGen *g, ZigType *any_frame_type, Re
             nullptr, di_element_types.items, di_element_types.length, 0, nullptr, "");
 
     ZigLLVMReplaceTemporary(g->dbuilder, frame_header_di_type, replacement_di_type);
+
+    field_types.deinit();
+    di_element_types.deinit();
 }
 
 static void resolve_llvm_types(CodeGen *g, ZigType *type, ResolveStatus wanted_resolve_status) {

@@ -3,6 +3,16 @@ const builtin = @import("builtin");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
     cases.add(
+        "comparison with error union and error value",
+        \\export fn entry() void {
+        \\    var number_or_error: anyerror!i32 = error.SomethingAwful;
+        \\    _ = number_or_error == error.SomethingAwful;
+        \\}
+    ,
+        "tmp.zig:3:25: error: operator not allowed for type 'anyerror!i32'",
+    );
+
+    cases.add(
         "switch with overlapping case ranges",
         \\export fn entry() void {
         \\    var q: u8 = 0;
@@ -6638,5 +6648,17 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
     ,
         "tmp.zig:2:18: error: opaque return type 'FooType' not allowed",
         "tmp.zig:1:1: note: declared here",
+    );
+
+    // fixed bug #2032
+    cases.add(
+        "compile diagnostic string for top level decl type",
+        \\export fn entry() void {
+        \\    var foo: u32 = @This(){};
+        \\}
+    ,
+        "tmp.zig:2:27: error: expected type 'u32', found '(root)'",
+        "tmp.zig:1:1: note: (root) declared here",
+        "tmp.zig:2:5: note: referenced here",
     );
 }

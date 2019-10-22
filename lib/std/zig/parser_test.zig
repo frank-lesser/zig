@@ -173,6 +173,12 @@ test "zig fmt: aligned struct field" {
         \\};
         \\
     );
+    try testCanonical(
+        \\pub const S = struct {
+        \\    f: i32 align(32) = 1,
+        \\};
+        \\
+    );
 }
 
 test "zig fmt: preserve space between async fn definitions" {
@@ -1760,7 +1766,7 @@ test "zig fmt: struct declaration" {
         \\const S = struct {
         \\    const Self = @This();
         \\    f1: u8,
-        \\    pub f3: u8,
+        \\    f3: u8,
         \\
         \\    fn method(self: *Self) Self {
         \\        return self.*;
@@ -1771,14 +1777,14 @@ test "zig fmt: struct declaration" {
         \\
         \\const Ps = packed struct {
         \\    a: u8,
-        \\    pub b: u8,
+        \\    b: u8,
         \\
         \\    c: u8,
         \\};
         \\
         \\const Es = extern struct {
         \\    a: u8,
-        \\    pub b: u8,
+        \\    b: u8,
         \\
         \\    c: u8,
         \\};

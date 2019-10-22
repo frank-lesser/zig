@@ -511,3 +511,27 @@ test "union with comptime_int tag" {
     };
     comptime expect(@TagType(@TagType(Union)) == comptime_int);
 }
+
+test "extern union doesn't trigger field check at comptime" {
+    const U = extern union {
+        x: u32,
+        y: u8,
+    };
+
+    const x = U{ .x = 0x55AAAA55 };
+    comptime expect(x.y == 0x55);
+}
+
+const Foo1 = union(enum) {
+    f: struct {
+        x: usize,
+    },
+};
+var glbl: Foo1 = undefined;
+
+test "global union with single field is correctly initialized" {
+    glbl = Foo1{
+        .f = @memberType(Foo1, 0){ .x = 123 },
+    };
+    expect(glbl.f.x == 123);
+}

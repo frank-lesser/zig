@@ -198,6 +198,8 @@ static IrInstruction *ir_gen_union_init_expr(IrBuilder *irb, Scope *scope, AstNo
     IrInstruction *union_type, IrInstruction *field_name, AstNode *expr_node,
     LVal lval, ResultLoc *parent_result_loc);
 static void ir_reset_result(ResultLoc *result_loc);
+static Buf *get_anon_type_name(CodeGen *codegen, IrExecutable *exec, const char *kind_name,
+        Scope *scope, AstNode *source_node, Buf *out_bare_name);
 
 static ConstExprValue *const_ptr_pointee_unchecked(CodeGen *g, ConstExprValue *const_val) {
     assert(get_src_ptr_type(const_val->type) != nullptr);
@@ -411,7 +413,7 @@ ZigType *ir_analyze_type_expr(IrAnalyze *ira, Scope *scope, AstNode *node) {
 }
 
 static IrBasicBlock *ir_create_basic_block(IrBuilder *irb, Scope *scope, const char *name_hint) {
-    IrBasicBlock *result = allocate<IrBasicBlock>(1);
+    IrBasicBlock *result = allocate<IrBasicBlock>(1, "IrBasicBlock");
     result->scope = scope;
     result->name_hint = name_hint;
     result->debug_id = exec_next_debug_id(irb->exec);
@@ -467,6 +469,10 @@ static constexpr IrInstructionId ir_instruction_id(IrInstructionUnOp *) {
 
 static constexpr IrInstructionId ir_instruction_id(IrInstructionBinOp *) {
     return IrInstructionIdBinOp;
+}
+
+static constexpr IrInstructionId ir_instruction_id(IrInstructionMergeErrSets *) {
+    return IrInstructionIdMergeErrSets;
 }
 
 static constexpr IrInstructionId ir_instruction_id(IrInstructionExport *) {
@@ -1079,13 +1085,18 @@ static constexpr IrInstructionId ir_instruction_id(IrInstructionSpillEnd *) {
 
 template<typename T>
 static T *ir_create_instruction(IrBuilder *irb, Scope *scope, AstNode *source_node) {
-    T *special_instruction = allocate<T>(1);
+    const char *name = nullptr;
+#ifdef ZIG_ENABLE_MEM_PROFILE
+    T *dummy = nullptr;
+    name = ir_instruction_type_str(ir_instruction_id(dummy));
+#endif
+    T *special_instruction = allocate<T>(1, name);
     special_instruction->base.id = ir_instruction_id(special_instruction);
     special_instruction->base.scope = scope;
     special_instruction->base.source_node = source_node;
     special_instruction->base.debug_id = exec_next_debug_id(irb->exec);
     special_instruction->base.owner_bb = irb->current_basic_block;
-    special_instruction->base.value.global_refs = allocate<ConstGlobalRefs>(1);
+    special_instruction->base.value.global_refs = allocate<ConstGlobalRefs>(1, "ConstGlobalRefs");
     return special_instruction;
 }
 
@@ -1288,6 +1299,20 @@ static IrInstruction *ir_build_bin_op(IrBuilder *irb, Scope *scope, AstNode *sou
     ir_ref_instruction(op2, irb->current_basic_block);
 
     return &bin_op_instruction->base;
+}
+
+static IrInstruction *ir_build_merge_err_sets(IrBuilder *irb, Scope *scope, AstNode *source_node,
+        IrInstruction *op1, IrInstruction *op2, Buf *type_name)
+{
+    IrInstructionMergeErrSets *merge_err_sets_instruction = ir_build_instruction<IrInstructionMergeErrSets>(irb, scope, source_node);
+    merge_err_sets_instruction->op1 = op1;
+    merge_err_sets_instruction->op2 = op2;
+    merge_err_sets_instruction->type_name = type_name;
+
+    ir_ref_instruction(op1, irb->current_basic_block);
+    ir_ref_instruction(op2, irb->current_basic_block);
+
+    return &merge_err_sets_instruction->base;
 }
 
 static IrInstruction *ir_build_var_ptr_x(IrBuilder *irb, Scope *scope, AstNode *source_node, ZigVar *var,
@@ -3549,7 +3574,7 @@ static IrInstruction *ir_gen_return(IrBuilder *irb, Scope *scope, AstNode *node,
     switch (node->data.return_expr.kind) {
         case ReturnKindUnconditional:
             {
-                ResultLocReturn *result_loc_ret = allocate<ResultLocReturn>(1);
+                ResultLocReturn *result_loc_ret = allocate<ResultLocReturn>(1, "ResultLocReturn");
                 result_loc_ret->base.id = ResultLocIdReturn;
                 ir_build_reset_result(irb, scope, node, &result_loc_ret->base);
 
@@ -3644,7 +3669,7 @@ static IrInstruction *ir_gen_return(IrBuilder *irb, Scope *scope, AstNode *node,
                 ir_mark_gen(ir_build_add_implicit_return_type(irb, scope, node, err_val, nullptr));
                 IrInstructionSpillBegin *spill_begin = ir_build_spill_begin(irb, scope, node, err_val,
                         SpillIdRetErrCode);
-                ResultLocReturn *result_loc_ret = allocate<ResultLocReturn>(1);
+                ResultLocReturn *result_loc_ret = allocate<ResultLocReturn>(1, "ResultLocReturn");
                 result_loc_ret->base.id = ResultLocIdReturn;
                 ir_build_reset_result(irb, scope, node, &result_loc_ret->base);
                 ir_build_end_expr(irb, scope, node, err_val, &result_loc_ret->base);
@@ -3672,7 +3697,7 @@ static ZigVar *create_local_var(CodeGen *codegen, AstNode *node, Scope *parent_s
         Buf *name, bool src_is_const, bool gen_is_const, bool is_shadowable, IrInstruction *is_comptime,
         bool skip_name_check)
 {
-    ZigVar *variable_entry = allocate<ZigVar>(1);
+    ZigVar *variable_entry = allocate<ZigVar>(1, "ZigVar");
     variable_entry->parent_scope = parent_scope;
     variable_entry->shadowable = is_shadowable;
     variable_entry->mem_slot_index = SIZE_MAX;
@@ -3747,7 +3772,7 @@ static ZigVar *ir_create_var(IrBuilder *irb, AstNode *node, Scope *scope, Buf *n
 }
 
 static ResultLocPeer *create_peer_result(ResultLocPeerParent *peer_parent) {
-    ResultLocPeer *result = allocate<ResultLocPeer>(1);
+    ResultLocPeer *result = allocate<ResultLocPeer>(1, "ResultLocPeer");
     result->base.id = ResultLocIdPeer;
     result->base.source_instruction = peer_parent->base.source_instruction;
     result->parent = peer_parent;
@@ -3786,7 +3811,7 @@ static IrInstruction *ir_gen_block(IrBuilder *irb, Scope *parent_scope, AstNode 
         scope_block->is_comptime = ir_build_const_bool(irb, parent_scope, block_node,
                 ir_should_inline(irb->exec, parent_scope));
 
-        scope_block->peer_parent = allocate<ResultLocPeerParent>(1);
+        scope_block->peer_parent = allocate<ResultLocPeerParent>(1, "ResultLocPeerParent");
         scope_block->peer_parent->base.id = ResultLocIdPeerParent;
         scope_block->peer_parent->base.source_instruction = scope_block->is_comptime;
         scope_block->peer_parent->end_bb = scope_block->end_block;
@@ -3894,12 +3919,26 @@ static IrInstruction *ir_gen_bin_op_id(IrBuilder *irb, Scope *scope, AstNode *no
     return ir_build_bin_op(irb, scope, node, op_id, op1, op2, true);
 }
 
+static IrInstruction *ir_gen_merge_err_sets(IrBuilder *irb, Scope *scope, AstNode *node) {
+    IrInstruction *op1 = ir_gen_node(irb, node->data.bin_op_expr.op1, scope);
+    IrInstruction *op2 = ir_gen_node(irb, node->data.bin_op_expr.op2, scope);
+
+    if (op1 == irb->codegen->invalid_instruction || op2 == irb->codegen->invalid_instruction)
+        return irb->codegen->invalid_instruction;
+
+    // TODO only pass type_name when the || operator is the top level AST node in the var decl expr
+    Buf bare_name = BUF_INIT;
+    Buf *type_name = get_anon_type_name(irb->codegen, irb->exec, "error", scope, node, &bare_name);
+
+    return ir_build_merge_err_sets(irb, scope, node, op1, op2, type_name);
+}
+
 static IrInstruction *ir_gen_assign(IrBuilder *irb, Scope *scope, AstNode *node) {
     IrInstruction *lvalue = ir_gen_node_extra(irb, node->data.bin_op_expr.op1, scope, LValPtr, nullptr);
     if (lvalue == irb->codegen->invalid_instruction)
         return irb->codegen->invalid_instruction;
 
-    ResultLocInstruction *result_loc_inst = allocate<ResultLocInstruction>(1);
+    ResultLocInstruction *result_loc_inst = allocate<ResultLocInstruction>(1, "ResultLocInstruction");
     result_loc_inst->base.id = ResultLocIdInstruction;
     result_loc_inst->base.source_instruction = lvalue;
     ir_ref_instruction(lvalue, irb->current_basic_block);
@@ -3910,6 +3949,19 @@ static IrInstruction *ir_gen_assign(IrBuilder *irb, Scope *scope, AstNode *node)
     if (rvalue == irb->codegen->invalid_instruction)
         return irb->codegen->invalid_instruction;
 
+    return ir_build_const_void(irb, scope, node);
+}
+
+static IrInstruction *ir_gen_assign_merge_err_sets(IrBuilder *irb, Scope *scope, AstNode *node) {
+    IrInstruction *lvalue = ir_gen_node_extra(irb, node->data.bin_op_expr.op1, scope, LValPtr, nullptr);
+    if (lvalue == irb->codegen->invalid_instruction)
+        return lvalue;
+    IrInstruction *op1 = ir_build_load_ptr(irb, scope, node->data.bin_op_expr.op1, lvalue);
+    IrInstruction *op2 = ir_gen_node(irb, node->data.bin_op_expr.op2, scope);
+    if (op2 == irb->codegen->invalid_instruction)
+        return op2;
+    IrInstruction *result = ir_build_merge_err_sets(irb, scope, node, op1, op2, nullptr);
+    ir_build_store_ptr(irb, scope, node, lvalue, result);
     return ir_build_const_void(irb, scope, node);
 }
 
@@ -3958,10 +4010,10 @@ static IrInstruction *ir_gen_bool_or(IrBuilder *irb, Scope *scope, AstNode *node
 
     ir_set_cursor_at_end_and_append_block(irb, true_block);
 
-    IrInstruction **incoming_values = allocate<IrInstruction *>(2);
+    IrInstruction **incoming_values = allocate<IrInstruction *>(2, "IrInstruction *");
     incoming_values[0] = val1;
     incoming_values[1] = val2;
-    IrBasicBlock **incoming_blocks = allocate<IrBasicBlock *>(2);
+    IrBasicBlock **incoming_blocks = allocate<IrBasicBlock *>(2, "IrBasicBlock *");
     incoming_blocks[0] = post_val1_block;
     incoming_blocks[1] = post_val2_block;
 
@@ -4153,7 +4205,7 @@ static IrInstruction *ir_gen_bin_op(IrBuilder *irb, Scope *scope, AstNode *node,
         case BinOpTypeAssignBitOr:
             return ir_lval_wrap(irb, scope, ir_gen_assign_op(irb, scope, node, IrBinOpBinOr), lval, result_loc);
         case BinOpTypeAssignMergeErrorSets:
-            return ir_lval_wrap(irb, scope, ir_gen_assign_op(irb, scope, node, IrBinOpMergeErrorSets), lval, result_loc);
+            return ir_lval_wrap(irb, scope, ir_gen_assign_merge_err_sets(irb, scope, node), lval, result_loc);
         case BinOpTypeBoolOr:
             return ir_lval_wrap(irb, scope, ir_gen_bool_or(irb, scope, node), lval, result_loc);
         case BinOpTypeBoolAnd:
@@ -4201,7 +4253,7 @@ static IrInstruction *ir_gen_bin_op(IrBuilder *irb, Scope *scope, AstNode *node,
         case BinOpTypeArrayMult:
             return ir_lval_wrap(irb, scope, ir_gen_bin_op_id(irb, scope, node, IrBinOpArrayMult), lval, result_loc);
         case BinOpTypeMergeErrorSets:
-            return ir_lval_wrap(irb, scope, ir_gen_bin_op_id(irb, scope, node, IrBinOpMergeErrorSets), lval, result_loc);
+            return ir_lval_wrap(irb, scope, ir_gen_merge_err_sets(irb, scope, node), lval, result_loc);
         case BinOpTypeUnwrapOptional:
             return ir_gen_orelse(irb, scope, node, lval, result_loc);
         case BinOpTypeErrorUnion:
@@ -7805,8 +7857,8 @@ static Buf *get_anon_type_name(CodeGen *codegen, IrExecutable *exec, const char 
 {
     if (exec->name) {
         ZigType *import = get_scope_import(scope);
-        Buf *namespace_name = buf_create_from_buf(&import->name);
-        if (buf_len(namespace_name) != 0) buf_append_char(namespace_name, NAMESPACE_SEP_CHAR);
+        Buf *namespace_name = buf_alloc();
+        append_namespace_qualification(codegen, namespace_name, import);
         buf_append_buf(namespace_name, exec->name);
         buf_init_from_buf(out_bare_name, exec->name);
         return namespace_name;
@@ -7820,8 +7872,8 @@ static Buf *get_anon_type_name(CodeGen *codegen, IrExecutable *exec, const char 
         return name;
     } else {
         ZigType *import = get_scope_import(scope);
-        Buf *namespace_name = buf_create_from_buf(&import->name);
-        if (buf_len(namespace_name) != 0) buf_append_char(namespace_name, NAMESPACE_SEP_CHAR);
+        Buf *namespace_name = buf_alloc();
+        append_namespace_qualification(codegen, namespace_name, import);
         buf_appendf(namespace_name, "%s:%" ZIG_PRI_usize ":%" ZIG_PRI_usize, kind_name,
                 source_node->line + 1, source_node->column + 1);
         buf_init_from_buf(out_bare_name, namespace_name);
@@ -7859,7 +7911,9 @@ static IrInstruction *ir_gen_container_decl(IrBuilder *irb, Scope *parent_scope,
 }
 
 // errors should be populated with set1's values
-static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigType *set1, ZigType *set2) {
+static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigType *set1, ZigType *set2,
+        Buf *type_name)
+{
     assert(set1->id == ZigTypeIdErrorSet);
     assert(set2->id == ZigTypeIdErrorSet);
 
@@ -7867,8 +7921,12 @@ static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigTyp
     err_set_type->size_in_bits = g->builtin_types.entry_global_error_set->size_in_bits;
     err_set_type->abi_align = g->builtin_types.entry_global_error_set->abi_align;
     err_set_type->abi_size = g->builtin_types.entry_global_error_set->abi_size;
-    buf_resize(&err_set_type->name, 0);
-    buf_appendf(&err_set_type->name, "error{");
+    if (type_name == nullptr) {
+        buf_resize(&err_set_type->name, 0);
+        buf_appendf(&err_set_type->name, "error{");
+    } else {
+        buf_init_from_buf(&err_set_type->name, type_name);
+    }
 
     for (uint32_t i = 0, count = set1->data.error_set.err_count; i < count; i += 1) {
         assert(errors[set1->data.error_set.errors[i]->value] == set1->data.error_set.errors[i]);
@@ -7885,9 +7943,14 @@ static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigTyp
     err_set_type->data.error_set.err_count = count;
     err_set_type->data.error_set.errors = allocate<ErrorTableEntry *>(count);
 
+    bool need_comma = false;
     for (uint32_t i = 0; i < set1->data.error_set.err_count; i += 1) {
         ErrorTableEntry *error_entry = set1->data.error_set.errors[i];
-        buf_appendf(&err_set_type->name, "%s,", buf_ptr(&error_entry->name));
+        if (type_name == nullptr) {
+            const char *comma = need_comma ? "," : "";
+            need_comma = true;
+            buf_appendf(&err_set_type->name, "%s%s", comma, buf_ptr(&error_entry->name));
+        }
         err_set_type->data.error_set.errors[i] = error_entry;
     }
 
@@ -7896,7 +7959,11 @@ static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigTyp
         ErrorTableEntry *error_entry = set2->data.error_set.errors[i];
         if (errors[error_entry->value] == nullptr) {
             errors[error_entry->value] = error_entry;
-            buf_appendf(&err_set_type->name, "%s,", buf_ptr(&error_entry->name));
+            if (type_name == nullptr) {
+                const char *comma = need_comma ? "," : "";
+                need_comma = true;
+                buf_appendf(&err_set_type->name, "%s%s", comma, buf_ptr(&error_entry->name));
+            }
             err_set_type->data.error_set.errors[index] = error_entry;
             index += 1;
         }
@@ -7904,7 +7971,9 @@ static ZigType *get_error_set_union(CodeGen *g, ErrorTableEntry **errors, ZigTyp
     assert(index == count);
     assert(count != 0);
 
-    buf_appendf(&err_set_type->name, "}");
+    if (type_name == nullptr) {
+        buf_appendf(&err_set_type->name, "}");
+    }
 
     return err_set_type;
 
@@ -7927,6 +7996,17 @@ static ZigType *make_err_set_with_one_item(CodeGen *g, Scope *parent_scope, AstN
     return err_set_type;
 }
 
+static AstNode *ast_field_to_symbol_node(AstNode *err_set_field_node) {
+    if (err_set_field_node->type == NodeTypeSymbol) {
+        return err_set_field_node;
+    } else if (err_set_field_node->type == NodeTypeErrorSetField) {
+        assert(err_set_field_node->data.err_set_field.field_name->type == NodeTypeSymbol);
+        return err_set_field_node->data.err_set_field.field_name;
+    } else {
+        return err_set_field_node;
+    }
+}
+
 static IrInstruction *ir_gen_err_set_decl(IrBuilder *irb, Scope *parent_scope, AstNode *node) {
     assert(node->type == NodeTypeErrorSetDecl);
 
@@ -7942,14 +8022,15 @@ static IrInstruction *ir_gen_err_set_decl(IrBuilder *irb, Scope *parent_scope, A
     err_set_type->abi_size = irb->codegen->builtin_types.entry_global_error_set->abi_size;
     err_set_type->data.error_set.errors = allocate<ErrorTableEntry *>(err_count);
 
-    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(irb->codegen->errors_by_index.length + err_count);
+    size_t errors_count = irb->codegen->errors_by_index.length + err_count;
+    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(errors_count, "ErrorTableEntry *");
 
     for (uint32_t i = 0; i < err_count; i += 1) {
-        AstNode *symbol_node = node->data.err_set_decl.decls.at(i);
-        assert(symbol_node->type == NodeTypeSymbol);
+        AstNode *field_node = node->data.err_set_decl.decls.at(i);
+        AstNode *symbol_node = ast_field_to_symbol_node(field_node);
         Buf *err_name = symbol_node->data.symbol_expr.symbol;
         ErrorTableEntry *err = allocate<ErrorTableEntry>(1);
-        err->decl_node = symbol_node;
+        err->decl_node = field_node;
         buf_init_from_buf(&err->name, err_name);
 
         auto existing_entry = irb->codegen->error_table.put_unique(err_name, err);
@@ -7965,13 +8046,15 @@ static IrInstruction *ir_gen_err_set_decl(IrBuilder *irb, Scope *parent_scope, A
 
         ErrorTableEntry *prev_err = errors[err->value];
         if (prev_err != nullptr) {
-            ErrorMsg *msg = add_node_error(irb->codegen, err->decl_node, buf_sprintf("duplicate error: '%s'", buf_ptr(&err->name)));
-            add_error_note(irb->codegen, msg, prev_err->decl_node, buf_sprintf("other error here"));
+            ErrorMsg *msg = add_node_error(irb->codegen, ast_field_to_symbol_node(err->decl_node),
+                    buf_sprintf("duplicate error: '%s'", buf_ptr(&err->name)));
+            add_error_note(irb->codegen, msg, ast_field_to_symbol_node(prev_err->decl_node),
+                    buf_sprintf("other error here"));
             return irb->codegen->invalid_instruction;
         }
         errors[err->value] = err;
     }
-    free(errors);
+    deallocate(errors, errors_count, "ErrorTableEntry *");
     return ir_build_const_type(irb, parent_scope, node, err_set_type);
 }
 
@@ -8116,6 +8199,7 @@ static IrInstruction *ir_gen_node_raw(IrBuilder *irb, AstNode *node, Scope *scop
         case NodeTypeSwitchProng:
         case NodeTypeSwitchRange:
         case NodeTypeStructField:
+        case NodeTypeErrorSetField:
         case NodeTypeFnDef:
         case NodeTypeTestDecl:
             zig_unreachable();
@@ -9470,6 +9554,14 @@ static void populate_error_set_table(ErrorTableEntry **errors, ZigType *set) {
     }
 }
 
+static ErrorTableEntry *better_documented_error(ErrorTableEntry *preferred, ErrorTableEntry *other) {
+    if (preferred->decl_node->type == NodeTypeErrorSetField)
+        return preferred;
+    if (other->decl_node->type == NodeTypeErrorSetField)
+        return other;
+    return preferred;
+}
+
 static ZigType *get_error_set_intersection(IrAnalyze *ira, ZigType *set1, ZigType *set2,
         AstNode *source_node)
 {
@@ -9488,7 +9580,8 @@ static ZigType *get_error_set_intersection(IrAnalyze *ira, ZigType *set1, ZigTyp
     if (type_is_global_error_set(set2)) {
         return set1;
     }
-    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(ira->codegen->errors_by_index.length);
+    size_t errors_count = ira->codegen->errors_by_index.length;
+    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(errors_count, "ErrorTableEntry *");
     populate_error_set_table(errors, set1);
     ZigList<ErrorTableEntry *> intersection_list = {};
 
@@ -9496,15 +9589,20 @@ static ZigType *get_error_set_intersection(IrAnalyze *ira, ZigType *set1, ZigTyp
     buf_resize(&err_set_type->name, 0);
     buf_appendf(&err_set_type->name, "error{");
 
+    bool need_comma = false;
     for (uint32_t i = 0; i < set2->data.error_set.err_count; i += 1) {
         ErrorTableEntry *error_entry = set2->data.error_set.errors[i];
         ErrorTableEntry *existing_entry = errors[error_entry->value];
         if (existing_entry != nullptr) {
-            intersection_list.append(existing_entry);
-            buf_appendf(&err_set_type->name, "%s,", buf_ptr(&existing_entry->name));
+            // prefer the one with docs
+            const char *comma = need_comma ? "," : "";
+            need_comma = true;
+            ErrorTableEntry *existing_entry_with_docs = better_documented_error(existing_entry, error_entry);
+            intersection_list.append(existing_entry_with_docs);
+            buf_appendf(&err_set_type->name, "%s%s", comma, buf_ptr(&existing_entry_with_docs->name));
         }
     }
-    free(errors);
+    deallocate(errors, errors_count, "ErrorTableEntry *");
 
     err_set_type->data.error_set.err_count = intersection_list.length;
     err_set_type->data.error_set.errors = intersection_list.items;
@@ -9683,7 +9781,7 @@ static ConstCastOnly types_match_const_cast_only(IrAnalyze *ira, ZigType *wanted
         ZigType *container_set = wanted_type;
 
         // if the container set is inferred, then this will always work.
-        if (container_set->data.error_set.infer_fn != nullptr) {
+        if (container_set->data.error_set.infer_fn != nullptr && container_set->data.error_set.incomplete) {
             return result;
         }
         // if the container set is the global one, it will always work.
@@ -9701,7 +9799,8 @@ static ConstCastOnly types_match_const_cast_only(IrAnalyze *ira, ZigType *wanted
             return result;
         }
 
-        ErrorTableEntry **errors = allocate<ErrorTableEntry *>(g->errors_by_index.length);
+        size_t errors_count = g->errors_by_index.length;
+        ErrorTableEntry **errors = allocate<ErrorTableEntry *>(errors_count, "ErrorTableEntry *");
         for (uint32_t i = 0; i < container_set->data.error_set.err_count; i += 1) {
             ErrorTableEntry *error_entry = container_set->data.error_set.errors[i];
             assert(errors[error_entry->value] == nullptr);
@@ -9718,7 +9817,7 @@ static ConstCastOnly types_match_const_cast_only(IrAnalyze *ira, ZigType *wanted
                 result.data.error_set_mismatch->missing_errors.append(contained_error_entry);
             }
         }
-        free(errors);
+        deallocate(errors, errors_count, "ErrorTableEntry *");
         return result;
     }
 
@@ -9937,7 +10036,7 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
                 }
 
                 // neither of them are supersets. so we invent a new error set type that is a union of both of them
-                err_set_type = get_error_set_union(ira->codegen, errors, cur_type, err_set_type);
+                err_set_type = get_error_set_union(ira->codegen, errors, cur_type, err_set_type, nullptr);
                 assert(errors != nullptr);
                 continue;
             } else if (cur_type->id == ZigTypeIdErrorUnion) {
@@ -9988,7 +10087,7 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
                 }
 
                 // not a subset. invent new error set type, union of both of them
-                err_set_type = get_error_set_union(ira->codegen, errors, cur_err_set_type, err_set_type);
+                err_set_type = get_error_set_union(ira->codegen, errors, cur_err_set_type, err_set_type, nullptr);
                 prev_inst = cur_inst;
                 assert(errors != nullptr);
                 continue;
@@ -10021,6 +10120,18 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
                 } else {
                     err_set_type = cur_type;
                 }
+
+                if (!resolve_inferred_error_set(ira->codegen, err_set_type, cur_inst->source_node)) {
+                    return ira->codegen->builtin_types.entry_invalid;
+                }
+
+                if (type_is_global_error_set(err_set_type)) {
+                    err_set_type = ira->codegen->builtin_types.entry_global_error_set;
+                    continue;
+                }
+
+                update_errors_helper(ira->codegen, &errors, &errors_count);
+
                 for (uint32_t i = 0; i < err_set_type->data.error_set.err_count; i += 1) {
                     ErrorTableEntry *error_entry = err_set_type->data.error_set.errors[i];
                     assert(errors[error_entry->value] == nullptr);
@@ -10044,7 +10155,7 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
                 continue;
             }
             // not a subset. invent new error set type, union of both of them
-            err_set_type = get_error_set_union(ira->codegen, errors, err_set_type, cur_type);
+            err_set_type = get_error_set_union(ira->codegen, errors, err_set_type, cur_type, nullptr);
             assert(errors != nullptr);
             continue;
         }
@@ -10130,7 +10241,7 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
                     continue;
                 }
 
-                err_set_type = get_error_set_union(ira->codegen, errors, cur_err_set_type, prev_err_set_type);
+                err_set_type = get_error_set_union(ira->codegen, errors, cur_err_set_type, prev_err_set_type, nullptr);
                 continue;
             }
         }
@@ -10256,7 +10367,7 @@ static ZigType *ir_resolve_peer_types(IrAnalyze *ira, AstNode *source_node, ZigT
 
                 update_errors_helper(ira->codegen, &errors, &errors_count);
 
-                err_set_type = get_error_set_union(ira->codegen, errors, err_set_type, cur_err_set_type);
+                err_set_type = get_error_set_union(ira->codegen, errors, err_set_type, cur_err_set_type, nullptr);
             }
             prev_inst = cur_inst;
             continue;
@@ -10723,7 +10834,8 @@ static IrInstruction *ira_suspend(IrAnalyze *ira, IrInstruction *old_instruction
         IrSuspendPosition *suspend_pos)
 {
     if (ira->codegen->verbose_ir) {
-        fprintf(stderr, "suspend %s_%zu %s_%zu #%zu (%zu,%zu)\n", ira->old_irb.current_basic_block->name_hint,
+        fprintf(stderr, "suspend %s_%zu %s_%zu #%" PRIu32 " (%zu,%zu)\n",
+                ira->old_irb.current_basic_block->name_hint,
                 ira->old_irb.current_basic_block->debug_id,
                 ira->old_irb.exec->basic_block_list.at(ira->old_bb_index)->name_hint,
                 ira->old_irb.exec->basic_block_list.at(ira->old_bb_index)->debug_id,
@@ -10761,7 +10873,7 @@ static IrInstruction *ira_resume(IrAnalyze *ira) {
     ira->instruction_index = pos.instruction_index;
     assert(pos.instruction_index < ira->old_irb.current_basic_block->instruction_list.length);
     if (ira->codegen->verbose_ir) {
-        fprintf(stderr, "%s_%zu #%zu\n", ira->old_irb.current_basic_block->name_hint,
+        fprintf(stderr, "%s_%zu #%" PRIu32 "\n", ira->old_irb.current_basic_block->name_hint,
                 ira->old_irb.current_basic_block->debug_id,
                 ira->old_irb.current_basic_block->instruction_list.at(pos.instruction_index)->debug_id);
     }
@@ -12049,7 +12161,7 @@ static void report_recursive_error(IrAnalyze *ira, AstNode *source_node, ConstCa
             ZigList<ErrorTableEntry *> *missing_errors = &cast_result->data.error_set_mismatch->missing_errors;
             for (size_t i = 0; i < missing_errors->length; i += 1) {
                 ErrorTableEntry *error_entry = missing_errors->at(i);
-                add_error_note(ira->codegen, parent_msg, error_entry->decl_node,
+                add_error_note(ira->codegen, parent_msg, ast_field_to_symbol_node(error_entry->decl_node),
                     buf_sprintf("'error.%s' not a member of destination error set", buf_ptr(&error_entry->name)));
             }
             break;
@@ -13031,7 +13143,6 @@ static bool ir_resolve_float_mode(IrAnalyze *ira, IrInstruction *value, FloatMod
     return true;
 }
 
-
 static Buf *ir_resolve_str(IrAnalyze *ira, IrInstruction *value) {
     if (type_is_invalid(value->value.type))
         return nullptr;
@@ -13052,11 +13163,11 @@ static Buf *ir_resolve_str(IrAnalyze *ira, IrInstruction *value) {
 
     assert(ptr_field->data.x_ptr.special == ConstPtrSpecialBaseArray);
     ConstExprValue *array_val = ptr_field->data.x_ptr.data.base_array.array_val;
-    if (array_val->data.x_array.special == ConstArraySpecialBuf) {
-        return array_val->data.x_array.data.s_buf;
-    }
     expand_undef_array(ira->codegen, array_val);
     size_t len = bigint_as_usize(&len_field->data.x_bigint);
+    if (array_val->data.x_array.special == ConstArraySpecialBuf && len == buf_len(array_val->data.x_array.data.s_buf)) {
+        return array_val->data.x_array.data.s_buf;
+    }
     Buf *result = buf_alloc();
     buf_resize(result, len);
     for (size_t i = 0; i < len; i += 1) {
@@ -13765,7 +13876,6 @@ static ErrorMsg *ir_eval_math_op_scalar(IrAnalyze *ira, IrInstruction *source_in
         case IrBinOpArrayCat:
         case IrBinOpArrayMult:
         case IrBinOpRemUnspecified:
-        case IrBinOpMergeErrorSets:
             zig_unreachable();
         case IrBinOpBinOr:
             assert(is_int);
@@ -14072,7 +14182,6 @@ static bool ok_float_op(IrBinOp op) {
         case IrBinOpRemUnspecified:
         case IrBinOpArrayCat:
         case IrBinOpArrayMult:
-        case IrBinOpMergeErrorSets:
             return false;
     }
     zig_unreachable();
@@ -14573,7 +14682,9 @@ static IrInstruction *ir_analyze_array_mult(IrAnalyze *ira, IrInstructionBinOp *
     return result;
 }
 
-static IrInstruction *ir_analyze_merge_error_sets(IrAnalyze *ira, IrInstructionBinOp *instruction) {
+static IrInstruction *ir_analyze_instruction_merge_err_sets(IrAnalyze *ira,
+        IrInstructionMergeErrSets *instruction)
+{
     ZigType *op1_type = ir_resolve_error_set_type(ira, &instruction->base, instruction->op1->child);
     if (type_is_invalid(op1_type))
         return ira->codegen->invalid_instruction;
@@ -14596,17 +14707,19 @@ static IrInstruction *ir_analyze_merge_error_sets(IrAnalyze *ira, IrInstructionB
         return ira->codegen->invalid_instruction;
     }
 
-    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(ira->codegen->errors_by_index.length);
+    size_t errors_count = ira->codegen->errors_by_index.length;
+    ErrorTableEntry **errors = allocate<ErrorTableEntry *>(errors_count, "ErrorTableEntry *");
     for (uint32_t i = 0, count = op1_type->data.error_set.err_count; i < count; i += 1) {
         ErrorTableEntry *error_entry = op1_type->data.error_set.errors[i];
         assert(errors[error_entry->value] == nullptr);
         errors[error_entry->value] = error_entry;
     }
-    ZigType *result_type = get_error_set_union(ira->codegen, errors, op1_type, op2_type);
-    free(errors);
+    ZigType *result_type = get_error_set_union(ira->codegen, errors, op1_type, op2_type, instruction->type_name);
+    deallocate(errors, errors_count, "ErrorTableEntry *");
 
     return ir_const_type(ira, &instruction->base, result_type);
 }
+
 
 static IrInstruction *ir_analyze_instruction_bin_op(IrAnalyze *ira, IrInstructionBinOp *bin_op_instruction) {
     IrBinOp op_id = bin_op_instruction->op_id;
@@ -14649,8 +14762,6 @@ static IrInstruction *ir_analyze_instruction_bin_op(IrAnalyze *ira, IrInstructio
             return ir_analyze_array_cat(ira, bin_op_instruction);
         case IrBinOpArrayMult:
             return ir_analyze_array_mult(ira, bin_op_instruction);
-        case IrBinOpMergeErrorSets:
-            return ir_analyze_merge_error_sets(ira, bin_op_instruction);
     }
     zig_unreachable();
 }
@@ -16148,7 +16259,7 @@ static IrInstruction *ir_analyze_fn_call(IrAnalyze *ira, IrInstructionCallSrc *c
                 UndefOk);
 
             if (inferred_err_set_type != nullptr) {
-                inferred_err_set_type->data.error_set.infer_fn = nullptr;
+                inferred_err_set_type->data.error_set.incomplete = false;
                 if (result->type->id == ZigTypeIdErrorUnion) {
                     ErrorTableEntry *err = result->data.x_err_union.error_set->data.x_err_set;
                     if (err != nullptr) {
@@ -17862,7 +17973,7 @@ static IrInstruction *ir_analyze_container_field_ptr(IrAnalyze *ira, Buf *field_
                     union_val->special = ConstValSpecialStatic;
                     bigint_init_bigint(&union_val->data.x_union.tag, &field->enum_field->value);
                     union_val->data.x_union.payload = payload_val;
-                } else {
+                } else if (bare_type->data.unionation.layout != ContainerLayoutExtern) {
                     TypeUnionField *actual_field = find_union_field_by_tag(bare_type, &union_val->data.x_union.tag);
                     if (actual_field == nullptr)
                         zig_unreachable();
@@ -19152,7 +19263,7 @@ static IrInstruction *ir_analyze_instruction_switch_target(IrAnalyze *ira,
 
     ZigType *target_type = target_value_ptr->value.type->data.pointer.child_type;
     ConstExprValue *pointee_val = nullptr;
-    if (instr_is_comptime(target_value_ptr)) {
+    if (instr_is_comptime(target_value_ptr) && target_value_ptr->value.data.x_ptr.mut != ConstPtrMutRuntimeVar) {
         pointee_val = const_ptr_pointee(ira, ira->codegen, &target_value_ptr->value, target_value_ptr->source_node);
         if (pointee_val == nullptr)
             return ira->codegen->invalid_instruction;
@@ -22985,17 +23096,22 @@ static IrInstruction *ir_analyze_instruction_slice(IrAnalyze *ira, IrInstruction
             zig_unreachable();
         }
 
-        uint64_t start_scalar = bigint_as_u64(&casted_start->value.data.x_bigint);
+        ConstExprValue *start_val = ir_resolve_const(ira, casted_start, UndefBad);
+        if (!start_val)
+            return ira->codegen->invalid_instruction;
+
+        uint64_t start_scalar = bigint_as_u64(&start_val->data.x_bigint);
         if (!ptr_is_undef && start_scalar > rel_end) {
             ir_add_error(ira, &instruction->base, buf_sprintf("out of bounds slice"));
             return ira->codegen->invalid_instruction;
         }
 
-        uint64_t end_scalar;
+        uint64_t end_scalar = rel_end;
         if (end) {
-            end_scalar = bigint_as_u64(&end->value.data.x_bigint);
-        } else {
-            end_scalar = rel_end;
+            ConstExprValue *end_val = ir_resolve_const(ira, end, UndefBad);
+            if (!end_val)
+                return ira->codegen->invalid_instruction;
+            end_scalar = bigint_as_u64(&end_val->data.x_bigint);
         }
         if (!ptr_is_undef) {
             if (end_scalar > rel_end) {
@@ -23608,7 +23724,7 @@ static IrInstruction *ir_analyze_instruction_test_err(IrAnalyze *ira, IrInstruct
             if (!type_is_global_error_set(err_set_type) &&
                 err_set_type->data.error_set.err_count == 0)
             {
-                assert(err_set_type->data.error_set.infer_fn == nullptr);
+                assert(!err_set_type->data.error_set.incomplete);
                 return ir_const_bool(ira, &instruction->base, false);
             }
         }
@@ -23945,7 +24061,8 @@ static IrInstruction *ir_analyze_instruction_check_switch_prongs(IrAnalyze *ira,
             return ira->codegen->invalid_instruction;
         }
 
-        AstNode **field_prev_uses = allocate<AstNode *>(ira->codegen->errors_by_index.length);
+        size_t field_prev_uses_count = ira->codegen->errors_by_index.length;
+        AstNode **field_prev_uses = allocate<AstNode *>(field_prev_uses_count, "AstNode *");
 
         for (size_t range_i = 0; range_i < instruction->range_count; range_i += 1) {
             IrInstructionCheckSwitchProngsRange *range = &instruction->ranges[range_i];
@@ -24002,7 +24119,7 @@ static IrInstruction *ir_analyze_instruction_check_switch_prongs(IrAnalyze *ira,
             }
         }
 
-        free(field_prev_uses);
+        deallocate(field_prev_uses, field_prev_uses_count, "AstNode *");
     } else if (switch_type->id == ZigTypeIdInt) {
         RangeSet rs = {0};
         for (size_t range_i = 0; range_i < instruction->range_count; range_i += 1) {
@@ -25915,6 +26032,8 @@ static IrInstruction *ir_analyze_instruction_base(IrAnalyze *ira, IrInstruction 
             return ir_analyze_instruction_un_op(ira, (IrInstructionUnOp *)instruction);
         case IrInstructionIdBinOp:
             return ir_analyze_instruction_bin_op(ira, (IrInstructionBinOp *)instruction);
+        case IrInstructionIdMergeErrSets:
+            return ir_analyze_instruction_merge_err_sets(ira, (IrInstructionMergeErrSets *)instruction);
         case IrInstructionIdDeclVarSrc:
             return ir_analyze_instruction_decl_var(ira, (IrInstructionDeclVarSrc *)instruction);
         case IrInstructionIdLoadPtr:
@@ -26227,7 +26346,7 @@ ZigType *ir_analyze(CodeGen *codegen, IrExecutable *old_exec, IrExecutable *new_
         }
 
         if (ira->codegen->verbose_ir) {
-            fprintf(stderr, "analyze #%zu\n", old_instruction->debug_id);
+            fprintf(stderr, "analyze #%" PRIu32 "\n", old_instruction->debug_id);
         }
         IrInstruction *new_instruction = ir_analyze_instruction_base(ira, old_instruction);
         if (new_instruction != nullptr) {
@@ -26340,6 +26459,7 @@ bool ir_has_side_effects(IrInstruction *instruction) {
         case IrInstructionIdPhi:
         case IrInstructionIdUnOp:
         case IrInstructionIdBinOp:
+        case IrInstructionIdMergeErrSets:
         case IrInstructionIdLoadPtr:
         case IrInstructionIdConst:
         case IrInstructionIdCast:

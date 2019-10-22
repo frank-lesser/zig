@@ -331,7 +331,7 @@ pub const Builder = struct {
             if (self.verbose) {
                 warn("rm {}\n", full_path);
             }
-            fs.deleteTree(self.allocator, full_path) catch {};
+            fs.deleteTree(full_path) catch {};
         }
 
         // TODO remove empty directories
@@ -853,7 +853,7 @@ pub const Builder = struct {
     ) ![]u8 {
         assert(argv.len != 0);
 
-        const max_output_size = 100 * 1024;
+        const max_output_size = 400 * 1024;
         const child = try std.ChildProcess.init(argv, self.allocator);
         defer child.deinit();
 
@@ -1487,6 +1487,11 @@ pub const LibExeObjStep = struct {
     glibc_multi_install_dir: ?[]const u8 = null,
 
     dynamic_linker: ?[]const u8 = null,
+
+    /// Position Independent Code
+    force_pic: ?bool = null,
+
+    subsystem: ?builtin.SubSystem = null,
 
     const LinkObject = union(enum) {
         StaticPath: []const u8,
@@ -2314,6 +2319,28 @@ pub const LibExeObjStep = struct {
             try zig_args.append(builder.pathFromRoot(dir));
         }
 
+        if (self.force_pic) |pic| {
+            if (pic) {
+                try zig_args.append("-fPIC");
+            } else {
+                try zig_args.append("-fno-PIC");
+            }
+        }
+
+        if (self.subsystem) |subsystem| {
+            try zig_args.append("--subsystem");
+            try zig_args.append(switch (subsystem) {
+                .Console => "console",
+                .Windows => "windows",
+                .Posix => "posix",
+                .Native => "native",
+                .EfiApplication => "efi_application",
+                .EfiBootServiceDriver => "efi_boot_service_driver",
+                .EfiRom => "efi_rom",
+                .EfiRuntimeDriver => "efi_runtime_driver",
+            });
+        }
+
         if (self.kind == Kind.Test) {
             try builder.spawnChild(zig_args.toSliceConst());
         } else {
@@ -2660,7 +2687,7 @@ pub const RemoveDirStep = struct {
         const self = @fieldParentPtr(RemoveDirStep, "step", step);
 
         const full_path = self.builder.pathFromRoot(self.dir_path);
-        fs.deleteTree(self.builder.allocator, full_path) catch |err| {
+        fs.deleteTree(full_path) catch |err| {
             warn("Unable to remove {}: {}\n", full_path, @errorName(err));
             return err;
         };

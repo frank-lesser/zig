@@ -17,9 +17,15 @@ const File = std.fs.File;
 const testing = std.testing;
 
 pub const Mode = enum {
+    /// I/O operates normally, waiting for the operating system syscalls to complete.
     blocking,
+
+    /// I/O functions are generated async and rely on a global event loop. Event-based I/O.
     evented,
 };
+
+/// The application's chosen I/O mode. This defaults to `Mode.blocking` but can be overridden
+/// by `root.event_loop`.
 pub const mode: Mode = if (@hasDecl(root, "io_mode"))
     root.io_mode
 else if (@hasDecl(root, "event_loop"))
@@ -121,6 +127,7 @@ pub fn OutStream(comptime WriteError: type) type {
     };
 }
 
+/// TODO move this to `std.fs` and add a version to `std.fs.Dir`.
 pub fn writeFile(path: []const u8, data: []const u8) !void {
     var file = try File.openWrite(path);
     defer file.close();
@@ -128,11 +135,13 @@ pub fn writeFile(path: []const u8, data: []const u8) !void {
 }
 
 /// On success, caller owns returned buffer.
+/// TODO move this to `std.fs` and add a version to `std.fs.Dir`.
 pub fn readFileAlloc(allocator: *mem.Allocator, path: []const u8) ![]u8 {
     return readFileAllocAligned(allocator, path, @alignOf(u8));
 }
 
 /// On success, caller owns returned buffer.
+/// TODO move this to `std.fs` and add a version to `std.fs.Dir`.
 pub fn readFileAllocAligned(allocator: *mem.Allocator, path: []const u8, comptime A: u29) ![]align(A) u8 {
     var file = try File.openRead(path);
     defer file.close();
@@ -155,7 +164,7 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime Error: type)
         const Self = @This();
         const Stream = InStream(Error);
 
-        pub stream: Stream,
+        stream: Stream,
 
         unbuffered_in_stream: *Stream,
 
@@ -267,7 +276,7 @@ pub fn PeekStream(comptime buffer_size: usize, comptime InStreamError: type) typ
         pub const Error = InStreamError;
         pub const Stream = InStream(Error);
 
-        pub stream: Stream,
+        stream: Stream,
         base: *Stream,
 
         // Right now the look-ahead space is statically allocated, but a version with dynamic allocation
@@ -330,7 +339,7 @@ pub const SliceInStream = struct {
     pub const Error = error{};
     pub const Stream = InStream(Error);
 
-    pub stream: Stream,
+    stream: Stream,
 
     pos: usize,
     slice: []const u8,
@@ -502,15 +511,15 @@ pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
     };
 }
 
-/// This is a simple OutStream that writes to a slice, and returns an error
+/// This is a simple OutStream that writes to a fixed buffer, and returns an error
 /// when it runs out of space.
 pub const SliceOutStream = struct {
     pub const Error = error{OutOfSpace};
     pub const Stream = OutStream(Error);
 
-    pub stream: Stream,
+    stream: Stream,
 
-    pub pos: usize,
+    pos: usize,
     slice: []u8,
 
     pub fn init(slice: []u8) SliceOutStream {
@@ -565,7 +574,7 @@ pub const NullOutStream = struct {
     pub const Error = error{};
     pub const Stream = OutStream(Error);
 
-    pub stream: Stream,
+    stream: Stream,
 
     pub fn init() NullOutStream {
         return NullOutStream{
@@ -589,8 +598,8 @@ pub fn CountingOutStream(comptime OutStreamError: type) type {
         pub const Stream = OutStream(Error);
         pub const Error = OutStreamError;
 
-        pub stream: Stream,
-        pub bytes_written: u64,
+        stream: Stream,
+        bytes_written: u64,
         child_stream: *Stream,
 
         pub fn init(child_stream: *Stream) Self {
@@ -629,7 +638,7 @@ pub fn BufferedOutStreamCustom(comptime buffer_size: usize, comptime OutStreamEr
         pub const Stream = OutStream(Error);
         pub const Error = OutStreamError;
 
-        pub stream: Stream,
+        stream: Stream,
 
         unbuffered_out_stream: *Stream,
 
@@ -1016,33 +1025,6 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
             return @bitCast(T, result);
         }
 
-        //@TODO: Replace this with @unionInit or whatever when it is added
-        // see: #1315
-        fn setTag(ptr: var, tag: var) void {
-            const T = @typeOf(ptr);
-            comptime assert(trait.isPtrTo(builtin.TypeId.Union)(T));
-            const U = meta.Child(T);
-
-            const info = @typeInfo(U).Union;
-            if (info.tag_type) |TagType| {
-                comptime assert(TagType == @typeOf(tag));
-
-                var ptr_tag = ptr: {
-                    if (@alignOf(TagType) >= @alignOf(U)) break :ptr @ptrCast(*TagType, ptr);
-                    const offset = comptime max: {
-                        var max_field_size: comptime_int = 0;
-                        for (info.fields) |field_info| {
-                            const field_size = @sizeOf(field_info.field_type);
-                            max_field_size = math.max(max_field_size, field_size);
-                        }
-                        break :max math.max(max_field_size, @alignOf(U));
-                    };
-                    break :ptr @intToPtr(*TagType, @ptrToInt(ptr) + offset);
-                };
-                ptr_tag.* = tag;
-            }
-        }
-
         /// Deserializes and returns data of the specified type from the stream
         pub fn deserialize(self: *Self, comptime T: type) !T {
             var value: T = undefined;
@@ -1106,17 +1088,11 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
                         const TagInt = @TagType(TagType);
                         const tag = try self.deserializeInt(TagInt);
 
-                        {
-                            @setRuntimeSafety(false);
-                            //See: #1315
-                            setTag(ptr, @intToEnum(TagType, tag));
-                        }
-
                         inline for (info.fields) |field_info| {
                             if (field_info.enum_field.?.value == tag) {
                                 const name = field_info.name;
                                 const FieldType = field_info.field_type;
-                                @field(ptr, name) = FieldType(undefined);
+                                ptr.* = @unionInit(C, name, undefined);
                                 try self.deserializeInto(&@field(ptr, name));
                                 return;
                             }
