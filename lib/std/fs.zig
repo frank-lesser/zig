@@ -28,7 +28,7 @@ pub const GetAppDataDirError = @import("fs/get_app_data_dir.zig").GetAppDataDirE
 /// All file system operations which return a path are guaranteed to
 /// fit into a UTF-8 encoded array of this length.
 pub const MAX_PATH_BYTES = switch (builtin.os) {
-    .linux, .macosx, .ios, .freebsd, .netbsd => os.PATH_MAX,
+    .linux, .macosx, .ios, .freebsd, .netbsd, .dragonfly => os.PATH_MAX,
     // Each UTF-16LE character may be expanded to 3 UTF-8 bytes.
     // If it would require 4 UTF-8 bytes, then there would be a surrogate
     // pair in the UTF-16LE, and we (over)account 3 bytes for it that way.
@@ -255,7 +255,7 @@ pub const AtomicFile = struct {
         assert(!self.finished);
         self.file.close();
         self.finished = true;
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             const dest_path_w = try os.windows.sliceToPrefixedFileW(self.dest_path);
             const tmp_path_w = try os.windows.cStrToPrefixedFileW(&self.tmp_path_buf);
             return os.renameW(&tmp_path_w, &dest_path_w);
@@ -380,7 +380,7 @@ pub const Dir = struct {
     const IteratorError = error{AccessDenied} || os.UnexpectedError;
 
     pub const Iterator = switch (builtin.os) {
-        .macosx, .ios, .freebsd, .netbsd => struct {
+        .macosx, .ios, .freebsd, .netbsd, .dragonfly => struct {
             dir: Dir,
             seek: i64,
             buf: [8192]u8, // TODO align(@alignOf(os.dirent)),
@@ -396,7 +396,7 @@ pub const Dir = struct {
             pub fn next(self: *Self) Error!?Entry {
                 switch (builtin.os) {
                     .macosx, .ios => return self.nextDarwin(),
-                    .freebsd, .netbsd => return self.nextBsd(),
+                    .freebsd, .netbsd, .dragonfly => return self.nextBsd(),
                     else => @compileError("unimplemented"),
                 }
             }
@@ -424,7 +424,7 @@ pub const Dir = struct {
                         self.end_index = @intCast(usize, rc);
                     }
                     const darwin_entry = @ptrCast(*align(1) os.dirent, &self.buf[self.index]);
-                    const next_index = self.index + darwin_entry.d_reclen;
+                    const next_index = self.index + darwin_entry.reclen();
                     self.index = next_index;
 
                     const name = @ptrCast([*]u8, &darwin_entry.d_name)[0..darwin_entry.d_namlen];
@@ -473,7 +473,7 @@ pub const Dir = struct {
                         self.end_index = @intCast(usize, rc);
                     }
                     const freebsd_entry = @ptrCast(*align(1) os.dirent, &self.buf[self.index]);
-                    const next_index = self.index + freebsd_entry.d_reclen;
+                    const next_index = self.index + freebsd_entry.reclen();
                     self.index = next_index;
 
                     const name = @ptrCast([*]u8, &freebsd_entry.d_name)[0..freebsd_entry.d_namlen];
@@ -529,7 +529,7 @@ pub const Dir = struct {
                         self.end_index = rc;
                     }
                     const linux_entry = @ptrCast(*align(1) os.dirent64, &self.buf[self.index]);
-                    const next_index = self.index + linux_entry.d_reclen;
+                    const next_index = self.index + linux_entry.reclen();
                     self.index = next_index;
 
                     const name = mem.toSlice(u8, @ptrCast([*]u8, &linux_entry.d_name));
@@ -630,7 +630,7 @@ pub const Dir = struct {
 
     pub fn iterate(self: Dir) Iterator {
         switch (builtin.os) {
-            .macosx, .ios, .freebsd, .netbsd => return Iterator{
+            .macosx, .ios, .freebsd, .netbsd, .dragonfly => return Iterator{
                 .dir = self,
                 .seek = 0,
                 .index = 0,
@@ -659,7 +659,7 @@ pub const Dir = struct {
     /// Closing the returned `Dir` is checked illegal behavior.
     /// On POSIX targets, this function is comptime-callable.
     pub fn cwd() Dir {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             return Dir{ .fd = os.windows.peb().ProcessParameters.CurrentDirectory.Handle };
         } else {
             return Dir{ .fd = os.AT_FDCWD };
@@ -704,14 +704,14 @@ pub const Dir = struct {
 
     /// Call `File.close` on the result when done.
     pub fn openReadC(self: Dir, sub_path: [*]const u8) File.OpenError!File {
-        const flags = os.O_LARGEFILE | os.O_RDONLY;
+        const flags = os.O_LARGEFILE | os.O_RDONLY | os.O_CLOEXEC;
         const fd = try os.openatC(self.fd, sub_path, flags, 0);
         return File.openHandle(fd);
     }
 
     /// Call `close` on the result when done.
     pub fn openDir(self: Dir, sub_path: []const u8) OpenError!Dir {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             const sub_path_w = try os.windows.sliceToPrefixedFileW(sub_path);
             return self.openDirW(&sub_path_w);
         }
@@ -722,7 +722,7 @@ pub const Dir = struct {
 
     /// Same as `openDir` except the parameter is null-terminated.
     pub fn openDirC(self: Dir, sub_path_c: [*]const u8) OpenError!Dir {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             const sub_path_w = try os.windows.cStrToPrefixedFileW(sub_path_c);
             return self.openDirW(&sub_path_w);
         }
@@ -829,7 +829,7 @@ pub const Dir = struct {
     /// Returns `error.DirNotEmpty` if the directory is not empty.
     /// To delete a directory recursively, see `deleteTree`.
     pub fn deleteDir(self: Dir, sub_path: []const u8) DeleteDirError!void {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             const sub_path_w = try os.windows.sliceToPrefixedFileW(sub_path);
             return self.deleteDirW(&sub_path_w);
         }
@@ -1146,10 +1146,10 @@ pub fn readLinkC(pathname_c: [*]const u8, buffer: *[MAX_PATH_BYTES]u8) ![]u8 {
 pub const OpenSelfExeError = os.OpenError || os.windows.CreateFileError || SelfExePathError;
 
 pub fn openSelfExe() OpenSelfExeError!File {
-    if (os.linux.is_the_target) {
+    if (builtin.os == .linux) {
         return File.openReadC(c"/proc/self/exe");
     }
-    if (os.windows.is_the_target) {
+    if (builtin.os == .windows) {
         var buf: [os.windows.PATH_MAX_WIDE]u16 = undefined;
         const wide_slice = try selfExePathW(&buf);
         return File.openReadW(wide_slice.ptr);
@@ -1162,7 +1162,7 @@ pub fn openSelfExe() OpenSelfExeError!File {
 
 test "openSelfExe" {
     switch (builtin.os) {
-        .linux, .macosx, .ios, .windows, .freebsd => (try openSelfExe()).close(),
+        .linux, .macosx, .ios, .windows, .freebsd, .dragonfly => (try openSelfExe()).close(),
         else => return error.SkipZigTest, // Unsupported OS.
     }
 }
@@ -1180,7 +1180,7 @@ pub const SelfExePathError = os.ReadLinkError || os.SysCtlError;
 /// been deleted, the file path looks something like `/a/b/c/exe (deleted)`.
 /// TODO make the return type of this a null terminated pointer
 pub fn selfExePath(out_buffer: *[MAX_PATH_BYTES]u8) SelfExePathError![]u8 {
-    if (os.darwin.is_the_target) {
+    if (comptime std.Target.current.isDarwin()) {
         var u32_len: u32 = out_buffer.len;
         const rc = std.c._NSGetExecutablePath(out_buffer, &u32_len);
         if (rc != 0) return error.NameTooLong;
@@ -1188,7 +1188,7 @@ pub fn selfExePath(out_buffer: *[MAX_PATH_BYTES]u8) SelfExePathError![]u8 {
     }
     switch (builtin.os) {
         .linux => return os.readlinkC(c"/proc/self/exe", out_buffer),
-        .freebsd => {
+        .freebsd, .dragonfly => {
             var mib = [4]c_int{ os.CTL_KERN, os.KERN_PROC, os.KERN_PROC_PATHNAME, -1 };
             var out_len: usize = out_buffer.len;
             try os.sysctl(&mib, out_buffer, &out_len, null, 0);
@@ -1228,7 +1228,7 @@ pub fn selfExeDirPathAlloc(allocator: *Allocator) ![]u8 {
 /// Get the directory path that contains the current executable.
 /// Returned value is a slice of out_buffer.
 pub fn selfExeDirPath(out_buffer: *[MAX_PATH_BYTES]u8) SelfExePathError![]const u8 {
-    if (os.linux.is_the_target) {
+    if (builtin.os == .linux) {
         // If the currently executing binary has been deleted,
         // the file path looks something like `/a/b/c/exe (deleted)`
         // This path cannot be opened, but it's valid for determining the directory

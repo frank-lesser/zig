@@ -1792,28 +1792,12 @@ static void construct_linker_job_elf(LinkJob *lj) {
         if (g->libc != nullptr) {
             if (!g->have_dynamic_link) {
                 lj->args.append("--start-group");
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("-lgcc_eh");
-                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
                 lj->args.append("--end-group");
             } else {
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("--as-needed");
-                    lj->args.append("-lgcc_s");
-                    lj->args.append("--no-as-needed");
-                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("--as-needed");
-                    lj->args.append("-lgcc_s");
-                    lj->args.append("--no-as-needed");
-                }
             }
 
             if (g->zig_target->os == OsFreeBSD) {
@@ -2630,8 +2614,9 @@ void codegen_link(CodeGen *g) {
 
     {
         const char *progress_name = "Build Dependencies";
-        lj.build_dep_prog_node = stage2_progress_start(g->progress_node,
-                progress_name, strlen(progress_name), 0);
+        codegen_switch_sub_prog_node(g, stage2_progress_start(g->main_progress_node,
+                progress_name, strlen(progress_name), 0));
+        lj.build_dep_prog_node = g->sub_progress_node;
     }
 
 
@@ -2661,10 +2646,9 @@ void codegen_link(CodeGen *g) {
         ZigLLVM_OSType os_type = get_llvm_os_type(g->zig_target->os);
         codegen_add_time_event(g, "LLVM Link");
         {
-            const char *progress_name = "linking";
-            Stage2ProgressNode *child_progress_node = stage2_progress_start(g->progress_node,
-                    progress_name, strlen(progress_name), 0);
-            (void)child_progress_node;
+            const char *progress_name = "Link";
+            codegen_switch_sub_prog_node(g, stage2_progress_start(g->main_progress_node,
+                    progress_name, strlen(progress_name), 0));
         }
         if (g->verbose_link) {
             fprintf(stderr, "ar rcs %s", buf_ptr(&g->output_file_path));
@@ -2696,6 +2680,11 @@ void codegen_link(CodeGen *g) {
     Buf diag = BUF_INIT;
 
     codegen_add_time_event(g, "LLVM Link");
+    {
+        const char *progress_name = "Link";
+        codegen_switch_sub_prog_node(g, stage2_progress_start(g->main_progress_node,
+                progress_name, strlen(progress_name), 0));
+    }
     if (g->system_linker_hack && g->zig_target->os == OsMacOSX) {
         Termination term;
         ZigList<const char *> args = {};

@@ -151,18 +151,22 @@ pub fn translate(
     };
     defer ZigClangASTUnit_delete(ast_unit);
 
-    var tree_arena = std.heap.ArenaAllocator.init(backing_allocator);
-    errdefer tree_arena.deinit();
+    const tree = blk: {
+        var tree_arena = std.heap.ArenaAllocator.init(backing_allocator);
+        errdefer tree_arena.deinit();
 
-    const tree = try tree_arena.allocator.create(ast.Tree);
-    tree.* = ast.Tree{
-        .source = undefined, // need to use Buffer.toOwnedSlice later
-        .root_node = undefined,
-        .arena_allocator = tree_arena,
-        .tokens = undefined, // can't reference the allocator yet
-        .errors = undefined, // can't reference the allocator yet
+        const tree = try tree_arena.allocator.create(ast.Tree);
+        tree.* = ast.Tree{
+            .source = undefined, // need to use Buffer.toOwnedSlice later
+            .root_node = undefined,
+            .arena_allocator = tree_arena,
+            .tokens = undefined, // can't reference the allocator yet
+            .errors = undefined, // can't reference the allocator yet
+        };
+        break :blk tree;
     };
     const arena = &tree.arena_allocator.allocator; // now we can reference the allocator
+    errdefer tree.arena_allocator.deinit();
     tree.tokens = ast.Tree.TokenList.init(arena);
     tree.errors = ast.Tree.ErrorList.init(arena);
 
@@ -1123,7 +1127,7 @@ fn transCreateNodeAPInt(c: *Context, int: ?*const ZigClangAPSInt) !*ast.Node {
     var big = try std.math.big.Int.initCapacity(c.a(), num_limbs);
     defer big.deinit();
     const data = ZigClangAPSInt_getRawData(int.?);
-    var i: usize = 0;
+    var i: @typeOf(num_limbs) = 0;
     while (i < num_limbs) : (i += 1) big.limbs[i] = data[i];
     const str = big.toString(c.a(), 10) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,

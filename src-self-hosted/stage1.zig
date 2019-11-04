@@ -128,6 +128,7 @@ export fn stage2_free_clang_errors(errors_ptr: [*]translate_c.ClangErrMsg, error
 export fn stage2_render_ast(tree: *ast.Tree, output_file: *FILE) Error {
     const c_out_stream = &std.io.COutStream.init(output_file).stream;
     _ = std.zig.render(std.heap.c_allocator, c_out_stream, tree) catch |e| switch (e) {
+        error.WouldBlock => unreachable, // stage1 opens stuff in exclusively blocking mode
         error.SystemResources => return Error.SystemResources,
         error.OperationAborted => return Error.OperationAborted,
         error.BrokenPipe => return Error.BrokenPipe,
@@ -516,4 +517,12 @@ export fn stage2_progress_end(node: *std.Progress.Node) void {
 // ABI warning
 export fn stage2_progress_complete_one(node: *std.Progress.Node) void {
     node.completeOne();
+}
+
+// ABI warning
+export fn stage2_progress_update_node(node: *std.Progress.Node, done_count: usize, total_count: usize) void {
+    node.completed_items = done_count;
+    node.estimated_total_items = total_count;
+    node.activate();
+    node.context.maybeRefresh();
 }

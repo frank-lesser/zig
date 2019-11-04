@@ -17590,7 +17590,10 @@ static IrInstruction *ir_analyze_instruction_elem_ptr(IrAnalyze *ira, IrInstruct
                             false);
                     array_ptr_val->data.x_struct.fields[slice_ptr_index].data.x_ptr.mut = ConstPtrMutInfer;
                 } else {
-                    zig_unreachable();
+                    ir_add_error(ira, elem_ptr_instruction->init_array_type,
+                        buf_sprintf("expected array type or [_], found '%s'",
+                            buf_ptr(&array_type->name)));
+                    return ira->codegen->invalid_instruction;
                 }
             }
 
@@ -17689,7 +17692,8 @@ static IrInstruction *ir_analyze_instruction_elem_ptr(IrAnalyze *ira, IrInstruct
                             {
                                 size_t offset = ptr_field->data.x_ptr.data.base_array.elem_index;
                                 uint64_t new_index = offset + index;
-                                assert(new_index < ptr_field->data.x_ptr.data.base_array.array_val->type->data.array.len);
+                                ir_assert(new_index < ptr_field->data.x_ptr.data.base_array.array_val->type->data.array.len,
+                                        &elem_ptr_instruction->base);
                                 out_val->data.x_ptr.special = ConstPtrSpecialBaseArray;
                                 out_val->data.x_ptr.data.base_array.array_val =
                                     ptr_field->data.x_ptr.data.base_array.array_val;
@@ -17851,7 +17855,10 @@ static IrInstruction *ir_analyze_struct_field_ptr(IrAnalyze *ira, IrInstruction 
         case OnePossibleValueNo:
             break;
     }
-    if ((err = type_resolve(ira->codegen, struct_type, ResolveStatusAlignmentKnown)))
+    ResolveStatus needed_resolve_status =
+        (struct_type->data.structure.layout == ContainerLayoutAuto) ?
+            ResolveStatusZeroBitsKnown : ResolveStatusSizeKnown;
+    if ((err = type_resolve(ira->codegen, struct_type, needed_resolve_status)))
         return ira->codegen->invalid_instruction;
     assert(struct_ptr->value.type->id == ZigTypeIdPointer);
     uint32_t ptr_bit_offset = struct_ptr->value.type->data.pointer.bit_offset_in_host;
@@ -17870,6 +17877,9 @@ static IrInstruction *ir_analyze_struct_field_ptr(IrAnalyze *ira, IrInstruction 
             return ira->codegen->invalid_instruction;
 
         if (ptr_val->data.x_ptr.special != ConstPtrSpecialHardCodedAddr) {
+            if ((err = type_resolve(ira->codegen, struct_type, ResolveStatusSizeKnown)))
+                return ira->codegen->invalid_instruction;
+
             ConstExprValue *struct_val = const_ptr_pointee(ira, ira->codegen, ptr_val, source_instr->source_node);
             if (struct_val == nullptr)
                 return ira->codegen->invalid_instruction;
@@ -17916,7 +17926,7 @@ static IrInstruction *ir_analyze_container_field_ptr(IrAnalyze *ira, Buf *field_
     Error err;
 
     ZigType *bare_type = container_ref_type(container_type);
-    if ((err = type_resolve(ira->codegen, bare_type, ResolveStatusSizeKnown)))
+    if ((err = type_resolve(ira->codegen, bare_type, ResolveStatusZeroBitsKnown)))
         return ira->codegen->invalid_instruction;
 
     assert(container_ptr->value.type->id == ZigTypeIdPointer);
@@ -19589,57 +19599,18 @@ static IrInstruction *ir_analyze_instruction_import(IrAnalyze *ira, IrInstructio
     AstNode *source_node = import_instruction->base.source_node;
     ZigType *import = source_node->owner;
 
+    ZigType *target_import;
     Buf *import_target_path;
-    Buf *search_dir;
-    assert(import->data.structure.root_struct->package);
-    ZigPackage *target_package;
-    auto package_entry = import->data.structure.root_struct->package->package_table.maybe_get(import_target_str);
-    SourceKind source_kind;
-    if (package_entry) {
-        target_package = package_entry->value;
-        import_target_path = &target_package->root_src_path;
-        search_dir = &target_package->root_src_dir;
-        source_kind = SourceKindPkgMain;
-    } else {
-        // try it as a filename
-        target_package = import->data.structure.root_struct->package;
-        import_target_path = import_target_str;
-
-        // search relative to importing file
-        search_dir = buf_alloc();
-        os_path_dirname(import->data.structure.root_struct->path, search_dir);
-
-        source_kind = SourceKindNonRoot;
-    }
-
     Buf full_path = BUF_INIT;
-    os_path_join(search_dir, import_target_path, &full_path);
-
-    Buf *import_code = buf_alloc();
-    Buf *resolved_path = buf_alloc();
-
-    Buf *resolve_paths[] = { &full_path, };
-    *resolved_path = os_path_resolve(resolve_paths, 1);
-
-    auto import_entry = ira->codegen->import_table.maybe_get(resolved_path);
-    if (import_entry) {
-        return ir_const_type(ira, &import_instruction->base, import_entry->value);
-    }
-
-    if (source_kind == SourceKindNonRoot) {
-        ZigPackage *cur_scope_pkg = scope_package(import_instruction->base.scope);
-        Buf *pkg_root_src_dir = &cur_scope_pkg->root_src_dir;
-        Buf resolved_root_src_dir = os_path_resolve(&pkg_root_src_dir, 1);
-        if (!buf_starts_with_buf(resolved_path, &resolved_root_src_dir)) {
+    if ((err = analyze_import(ira->codegen, import, import_target_str, &target_import,
+        &import_target_path, &full_path)))
+    {
+        if (err == ErrorImportOutsidePkgPath) {
             ir_add_error_node(ira, source_node,
                     buf_sprintf("import of file outside package path: '%s'",
                         buf_ptr(import_target_path)));
             return ira->codegen->invalid_instruction;
-        }
-    }
-
-    if ((err = file_fetch(ira->codegen, resolved_path, import_code))) {
-        if (err == ErrorFileNotFound) {
+        } else if (err == ErrorFileNotFound) {
             ir_add_error_node(ira, source_node,
                     buf_sprintf("unable to find '%s'", buf_ptr(import_target_path)));
             return ira->codegen->invalid_instruction;
@@ -19649,8 +19620,6 @@ static IrInstruction *ir_analyze_instruction_import(IrAnalyze *ira, IrInstructio
             return ira->codegen->invalid_instruction;
         }
     }
-
-    ZigType *target_import = add_source_file(ira->codegen, target_package, resolved_path, import_code, source_kind);
 
     return ir_const_type(ira, &import_instruction->base, target_import);
 }
