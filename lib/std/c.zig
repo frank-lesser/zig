@@ -8,9 +8,16 @@ pub usingnamespace switch (builtin.os) {
     .linux => @import("c/linux.zig"),
     .windows => @import("c/windows.zig"),
     .macosx, .ios, .tvos, .watchos => @import("c/darwin.zig"),
-    .freebsd => @import("c/freebsd.zig"),
+    .freebsd, .kfreebsd => @import("c/freebsd.zig"),
     .netbsd => @import("c/netbsd.zig"),
     .dragonfly => @import("c/dragonfly.zig"),
+    .openbsd => @import("c/openbsd.zig"),
+    .haiku => @import("c/haiku.zig"),
+    .hermit => @import("c/hermit.zig"),
+    .solaris => @import("c/solaris.zig"),
+    .fuchsia => @import("c/fuchsia.zig"),
+    .minix => @import("c/minix.zig"),
+    .emscripten => @import("c/emscripten.zig"),
     else => struct {},
 };
 
@@ -61,7 +68,6 @@ pub extern "c" fn abort() noreturn;
 pub extern "c" fn exit(code: c_int) noreturn;
 pub extern "c" fn isatty(fd: fd_t) c_int;
 pub extern "c" fn close(fd: fd_t) c_int;
-pub extern "c" fn @"close$NOCANCEL"(fd: fd_t) c_int;
 pub extern "c" fn fstat(fd: fd_t, buf: *Stat) c_int;
 pub extern "c" fn @"fstat$INODE64"(fd: fd_t, buf: *Stat) c_int;
 pub extern "c" fn lseek(fd: fd_t, offset: off_t, whence: c_int) off_t;
@@ -150,6 +156,10 @@ pub extern "c" fn realloc(?*c_void, usize) ?*c_void;
 pub extern "c" fn free(*c_void) void;
 pub extern "c" fn posix_memalign(memptr: **c_void, alignment: usize, size: usize) c_int;
 
+// Deprecated
+pub extern "c" fn futimes(fd: fd_t, times: *[2]timeval) c_int;
+pub extern "c" fn utimes(path: [*]const u8, times: *[2]timeval) c_int;
+
 pub extern "c" fn utimensat(dirfd: fd_t, pathname: [*]const u8, times: *[2]timespec, flags: u32) c_int;
 pub extern "c" fn futimens(fd: fd_t, times: *const [2]timespec) c_int;
 
@@ -200,3 +210,18 @@ pub extern "c" fn dn_expand(
     exp_dn: [*]u8,
     length: c_int,
 ) c_int;
+
+pub extern "c" fn sched_yield() c_int;
+
+pub const PTHREAD_MUTEX_INITIALIZER = pthread_mutex_t{};
+pub extern "c" fn pthread_mutex_lock(mutex: *pthread_mutex_t) c_int;
+pub extern "c" fn pthread_mutex_unlock(mutex: *pthread_mutex_t) c_int;
+pub extern "c" fn pthread_mutex_destroy(mutex: *pthread_mutex_t) c_int;
+
+pub const PTHREAD_COND_INITIALIZER = pthread_cond_t{};
+pub extern "c" fn pthread_cond_wait(noalias cond: *pthread_cond_t, noalias mutex: *pthread_mutex_t) c_int;
+pub extern "c" fn pthread_cond_signal(cond: *pthread_cond_t) c_int;
+pub extern "c" fn pthread_cond_destroy(cond: *pthread_cond_t) c_int;
+
+pub const pthread_t = *@OpaqueType();
+pub const FILE = @OpaqueType();

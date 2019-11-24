@@ -46,13 +46,14 @@ pub const mach_header = macho.mach_header;
 
 pub const _errno = __error;
 
+pub extern "c" fn @"close$NOCANCEL"(fd: fd_t) c_int;
 pub extern "c" fn mach_host_self() mach_port_t;
 pub extern "c" fn clock_get_time(clock_serv: clock_serv_t, cur_time: *mach_timespec_t) kern_return_t;
 pub extern "c" fn host_get_clock_service(host: host_t, clock_id: clock_id_t, clock_serv: ?[*]clock_serv_t) kern_return_t;
 pub extern "c" fn mach_port_deallocate(task: ipc_space_t, name: mach_port_name_t) kern_return_t;
 
 pub fn sigaddset(set: *sigset_t, signo: u5) void {
-    set.* |= u32(1) << (signo - 1);
+    set.* |= @as(u32, 1) << (signo - 1);
 }
 
 pub extern "c" fn sigaltstack(ss: ?*stack_t, old_ss: ?*stack_t) c_int;
@@ -111,3 +112,19 @@ pub const EAI_PROTOCOL = 13;
 /// argument buffer overflow
 pub const EAI_OVERFLOW = 14;
 pub const EAI_MAX = 15;
+
+pub const pthread_mutex_t = extern struct {
+    __sig: c_long = 0x32AAABA7,
+    __opaque: [__PTHREAD_MUTEX_SIZE__]u8 = [_]u8{0} ** __PTHREAD_MUTEX_SIZE__,
+};
+pub const pthread_cond_t = extern struct {
+    __sig: c_long = 0x3CB0B1BB,
+    __opaque: [__PTHREAD_COND_SIZE__]u8 = [_]u8{0} ** __PTHREAD_COND_SIZE__,
+};
+const __PTHREAD_MUTEX_SIZE__ = if (@sizeOf(usize) == 8) 56 else 40;
+const __PTHREAD_COND_SIZE__ = if (@sizeOf(usize) == 8) 40 else 24;
+
+pub const pthread_attr_t = extern struct {
+    __sig: c_long,
+    __opaque: [56]u8,
+};

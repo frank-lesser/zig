@@ -48,6 +48,7 @@ struct ResultLoc;
 struct ResultLocPeer;
 struct ResultLocPeerParent;
 struct ResultLocBitCast;
+struct ResultLocCast;
 struct ResultLocReturn;
 
 enum PtrLen {
@@ -151,7 +152,7 @@ struct ConstParent {
 };
 
 struct ConstStructValue {
-    ConstExprValue *fields;
+    ConstExprValue **fields;
 };
 
 struct ConstUnionValue {
@@ -967,6 +968,7 @@ struct AstNodeContainerDecl {
     AstNode *init_arg_expr; // enum(T), struct(endianness), or union(T), or union(enum(T))
     ZigList<AstNode *> fields;
     ZigList<AstNode *> decls;
+    Buf doc_comments;
 
     ContainerKind kind;
     ContainerLayout layout;
@@ -1183,13 +1185,34 @@ struct FnTypeId {
 uint32_t fn_type_id_hash(FnTypeId*);
 bool fn_type_id_eql(FnTypeId *a, FnTypeId *b);
 
+static const uint32_t VECTOR_INDEX_NONE = UINT32_MAX;
+static const uint32_t VECTOR_INDEX_RUNTIME = UINT32_MAX - 1;
+
+struct InferredStructField {
+    ZigType *inferred_struct_type;
+    Buf *field_name;
+};
+
 struct ZigTypePointer {
     ZigType *child_type;
     ZigType *slice_parent;
+
+    // Anonymous struct literal syntax uses this when the result location has
+    // no type in it. This field is null if this pointer does not refer to
+    // a field of a currently-being-inferred struct type.
+    // When this is non-null, the pointer is pointing to the base of the inferred
+    // struct.
+    InferredStructField *inferred_struct_field;
+
     PtrLen ptr_len;
     uint32_t explicit_alignment; // 0 means use ABI alignment
+
     uint32_t bit_offset_in_host;
-    uint32_t host_int_bytes; // size of host integer. 0 means no host integer; this field is aligned
+    // size of host integer. 0 means no host integer; this field is aligned
+    // when vector_index != VECTOR_INDEX_NONE this is the len of the containing vector
+    uint32_t host_int_bytes;
+
+    uint32_t vector_index; // see the VECTOR_INDEX_* constants
     bool is_const;
     bool is_volatile;
     bool allow_zero;
@@ -1227,6 +1250,7 @@ struct TypeStructField {
 enum ResolveStatus {
     ResolveStatusUnstarted,
     ResolveStatusInvalid,
+    ResolveStatusBeingInferred,
     ResolveStatusZeroBitsKnown,
     ResolveStatusAlignmentKnown,
     ResolveStatusSizeKnown,
@@ -1256,7 +1280,7 @@ struct RootStruct {
 
 struct ZigTypeStruct {
     AstNode *decl_node;
-    TypeStructField *fields;
+    TypeStructField **fields;
     ScopeDecls *decls_scope;
     HashMap<Buf *, TypeStructField *, buf_hash, buf_eql_buf> fields_by_name;
     RootStruct *root_struct;
@@ -1275,6 +1299,7 @@ struct ZigTypeStruct {
     bool requires_comptime;
     bool resolve_loop_flag_zero_bits;
     bool resolve_loop_flag_other;
+    bool is_inferred;
 };
 
 struct ZigTypeOptional {
@@ -1676,12 +1701,14 @@ enum BuiltinFnId {
     BuiltinFnIdErrorReturnTrace,
     BuiltinFnIdAtomicRmw,
     BuiltinFnIdAtomicLoad,
+    BuiltinFnIdAtomicStore,
     BuiltinFnIdHasDecl,
     BuiltinFnIdUnionInit,
     BuiltinFnIdFrameAddress,
     BuiltinFnIdFrameType,
     BuiltinFnIdFrameHandle,
     BuiltinFnIdFrameSize,
+    BuiltinFnIdAs,
 };
 
 struct BuiltinFnEntry {
@@ -1730,10 +1757,14 @@ struct TypeId {
     union {
         struct {
             ZigType *child_type;
+            InferredStructField *inferred_struct_field;
             PtrLen ptr_len;
             uint32_t alignment;
+
             uint32_t bit_offset_in_host;
             uint32_t host_int_bytes;
+
+            uint32_t vector_index;
             bool is_const;
             bool is_volatile;
             bool allow_zero;
@@ -2414,6 +2445,7 @@ enum IrInstructionId {
     IrInstructionIdLoadPtr,
     IrInstructionIdLoadPtrGen,
     IrInstructionIdStorePtr,
+    IrInstructionIdVectorStoreElem,
     IrInstructionIdFieldPtr,
     IrInstructionIdStructFieldPtr,
     IrInstructionIdUnionFieldPtr,
@@ -2539,6 +2571,7 @@ enum IrInstructionId {
     IrInstructionIdErrorUnion,
     IrInstructionIdAtomicRmw,
     IrInstructionIdAtomicLoad,
+    IrInstructionIdAtomicStore,
     IrInstructionIdSaveErrRetAddr,
     IrInstructionIdAddImplicitReturnType,
     IrInstructionIdErrSetCast,
@@ -2563,6 +2596,7 @@ enum IrInstructionId {
     IrInstructionIdResume,
     IrInstructionIdSpillBegin,
     IrInstructionIdSpillEnd,
+    IrInstructionIdVectorExtractElem,
 };
 
 struct IrInstruction {
@@ -2757,6 +2791,14 @@ struct IrInstructionStorePtr {
     IrInstruction *value;
 };
 
+struct IrInstructionVectorStoreElem {
+    IrInstruction base;
+
+    IrInstruction *vector_ptr;
+    IrInstruction *index;
+    IrInstruction *value;
+};
+
 struct IrInstructionFieldPtr {
     IrInstruction base;
 
@@ -2788,7 +2830,7 @@ struct IrInstructionElemPtr {
 
     IrInstruction *array_ptr;
     IrInstruction *elem_index;
-    IrInstruction *init_array_type;
+    AstNode *init_array_type_source_node;
     PtrLen ptr_len;
     bool safety_check_on;
 };
@@ -2885,11 +2927,11 @@ struct IrInstructionResizeSlice {
 struct IrInstructionContainerInitList {
     IrInstruction base;
 
-    IrInstruction *container_type;
     IrInstruction *elem_type;
     size_t item_count;
     IrInstruction **elem_result_loc_list;
     IrInstruction *result_loc;
+    AstNode *init_array_type_source_node;
 };
 
 struct IrInstructionContainerInitFieldsField {
@@ -2902,7 +2944,6 @@ struct IrInstructionContainerInitFieldsField {
 struct IrInstructionContainerInitFields {
     IrInstruction base;
 
-    IrInstruction *container_type;
     size_t field_count;
     IrInstructionContainerInitFieldsField *fields;
     IrInstruction *result_loc;
@@ -3436,6 +3477,13 @@ struct IrInstructionPtrCastGen {
     bool safety_check_on;
 };
 
+struct IrInstructionImplicitCast {
+    IrInstruction base;
+
+    IrInstruction *operand;
+    ResultLocCast *result_loc_cast;
+};
+
 struct IrInstructionBitCastSrc {
     IrInstruction base;
 
@@ -3620,6 +3668,7 @@ struct IrInstructionArgType {
 
     IrInstruction *fn_type;
     IrInstruction *arg_index;
+    bool allow_var;
 };
 
 struct IrInstructionExport {
@@ -3664,6 +3713,16 @@ struct IrInstructionAtomicLoad {
 
     IrInstruction *operand_type;
     IrInstruction *ptr;
+    IrInstruction *ordering;
+    AtomicOrder resolved_ordering;
+};
+
+struct IrInstructionAtomicStore {
+    IrInstruction base;
+
+    IrInstruction *operand_type;
+    IrInstruction *ptr;
+    IrInstruction *value;
     IrInstruction *ordering;
     AtomicOrder resolved_ordering;
 };
@@ -3801,14 +3860,6 @@ struct IrInstructionEndExpr {
     ResultLoc *result_loc;
 };
 
-struct IrInstructionImplicitCast {
-    IrInstruction base;
-
-    IrInstruction *dest_type;
-    IrInstruction *target;
-    ResultLoc *result_loc;
-};
-
 // This one is for writing through the result pointer.
 struct IrInstructionResolveResult {
     IrInstruction base;
@@ -3890,6 +3941,13 @@ struct IrInstructionSpillEnd {
     IrInstructionSpillBegin *begin;
 };
 
+struct IrInstructionVectorExtractElem {
+    IrInstruction base;
+
+    IrInstruction *vector;
+    IrInstruction *index;
+};
+
 enum ResultLocId {
     ResultLocIdInvalid,
     ResultLocIdNone,
@@ -3899,6 +3957,7 @@ enum ResultLocId {
     ResultLocIdPeerParent,
     ResultLocIdInstruction,
     ResultLocIdBitCast,
+    ResultLocIdCast,
 };
 
 // Additions to this struct may need to be handled in
@@ -3961,6 +4020,13 @@ struct ResultLocInstruction {
 
 // The source_instruction is the destination type
 struct ResultLocBitCast {
+    ResultLoc base;
+
+    ResultLoc *parent;
+};
+
+// The source_instruction is the destination type
+struct ResultLocCast {
     ResultLoc base;
 
     ResultLoc *parent;
