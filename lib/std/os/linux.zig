@@ -14,6 +14,7 @@ const vdso = @import("linux/vdso.zig");
 const dl = @import("../dynamic_library.zig");
 
 pub usingnamespace switch (builtin.arch) {
+    .i386 => @import("linux/i386.zig"),
     .x86_64 => @import("linux/x86_64.zig"),
     .aarch64 => @import("linux/arm64.zig"),
     .arm => @import("linux/arm-eabi.zig"),
@@ -93,7 +94,7 @@ pub fn fork() usize {
 /// the compiler is not aware of how vfork affects control flow and you may
 /// see different results in optimized builds.
 pub inline fn vfork() usize {
-    return @inlineCall(syscall0, SYS_vfork);
+    return @call(.{ .modifier = .always_inline }, syscall0, .{SYS_vfork});
 }
 
 pub fn futimens(fd: i32, times: *const [2]timespec) usize {
@@ -705,7 +706,7 @@ pub fn sigaction(sig: u6, noalias act: *const Sigaction, noalias oact: ?*Sigacti
         .restorer = @ptrCast(extern fn () void, restorer_fn),
     };
     var ksa_old: k_sigaction = undefined;
-    const ksa_mask_size = @sizeOf(@typeOf(ksa_old.mask));
+    const ksa_mask_size = @sizeOf(@TypeOf(ksa_old.mask));
     @memcpy(@ptrCast([*]u8, &ksa.mask), @ptrCast([*]const u8, &act.mask), ksa_mask_size);
     const result = syscall4(SYS_rt_sigaction, sig, @ptrToInt(&ksa), @ptrToInt(&ksa_old), ksa_mask_size);
     const err = getErrno(result);
@@ -743,31 +744,49 @@ pub fn sigismember(set: *const sigset_t, sig: u6) bool {
 }
 
 pub fn getsockname(fd: i32, noalias addr: *sockaddr, noalias len: *socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_getsockname, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len) });
+    }
     return syscall3(SYS_getsockname, @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len));
 }
 
 pub fn getpeername(fd: i32, noalias addr: *sockaddr, noalias len: *socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_getpeername, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len) });
+    }
     return syscall3(SYS_getpeername, @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len));
 }
 
 pub fn socket(domain: u32, socket_type: u32, protocol: u32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_socket, &[3]usize{ domain, socket_type, protocol });
+    }
     return syscall3(SYS_socket, domain, socket_type, protocol);
 }
 
 pub fn setsockopt(fd: i32, level: u32, optname: u32, optval: [*]const u8, optlen: socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_setsockopt, &[5]usize{ @bitCast(usize, @as(isize, fd)), level, optname, @ptrToInt(optval), @intCast(usize, optlen) });
+    }
     return syscall5(SYS_setsockopt, @bitCast(usize, @as(isize, fd)), level, optname, @ptrToInt(optval), @intCast(usize, optlen));
 }
 
 pub fn getsockopt(fd: i32, level: u32, optname: u32, noalias optval: [*]u8, noalias optlen: *socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_getsockopt, &[5]usize{ @bitCast(usize, @as(isize, fd)), level, optname, @ptrToInt(optval), @ptrToInt(optlen) });
+    }
     return syscall5(SYS_getsockopt, @bitCast(usize, @as(isize, fd)), level, optname, @ptrToInt(optval), @ptrToInt(optlen));
 }
 
 pub fn sendmsg(fd: i32, msg: *msghdr_const, flags: u32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_sendmsg, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(msg), flags });
+    }
     return syscall3(SYS_sendmsg, @bitCast(usize, @as(isize, fd)), @ptrToInt(msg), flags);
 }
 
 pub fn sendmmsg(fd: i32, msgvec: [*]mmsghdr_const, vlen: u32, flags: u32) usize {
-    if (@typeInfo(usize).Int.bits > @typeInfo(@typeOf(mmsghdr(undefined).msg_len)).Int.bits) {
+    if (@typeInfo(usize).Int.bits > @typeInfo(@TypeOf(mmsghdr(undefined).msg_len)).Int.bits) {
         // workaround kernel brokenness:
         // if adding up all iov_len overflows a i32 then split into multiple calls
         // see https://www.openwall.com/lists/musl/2014/06/07/5
@@ -807,42 +826,72 @@ pub fn sendmmsg(fd: i32, msgvec: [*]mmsghdr_const, vlen: u32, flags: u32) usize 
 }
 
 pub fn connect(fd: i32, addr: *const c_void, len: socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_connect, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), len });
+    }
     return syscall3(SYS_connect, @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), len);
 }
 
 pub fn recvmsg(fd: i32, msg: *msghdr, flags: u32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_recvmsg, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(msg), flags });
+    }
     return syscall3(SYS_recvmsg, @bitCast(usize, @as(isize, fd)), @ptrToInt(msg), flags);
 }
 
 pub fn recvfrom(fd: i32, noalias buf: [*]u8, len: usize, flags: u32, noalias addr: ?*sockaddr, noalias alen: ?*socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_recvfrom, &[6]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), len, flags, @ptrToInt(addr), @ptrToInt(alen) });
+    }
     return syscall6(SYS_recvfrom, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), len, flags, @ptrToInt(addr), @ptrToInt(alen));
 }
 
 pub fn shutdown(fd: i32, how: i32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_shutdown, &[2]usize{ @bitCast(usize, @as(isize, fd)), @bitCast(usize, @as(isize, how)) });
+    }
     return syscall2(SYS_shutdown, @bitCast(usize, @as(isize, fd)), @bitCast(usize, @as(isize, how)));
 }
 
 pub fn bind(fd: i32, addr: *const sockaddr, len: socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_bind, &[3]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @intCast(usize, len) });
+    }
     return syscall3(SYS_bind, @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @intCast(usize, len));
 }
 
 pub fn listen(fd: i32, backlog: u32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_listen, &[2]usize{ @bitCast(usize, @as(isize, fd)), backlog });
+    }
     return syscall2(SYS_listen, @bitCast(usize, @as(isize, fd)), backlog);
 }
 
 pub fn sendto(fd: i32, buf: [*]const u8, len: usize, flags: u32, addr: ?*const sockaddr, alen: socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_sendto, &[6]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), len, flags, @ptrToInt(addr), @intCast(usize, alen) });
+    }
     return syscall6(SYS_sendto, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), len, flags, @ptrToInt(addr), @intCast(usize, alen));
 }
 
 pub fn socketpair(domain: i32, socket_type: i32, protocol: i32, fd: [2]i32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_socketpair, &[4]usize{ @intCast(usize, domain), @intCast(usize, socket_type), @intCast(usize, protocol), @ptrToInt(&fd[0]) });
+    }
     return syscall4(SYS_socketpair, @intCast(usize, domain), @intCast(usize, socket_type), @intCast(usize, protocol), @ptrToInt(&fd[0]));
 }
 
 pub fn accept(fd: i32, noalias addr: *sockaddr, noalias len: *socklen_t) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_accept, &[4]usize{ fd, addr, len, 0 });
+    }
     return accept4(fd, addr, len, 0);
 }
 
 pub fn accept4(fd: i32, noalias addr: *sockaddr, noalias len: *socklen_t, flags: u32) usize {
+    if (builtin.arch == .i386) {
+        return socketcall(SC_accept4, &[4]usize{ @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len), flags });
+    }
     return syscall4(SYS_accept4, @bitCast(usize, @as(isize, fd)), @ptrToInt(addr), @ptrToInt(len), flags);
 }
 
@@ -1053,7 +1102,7 @@ pub fn dl_iterate_phdr(comptime T: type, callback: extern fn (info: *dl_phdr_inf
     if (it.end()) {
         var info = dl_phdr_info{
             .dlpi_addr = elf_base,
-            .dlpi_name = c"/proc/self/exe",
+            .dlpi_name = "/proc/self/exe",
             .dlpi_phdr = @intToPtr([*]elf.Phdr, elf_base + __ehdr_start.e_phoff),
             .dlpi_phnum = __ehdr_start.e_phnum,
         };

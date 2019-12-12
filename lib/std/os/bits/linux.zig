@@ -9,6 +9,7 @@ pub usingnamespace switch (builtin.arch) {
 };
 
 pub usingnamespace switch (builtin.arch) {
+    .i386 => @import("linux/i386.zig"),
     .x86_64 => @import("linux/x86_64.zig"),
     .aarch64 => @import("linux/arm64.zig"),
     .arm => @import("linux/arm-eabi.zig"),
@@ -950,7 +951,7 @@ pub fn cap_valid(u8: x) bool {
 }
 
 pub fn CAP_TO_MASK(cap: u8) u32 {
-    return @as(u32, 1) << u5(cap & 31);
+    return @as(u32, 1) << @intCast(u5, cap & 31);
 }
 
 pub fn CAP_TO_INDEX(cap: u8) u8 {
@@ -1114,10 +1115,15 @@ pub const io_uring_params = extern struct {
     flags: u32,
     sq_thread_cpu: u32,
     sq_thread_idle: u32,
-    resv: [5]u32,
+    features: u32,
+    resv: [4]u32,
     sq_off: io_sqring_offsets,
     cq_off: io_cqring_offsets,
 };
+
+// io_uring_params.features flags
+
+pub const IORING_FEAT_SINGLE_MMAP = 1 << 0;
 
 // io_uring_params.flags
 
@@ -1185,6 +1191,7 @@ pub const io_uring_sqe = extern struct {
         poll_events: u16,
         sync_range_flags: u32,
         msg_flags: u32,
+        timeout_flags: u32,
     };
     union1: union1,
     user_data: u64,
@@ -1217,6 +1224,7 @@ pub const IORING_OP_POLL_REMOVE = 7;
 pub const IORING_OP_SYNC_FILE_RANGE = 8;
 pub const IORING_OP_SENDMSG = 9;
 pub const IORING_OP_RECVMSG = 10;
+pub const IORING_OP_TIMEOUT = 11;
 
 // io_uring_sqe.fsync_flags
 pub const IORING_FSYNC_DATASYNC = (1 << 0);
@@ -1355,7 +1363,7 @@ pub const addrinfo = extern struct {
     protocol: i32,
     addrlen: socklen_t,
     addr: ?*sockaddr,
-    canonname: ?[*]u8,
+    canonname: ?[*:0]u8,
     next: ?*addrinfo,
 };
 

@@ -201,7 +201,7 @@ pub fn PackedIntArrayEndian(comptime Int: type, comptime endian: builtin.Endian,
         ///Return the Int stored at index
         pub fn get(self: Self, index: usize) Int {
             debug.assert(index < int_count);
-            return Io.get(self.bytes, index, 0);
+            return Io.get(&self.bytes, index, 0);
         }
 
         ///Copy int into the array at index
@@ -528,16 +528,7 @@ test "PackedInt(Array/Slice) sliceCast" {
 test "PackedInt(Array/Slice)Endian" {
     {
         const PackedArrayBe = PackedIntArrayEndian(u4, .Big, 8);
-        var packed_array_be = PackedArrayBe.init([_]u4{
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-        });
+        var packed_array_be = PackedArrayBe.init([_]u4{ 0, 1, 2, 3, 4, 5, 6, 7 });
         testing.expect(packed_array_be.bytes[0] == 0b00000001);
         testing.expect(packed_array_be.bytes[1] == 0b00100011);
 
@@ -563,16 +554,7 @@ test "PackedInt(Array/Slice)Endian" {
 
     {
         const PackedArrayBe = PackedIntArrayEndian(u11, .Big, 8);
-        var packed_array_be = PackedArrayBe.init([_]u11{
-            0,
-            1,
-            2,
-            3,
-            4,
-            5,
-            6,
-            7,
-        });
+        var packed_array_be = PackedArrayBe.init([_]u11{ 0, 1, 2, 3, 4, 5, 6, 7 });
         testing.expect(packed_array_be.bytes[0] == 0b00000000);
         testing.expect(packed_array_be.bytes[1] == 0b00000000);
         testing.expect(packed_array_be.bytes[2] == 0b00000100);
@@ -622,7 +604,7 @@ test "PackedIntArray at end of available memory" {
         p: PackedArray,
     };
 
-    const allocator = std.heap.direct_allocator;
+    const allocator = std.heap.page_allocator;
 
     var pad = try allocator.create(Padded);
     defer allocator.destroy(pad);
@@ -636,7 +618,7 @@ test "PackedIntSlice at end of available memory" {
     }
     const PackedSlice = PackedIntSlice(u11);
 
-    const allocator = std.heap.direct_allocator;
+    const allocator = std.heap.page_allocator;
 
     var page = try allocator.alloc(u8, std.mem.page_size);
     defer allocator.free(page);

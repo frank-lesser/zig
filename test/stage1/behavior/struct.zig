@@ -184,7 +184,7 @@ fn testReturnEmptyStructFromFn() EmptyStruct2 {
 }
 
 test "pass slice of empty struct to fn" {
-    expect(testPassSliceOfEmptyStructToFn([_]EmptyStruct2{EmptyStruct2{}}) == 1);
+    expect(testPassSliceOfEmptyStructToFn(&[_]EmptyStruct2{EmptyStruct2{}}) == 1);
 }
 fn testPassSliceOfEmptyStructToFn(slice: []const EmptyStruct2) usize {
     return slice.len;
@@ -432,7 +432,7 @@ const Expr = union(enum) {
 };
 
 fn alloc(comptime T: type) []T {
-    return [_]T{};
+    return &[_]T{};
 }
 
 test "call method with mutable reference to struct with no fields" {
@@ -493,9 +493,10 @@ test "non-byte-aligned array inside packed struct" {
         fn doTheTest() void {
             var foo = Foo{
                 .a = true,
-                .b = "abcdefghijklmnopqurstu",
+                .b = "abcdefghijklmnopqurstu".*,
             };
-            bar(foo.b);
+            const value = foo.b;
+            bar(&value);
         }
     };
     S.doTheTest();
@@ -774,6 +775,50 @@ test "anonymous struct literal assigned to variable" {
     expect(vec.@"0" == 22);
     expect(vec.@"1" == 55);
     expect(vec.@"2" == 99);
-    vec.@"1" += 1;
-    expect(vec.@"1" == 56);
+}
+
+test "struct with var field" {
+    const Point = struct {
+        x: var,
+        y: var,
+    };
+    const pt = Point{
+        .x = 1,
+        .y = 2,
+    };
+    expect(pt.x == 1);
+    expect(pt.y == 2);
+}
+
+test "comptime struct field" {
+    const T = struct {
+        a: i32,
+        comptime b: i32 = 1234,
+    };
+
+    var foo: T = undefined;
+    comptime expect(foo.b == 1234);
+}
+
+test "anon struct literal field value initialized with fn call" {
+    const S = struct {
+        fn doTheTest() void {
+            var x = .{foo()};
+            expectEqualSlices(u8, x[0], "hi");
+        }
+        fn foo() []const u8 {
+            return "hi";
+        }
+    };
+    S.doTheTest();
+    comptime S.doTheTest();
+}
+
+test "self-referencing struct via array member" {
+    const T = struct {
+        children: [1]*@This(),
+    };
+    var x: T = undefined;
+    x = T{ .children = .{&x} };
+    expect(x.children[0] == &x);
 }

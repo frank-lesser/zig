@@ -6,6 +6,8 @@
 
 #ifdef ZIG_ENABLE_MEM_PROFILE
 
+MemprofInternCount memprof_intern_count;
+
 static bool str_eql_str(const char *a, const char *b) {
     return strcmp(a, b) == 0;
 }
@@ -29,12 +31,13 @@ ZigList<const char *> unknown_names = {};
 HashMap<const char *, CountAndSize, str_hash, str_eql_str> usage_table = {};
 bool table_active = false;
 
-
 static const char *get_default_name(const char *name_or_null, size_t type_size) {
     if (name_or_null != nullptr) return name_or_null;
     if (type_size >= unknown_names.length) {
         table_active = false;
-        unknown_names.resize(type_size + 1);
+        while (type_size >= unknown_names.length) {
+            unknown_names.append(nullptr);
+        }
         table_active = true;
     }
     if (unknown_names.at(type_size) == nullptr) {
@@ -65,7 +68,8 @@ void memprof_dealloc(const char *name, size_t count, size_t type_size) {
     name = get_default_name(name, type_size);
     auto existing_entry = usage_table.maybe_get(name);
     if (existing_entry == nullptr) {
-        zig_panic("deallocated more than allocated; compromised memory usage stats");
+        zig_panic("deallocated name '%s' (size %zu) not found in allocated table; compromised memory usage stats",
+                name, type_size);
     }
     if (existing_entry->value.type_size != type_size) {
         zig_panic("deallocated name '%s' does not match expected type size %zu", name, type_size);
@@ -134,6 +138,13 @@ void memprof_dump_stats(FILE *file) {
 
     list.deinit();
     table_active = true;
+
+    fprintf(stderr, "\n");
+    fprintf(stderr, "undefined: interned %zu times\n", memprof_intern_count.x_undefined);
+    fprintf(stderr, "void: interned %zu times\n", memprof_intern_count.x_void);
+    fprintf(stderr, "null: interned %zu times\n", memprof_intern_count.x_null);
+    fprintf(stderr, "unreachable: interned %zu times\n", memprof_intern_count.x_unreachable);
+    fprintf(stderr, "zero_byte: interned %zu times\n", memprof_intern_count.zero_byte);
 }
 
 #endif

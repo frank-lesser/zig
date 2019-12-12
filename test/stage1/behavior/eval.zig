@@ -105,7 +105,7 @@ pub fn vec3(x: f32, y: f32, z: f32) Vec3 {
 
 test "constant expressions" {
     var array: [array_size]u8 = undefined;
-    expect(@sizeOf(@typeOf(array)) == 20);
+    expect(@sizeOf(@TypeOf(array)) == 20);
 }
 const array_size: u8 = 20;
 
@@ -598,7 +598,7 @@ test "pointer to type" {
         var T: type = i32;
         expect(T == i32);
         var ptr = &T;
-        expect(@typeOf(ptr) == *type);
+        expect(@TypeOf(ptr) == *type);
         ptr.* = f32;
         expect(T == f32);
         expect(*T == *f32);
@@ -670,10 +670,10 @@ fn loopNTimes(comptime n: usize) void {
 }
 
 test "variable inside inline loop that has different types on different iterations" {
-    testVarInsideInlineLoop(true, @as(u32, 42));
+    testVarInsideInlineLoop(.{true, @as(u32, 42)});
 }
 
-fn testVarInsideInlineLoop(args: ...) void {
+fn testVarInsideInlineLoop(args: var) void {
     comptime var i = 0;
     inline while (i < args.len) : (i += 1) {
         const x = args[i];
@@ -717,7 +717,7 @@ test "@bytesToslice on a packed struct" {
     };
 
     var b = [1]u8{9};
-    var f = @bytesToSlice(F, b);
+    var f = @bytesToSlice(F, &b);
     expect(f[0].a == 9);
 }
 
@@ -736,7 +736,7 @@ test "comptime pointer cast array and then slice" {
 
 test "slice bounds in comptime concatenation" {
     const bs = comptime blk: {
-        const b = c"........1........";
+        const b = "........1........";
         break :blk b[8..9];
     };
     const str = "" ++ bs;
@@ -774,12 +774,12 @@ test "*align(1) u16 is the same as *align(1:0:2) u16" {
 
 test "array concatenation forces comptime" {
     var a = oneItem(3) ++ oneItem(4);
-    expect(std.mem.eql(i32, a, [_]i32{ 3, 4 }));
+    expect(std.mem.eql(i32, &a, &[_]i32{ 3, 4 }));
 }
 
 test "array multiplication forces comptime" {
     var a = oneItem(3) ** scalar(2);
-    expect(std.mem.eql(i32, a, [_]i32{ 3, 3 }));
+    expect(std.mem.eql(i32, &a, &[_]i32{ 3, 3 }));
 }
 
 fn oneItem(x: i32) [1]i32 {

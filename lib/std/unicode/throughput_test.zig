@@ -4,7 +4,7 @@ const std = @import("std");
 pub fn main() !void {
     const stdout = &std.io.getStdOut().outStream().stream;
 
-    const args = try std.process.argsAlloc(std.heap.direct_allocator);
+    const args = try std.process.argsAlloc(std.heap.page_allocator);
 
     @fence(.SeqCst);
     var timer = try std.time.Timer.start();
@@ -24,8 +24,12 @@ pub fn main() !void {
     const elapsed_ns_better = timer.lap();
     @fence(.SeqCst);
 
-    std.debug.warn("original utf8ToUtf16Le: elapsed: {} ns ({} ms)\n", elapsed_ns_orig, elapsed_ns_orig / 1000000);
-    std.debug.warn("new utf8ToUtf16Le: elapsed: {} ns ({} ms)\n", elapsed_ns_better, elapsed_ns_better / 1000000);
+    std.debug.warn("original utf8ToUtf16Le: elapsed: {} ns ({} ms)\n", .{
+        elapsed_ns_orig, elapsed_ns_orig / 1000000,
+    });
+    std.debug.warn("new utf8ToUtf16Le: elapsed: {} ns ({} ms)\n", .{
+        elapsed_ns_better, elapsed_ns_better / 1000000,
+    });
     asm volatile ("nop"
         :
         : [a] "r" (&buffer1),

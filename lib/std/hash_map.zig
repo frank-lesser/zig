@@ -42,6 +42,11 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime hash: fn (key: K) u3
 
         const Self = @This();
 
+        /// A *KV is a mutable pointer into this HashMap's internal storage.
+        /// Modifying the key is undefined behavior.
+        /// Modifying the value is harmless.
+        /// *KV pointers become invalid whenever this HashMap is modified,
+        /// and then any access to the *KV is undefined behavior.
         pub const KV = struct {
             key: K,
             value: V,
@@ -94,7 +99,7 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime hash: fn (key: K) u3
 
         pub fn init(allocator: *Allocator) Self {
             return Self{
-                .entries = [_]Entry{},
+                .entries = &[_]Entry{},
                 .allocator = allocator,
                 .size = 0,
                 .max_distance_from_start_index = 0,
@@ -414,7 +419,7 @@ pub fn HashMap(comptime K: type, comptime V: type, comptime hash: fn (key: K) u3
 }
 
 test "basic hash map usage" {
-    var map = AutoHashMap(i32, i32).init(std.heap.direct_allocator);
+    var map = AutoHashMap(i32, i32).init(std.heap.page_allocator);
     defer map.deinit();
 
     testing.expect((try map.put(1, 11)) == null);
@@ -458,7 +463,7 @@ test "basic hash map usage" {
 }
 
 test "iterator hash map" {
-    var reset_map = AutoHashMap(i32, i32).init(std.heap.direct_allocator);
+    var reset_map = AutoHashMap(i32, i32).init(std.heap.page_allocator);
     defer reset_map.deinit();
 
     try reset_map.putNoClobber(1, 11);
@@ -504,7 +509,7 @@ test "iterator hash map" {
 }
 
 test "ensure capacity" {
-    var map = AutoHashMap(i32, i32).init(std.heap.direct_allocator);
+    var map = AutoHashMap(i32, i32).init(std.heap.page_allocator);
     defer map.deinit();
 
     try map.ensureCapacity(20);

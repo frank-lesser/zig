@@ -301,7 +301,9 @@ pub const Error = union(enum) {
         node: *Node,
 
         pub fn render(self: *const ExpectedCall, tokens: *Tree.TokenList, stream: var) !void {
-            return stream.print("expected " ++ @tagName(@TagType(Node.SuffixOp.Op).Call) ++ ", found {}", @tagName(self.node.id));
+            return stream.print("expected " ++ @tagName(@TagType(Node.SuffixOp.Op).Call) ++ ", found {}", .{
+                @tagName(self.node.id),
+            });
         }
     };
 
@@ -309,7 +311,8 @@ pub const Error = union(enum) {
         node: *Node,
 
         pub fn render(self: *const ExpectedCallOrFnProto, tokens: *Tree.TokenList, stream: var) !void {
-            return stream.print("expected " ++ @tagName(@TagType(Node.SuffixOp.Op).Call) ++ " or " ++ @tagName(Node.Id.FnProto) ++ ", found {}", @tagName(self.node.id));
+            return stream.print("expected " ++ @tagName(@TagType(Node.SuffixOp.Op).Call) ++ " or " ++
+                @tagName(Node.Id.FnProto) ++ ", found {}", .{@tagName(self.node.id)});
         }
     };
 
@@ -321,14 +324,14 @@ pub const Error = union(enum) {
             const found_token = tokens.at(self.token);
             switch (found_token.id) {
                 .Invalid_ampersands => {
-                    return stream.print("`&&` is invalid. Note that `and` is boolean AND.");
+                    return stream.print("`&&` is invalid. Note that `and` is boolean AND.", .{});
                 },
                 .Invalid => {
-                    return stream.print("expected '{}', found invalid bytes", self.expected_id.symbol());
+                    return stream.print("expected '{}', found invalid bytes", .{self.expected_id.symbol()});
                 },
                 else => {
                     const token_name = found_token.id.symbol();
-                    return stream.print("expected '{}', found '{}'", self.expected_id.symbol(), token_name);
+                    return stream.print("expected '{}', found '{}'", .{ self.expected_id.symbol(), token_name });
                 },
             }
         }
@@ -340,7 +343,10 @@ pub const Error = union(enum) {
 
         pub fn render(self: *const ExpectedCommaOrEnd, tokens: *Tree.TokenList, stream: var) !void {
             const actual_token = tokens.at(self.token);
-            return stream.print("expected ',' or '{}', found '{}'", self.end_id.symbol(), actual_token.id.symbol());
+            return stream.print("expected ',' or '{}', found '{}'", .{
+                self.end_id.symbol(),
+                actual_token.id.symbol(),
+            });
         }
     };
 
@@ -352,7 +358,7 @@ pub const Error = union(enum) {
 
             pub fn render(self: *const ThisError, tokens: *Tree.TokenList, stream: var) !void {
                 const actual_token = tokens.at(self.token);
-                return stream.print(msg, actual_token.id.symbol());
+                return stream.print(msg, .{actual_token.id.symbol()});
             }
         };
     }
@@ -563,10 +569,10 @@ pub const Node = struct {
         {
             var i: usize = 0;
             while (i < indent) : (i += 1) {
-                std.debug.warn(" ");
+                std.debug.warn(" ", .{});
             }
         }
-        std.debug.warn("{}\n", @tagName(self.id));
+        std.debug.warn("{}\n", .{@tagName(self.id)});
 
         var child_i: usize = 0;
         while (self.iterate(child_i)) |child| : (child_i += 1) {
@@ -754,8 +760,9 @@ pub const Node = struct {
     };
 
     pub const ContainerField = struct {
-        base: Node,
+        base: Node = Node{ .id = .ContainerField },
         doc_comments: ?*DocComment,
+        comptime_token: ?TokenIndex,
         name_token: TokenIndex,
         type_expr: ?*Node,
         value_expr: ?*Node,
@@ -778,7 +785,7 @@ pub const Node = struct {
         }
 
         pub fn firstToken(self: *const ContainerField) TokenIndex {
-            return self.name_token;
+            return self.comptime_token orelse self.name_token;
         }
 
         pub fn lastToken(self: *const ContainerField) TokenIndex {
@@ -960,7 +967,9 @@ pub const Node = struct {
         pub fn iterate(self: *ParamDecl, index: usize) ?*Node {
             var i = index;
 
-            if (i < 1) return self.type_node;
+            if (i < 1) {
+                return if (self.var_args_token == null) self.type_node else null;
+            }
             i -= 1;
 
             return null;
@@ -1531,14 +1540,14 @@ pub const Node = struct {
     };
 
     pub const PrefixOp = struct {
-        base: Node,
+        base: Node = Node{ .id = .PrefixOp },
         op_token: TokenIndex,
         op: Op,
         rhs: *Node,
 
         pub const Op = union(enum) {
             AddressOf,
-            ArrayType: *Node,
+            ArrayType: ArrayInfo,
             Await,
             BitNot,
             BoolNot,
@@ -1552,11 +1561,17 @@ pub const Node = struct {
             Try,
         };
 
+        pub const ArrayInfo = struct {
+            len_expr: *Node,
+            sentinel: ?*Node,
+        };
+
         pub const PtrInfo = struct {
-            allowzero_token: ?TokenIndex,
-            align_info: ?Align,
-            const_token: ?TokenIndex,
-            volatile_token: ?TokenIndex,
+            allowzero_token: ?TokenIndex = null,
+            align_info: ?Align = null,
+            const_token: ?TokenIndex = null,
+            volatile_token: ?TokenIndex = null,
+            sentinel: ?*Node = null,
 
             pub const Align = struct {
                 node: *Node,
@@ -1575,6 +1590,11 @@ pub const Node = struct {
             switch (self.op) {
                 // TODO https://github.com/ziglang/zig/issues/1107
                 Op.SliceType => |addr_of_info| {
+                    if (addr_of_info.sentinel) |sentinel| {
+                        if (i < 1) return sentinel;
+                        i -= 1;
+                    }
+
                     if (addr_of_info.align_info) |align_info| {
                         if (i < 1) return align_info.node;
                         i -= 1;
@@ -1588,9 +1608,13 @@ pub const Node = struct {
                     }
                 },
 
-                Op.ArrayType => |size_expr| {
-                    if (i < 1) return size_expr;
+                Op.ArrayType => |array_info| {
+                    if (i < 1) return array_info.len_expr;
                     i -= 1;
+                    if (array_info.sentinel) |sentinel| {
+                        if (i < 1) return sentinel;
+                        i -= 1;
+                    }
                 },
 
                 Op.AddressOf,
@@ -2189,7 +2213,7 @@ pub const Node = struct {
     };
 
     pub const VarType = struct {
-        base: Node,
+        base: Node = Node{ .id = .VarType },
         token: TokenIndex,
 
         pub fn iterate(self: *VarType, index: usize) ?*Node {

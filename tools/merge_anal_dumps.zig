@@ -6,7 +6,7 @@ const fieldIndex = std.meta.fieldIndex;
 const TypeId = builtin.TypeId;
 
 pub fn main() anyerror!void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.direct_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
     const allocator = &arena.allocator;
@@ -311,7 +311,7 @@ const Dump = struct {
     }
 
     fn render(self: *Dump, stream: var) !void {
-        var jw = json.WriteStream(@typeOf(stream).Child, 10).init(stream);
+        var jw = json.WriteStream(@TypeOf(stream).Child, 10).init(stream);
         try jw.beginObject();
 
         try jw.objectField("typeKinds");

@@ -42,7 +42,7 @@ pub const Loop = struct {
             },
             else => {},
         };
-        pub const Overlapped = @typeOf(overlapped_init);
+        pub const Overlapped = @TypeOf(overlapped_init);
 
         pub const Id = enum {
             Basic,
@@ -61,7 +61,7 @@ pub const Loop = struct {
                 base: ResumeNode,
                 completion_key: usize,
             },
-            else => @compileError("unsupported OS"),
+            else => struct {},
         };
 
         const KEventFd = struct {
@@ -129,7 +129,7 @@ pub const Loop = struct {
     /// max(thread_count - 1, 0)
     pub fn initThreadPool(self: *Loop, thread_count: usize) !void {
         // TODO: https://github.com/ziglang/zig/issues/3539
-        const allocator = std.heap.direct_allocator;
+        const allocator = std.heap.page_allocator;
         self.* = Loop{
             .pending_event_count = 1,
             .allocator = allocator,
@@ -237,7 +237,7 @@ pub const Loop = struct {
                 var extra_thread_index: usize = 0;
                 errdefer {
                     // writing 8 bytes to an eventfd cannot fail
-                    os.write(self.os_data.final_eventfd, wakeup_bytes) catch unreachable;
+                    os.write(self.os_data.final_eventfd, &wakeup_bytes) catch unreachable;
                     while (extra_thread_index != 0) {
                         extra_thread_index -= 1;
                         self.extra_threads[extra_thread_index].wait();
@@ -684,7 +684,7 @@ pub const Loop = struct {
                 .linux => {
                     self.posixFsRequest(&self.os_data.fs_end_request);
                     // writing 8 bytes to an eventfd cannot fail
-                    noasync os.write(self.os_data.final_eventfd, wakeup_bytes) catch unreachable;
+                    noasync os.write(self.os_data.final_eventfd, &wakeup_bytes) catch unreachable;
                     return;
                 },
                 .macosx, .freebsd, .netbsd, .dragonfly => {

@@ -235,7 +235,7 @@ pub const ChildProcess = struct {
     }
 
     fn waitUnwrappedWindows(self: *ChildProcess) !void {
-        const result = windows.WaitForSingleObject(self.handle, windows.INFINITE);
+        const result = windows.WaitForSingleObjectEx(self.handle, windows.INFINITE, false);
 
         self.term = @as(SpawnError!Term, x: {
             var exit_code: windows.DWORD = undefined;
@@ -259,7 +259,9 @@ pub const ChildProcess = struct {
     }
 
     fn handleWaitResult(self: *ChildProcess, status: u32) void {
-        self.term = self.cleanupAfterWait(status);
+        // TODO https://github.com/ziglang/zig/issues/3190
+        var term = self.cleanupAfterWait(status);
+        self.term = term;
     }
 
     fn cleanupStreams(self: *ChildProcess) void {
@@ -328,7 +330,7 @@ pub const ChildProcess = struct {
 
         const any_ignore = (self.stdin_behavior == StdIo.Ignore or self.stdout_behavior == StdIo.Ignore or self.stderr_behavior == StdIo.Ignore);
         const dev_null_fd = if (any_ignore)
-            os.openC(c"/dev/null", os.O_RDWR, 0) catch |err| switch (err) {
+            os.openC("/dev/null", os.O_RDWR, 0) catch |err| switch (err) {
                 error.PathAlreadyExists => unreachable,
                 error.NoSpaceLeft => unreachable,
                 error.FileTooBig => unreachable,
@@ -439,6 +441,7 @@ pub const ChildProcess = struct {
 
         const any_ignore = (self.stdin_behavior == StdIo.Ignore or self.stdout_behavior == StdIo.Ignore or self.stderr_behavior == StdIo.Ignore);
 
+        // TODO use CreateFileW here since we are using a string literal for the path
         const nul_handle = if (any_ignore)
             windows.CreateFile(
                 "NUL",
@@ -568,7 +571,7 @@ pub const ChildProcess = struct {
         // to match posix semantics
         const app_name = x: {
             if (self.cwd) |cwd| {
-                const resolved = try fs.path.resolve(self.allocator, [_][]const u8{ cwd, self.argv[0] });
+                const resolved = try fs.path.resolve(self.allocator, &[_][]const u8{ cwd, self.argv[0] });
                 defer self.allocator.free(resolved);
                 break :x try cstr.addNullByte(self.allocator, resolved);
             } else {
@@ -610,10 +613,10 @@ pub const ChildProcess = struct {
             retry: while (it.next()) |search_path| {
                 var ext_it = mem.tokenize(PATHEXT, ";");
                 while (ext_it.next()) |app_ext| {
-                    const app_basename = try mem.concat(self.allocator, u8, [_][]const u8{ app_name[0 .. app_name.len - 1], app_ext });
+                    const app_basename = try mem.concat(self.allocator, u8, &[_][]const u8{ app_name[0 .. app_name.len - 1], app_ext });
                     defer self.allocator.free(app_basename);
 
-                    const joined_path = try fs.path.join(self.allocator, [_][]const u8{ search_path, app_basename });
+                    const joined_path = try fs.path.join(self.allocator, &[_][]const u8{ search_path, app_basename });
                     defer self.allocator.free(joined_path);
 
                     const joined_path_w = try unicode.utf8ToUtf16LeWithNull(self.allocator, joined_path);

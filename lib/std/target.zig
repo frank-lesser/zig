@@ -45,8 +45,8 @@ pub const Target = union(enum) {
         hurd,
         wasi,
         emscripten,
-        zen,
         uefi,
+        other,
     };
 
     pub const Arch = union(enum) {
@@ -145,6 +145,119 @@ pub const Target = union(enum) {
         pub const Mips = enum {
             r6,
         };
+
+        pub fn toElfMachine(arch: Arch) std.elf.EM {
+            return switch (arch) {
+                .avr => ._AVR,
+                .msp430 => ._MSP430,
+                .arc => ._ARC,
+                .arm => ._ARM,
+                .armeb => ._ARM,
+                .hexagon => ._HEXAGON,
+                .le32 => ._NONE,
+                .mips => ._MIPS,
+                .mipsel => ._MIPS_RS3_LE,
+                .powerpc => ._PPC,
+                .r600 => ._NONE,
+                .riscv32 => ._RISCV,
+                .sparc => ._SPARC,
+                .sparcel => ._SPARC,
+                .tce => ._NONE,
+                .tcele => ._NONE,
+                .thumb => ._ARM,
+                .thumbeb => ._ARM,
+                .i386 => ._386,
+                .xcore => ._XCORE,
+                .nvptx => ._NONE,
+                .amdil => ._NONE,
+                .hsail => ._NONE,
+                .spir => ._NONE,
+                .kalimba => ._CSR_KALIMBA,
+                .shave => ._NONE,
+                .lanai => ._LANAI,
+                .wasm32 => ._NONE,
+                .renderscript32 => ._NONE,
+                .aarch64_32 => ._AARCH64,
+                .aarch64 => ._AARCH64,
+                .aarch64_be => ._AARCH64,
+                .mips64 => ._MIPS,
+                .mips64el => ._MIPS_RS3_LE,
+                .powerpc64 => ._PPC64,
+                .powerpc64le => ._PPC64,
+                .riscv64 => ._RISCV,
+                .x86_64 => ._X86_64,
+                .nvptx64 => ._NONE,
+                .le64 => ._NONE,
+                .amdil64 => ._NONE,
+                .hsail64 => ._NONE,
+                .spir64 => ._NONE,
+                .wasm64 => ._NONE,
+                .renderscript64 => ._NONE,
+                .amdgcn => ._NONE,
+                .bpfel => ._BPF,
+                .bpfeb => ._BPF,
+                .sparcv9 => ._SPARCV9,
+                .s390x => ._S390,
+            };
+        }
+
+        pub fn endian(arch: Arch) builtin.Endian {
+            return switch (arch) {
+                .avr,
+                .arm,
+                .aarch64_32,
+                .aarch64,
+                .amdgcn,
+                .amdil,
+                .amdil64,
+                .bpfel,
+                .hexagon,
+                .hsail,
+                .hsail64,
+                .kalimba,
+                .le32,
+                .le64,
+                .mipsel,
+                .mips64el,
+                .msp430,
+                .nvptx,
+                .nvptx64,
+                .sparcel,
+                .tcele,
+                .powerpc64le,
+                .r600,
+                .riscv32,
+                .riscv64,
+                .i386,
+                .x86_64,
+                .wasm32,
+                .wasm64,
+                .xcore,
+                .thumb,
+                .spir,
+                .spir64,
+                .renderscript32,
+                .renderscript64,
+                .shave,
+                => .Little,
+
+                .arc,
+                .armeb,
+                .aarch64_be,
+                .bpfeb,
+                .mips,
+                .mips64,
+                .powerpc,
+                .powerpc64,
+                .thumbeb,
+                .sparc,
+                .sparcv9,
+                .tce,
+                .lanai,
+                .s390x,
+                => .Big,
+            };
+        }
     };
 
     pub const Abi = enum {
@@ -208,14 +321,12 @@ pub const Target = union(enum) {
     pub const stack_align = 16;
 
     pub fn zigTriple(self: Target, allocator: *mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}{}-{}-{}",
+        return std.fmt.allocPrint(allocator, "{}{}-{}-{}", .{
             @tagName(self.getArch()),
             Target.archSubArchName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
     /// Returned slice must be freed by the caller.
@@ -259,23 +370,19 @@ pub const Target = union(enum) {
     }
 
     pub fn zigTripleNoSubArch(self: Target, allocator: *mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}-{}-{}",
+        return std.fmt.allocPrint(allocator, "{}-{}-{}", .{
             @tagName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
     pub fn linuxTriple(self: Target, allocator: *mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}-{}-{}",
+        return std.fmt.allocPrint(allocator, "{}-{}-{}", .{
             @tagName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
     pub fn parse(text: []const u8) !Target {
@@ -319,8 +426,8 @@ pub const Target = union(enum) {
             .mesa3d,
             .contiki,
             .amdpal,
-            .zen,
             .hermit,
+            .other,
             => return .eabi,
             .openbsd,
             .macosx,
@@ -607,10 +714,15 @@ pub const Target = union(enum) {
         }
     }
 
+    pub fn supportsNewStackCall(self: Target) bool {
+        return !self.isWasm();
+    }
+
     pub const Executor = union(enum) {
         native,
         qemu: []const u8,
         wine: []const u8,
+        wasmtime: []const u8,
         unavailable,
     };
 
@@ -645,6 +757,13 @@ pub const Target = union(enum) {
             switch (self.getArchPtrBitWidth()) {
                 32 => return Executor{ .wine = "wine" },
                 64 => return Executor{ .wine = "wine64" },
+                else => return .unavailable,
+            }
+        }
+
+        if (self.getOs() == .wasi) {
+            switch (self.getArchPtrBitWidth()) {
+                32 => return Executor{ .wasmtime = "wasmtime" },
                 else => return .unavailable,
             }
         }

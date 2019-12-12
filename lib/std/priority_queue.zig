@@ -22,7 +22,7 @@ pub fn PriorityQueue(comptime T: type) type {
         /// `fn lessThan(a: T, b: T) bool { return a < b; }`
         pub fn init(allocator: *Allocator, compareFn: fn (a: T, b: T) bool) Self {
             return Self{
-                .items = [_]T{},
+                .items = &[_]T{},
                 .len = 0,
                 .allocator = allocator,
                 .compareFn = compareFn,
@@ -199,19 +199,19 @@ pub fn PriorityQueue(comptime T: type) type {
         }
 
         fn dump(self: *Self) void {
-            warn("{{ ");
-            warn("items: ");
+            warn("{{ ", .{});
+            warn("items: ", .{});
             for (self.items) |e, i| {
                 if (i >= self.len) break;
-                warn("{}, ", e);
+                warn("{}, ", .{e});
             }
-            warn("array: ");
+            warn("array: ", .{});
             for (self.items) |e, i| {
-                warn("{}, ", e);
+                warn("{}, ", .{e});
             }
-            warn("len: {} ", self.len);
-            warn("capacity: {}", self.capacity());
-            warn(" }}\n");
+            warn("len: {} ", .{self.len});
+            warn("capacity: {}", .{self.capacity()});
+            warn(" }}\n", .{});
         }
     };
 }

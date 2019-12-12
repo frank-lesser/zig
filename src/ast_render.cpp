@@ -147,9 +147,9 @@ static const char *token_to_ptr_len_str(Token *tok) {
         case TokenIdStar:
         case TokenIdStarStar:
             return "*";
-        case TokenIdBracketStarBracket:
+        case TokenIdLBracket:
             return "[*]";
-        case TokenIdBracketStarCBracket:
+        case TokenIdSymbol:
             return "[*c]";
         default:
             zig_unreachable();
@@ -268,6 +268,8 @@ static const char *node_type_str(NodeType node_type) {
             return "EnumLiteral";
         case NodeTypeErrorSetField:
             return "ErrorSetField";
+        case NodeTypeVarFieldType:
+            return "VarFieldType";
     }
     zig_unreachable();
 }
@@ -619,9 +621,6 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
             break;
         case NodeTypeStringLiteral:
             {
-                if (node->data.string_literal.c) {
-                    fprintf(ar->f, "c");
-                }
                 Buf tmp_buf = BUF_INIT;
                 string_literal_escape(node->data.string_literal.buf, &tmp_buf);
                 fprintf(ar->f, "\"%s\"", buf_ptr(&tmp_buf));
@@ -703,14 +702,29 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                 switch (node->data.fn_call_expr.modifier) {
                     case CallModifierNone:
                         break;
-                    case CallModifierBuiltin:
-                        fprintf(ar->f, "@");
+                    case CallModifierNoAsync:
+                        fprintf(ar->f, "noasync ");
                         break;
                     case CallModifierAsync:
                         fprintf(ar->f, "async ");
                         break;
-                    case CallModifierNoAsync:
-                        fprintf(ar->f, "noasync ");
+                    case CallModifierNeverTail:
+                        fprintf(ar->f, "notail ");
+                        break;
+                    case CallModifierNeverInline:
+                        fprintf(ar->f, "noinline ");
+                        break;
+                    case CallModifierAlwaysTail:
+                        fprintf(ar->f, "tail ");
+                        break;
+                    case CallModifierAlwaysInline:
+                        fprintf(ar->f, "inline ");
+                        break;
+                    case CallModifierCompileTime:
+                        fprintf(ar->f, "comptime ");
+                        break;
+                    case CallModifierBuiltin:
+                        fprintf(ar->f, "@");
                         break;
                 }
                 AstNode *fn_ref_node = node->data.fn_call_expr.fn_ref_expr;
@@ -885,7 +899,9 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
             {
                 AstNodeAsmExpr *asm_expr = &node->data.asm_expr;
                 const char *volatile_str = (asm_expr->volatile_token != nullptr) ? " volatile" : "";
-                fprintf(ar->f, "asm%s (\"%s\"\n", volatile_str, buf_ptr(&asm_expr->asm_template->data.str_lit.str));
+                fprintf(ar->f, "asm%s (", volatile_str);
+                render_node_ungrouped(ar, asm_expr->asm_template);
+                fprintf(ar->f, ")");
                 print_indent(ar);
                 fprintf(ar->f, ": ");
                 for (size_t i = 0; i < asm_expr->output_list.length; i += 1) {
@@ -1187,6 +1203,10 @@ static void render_node_extra(AstRender *ar, AstNode *node, bool grouped) {
                 fprintf(ar->f, ".%s", buf_ptr(&node->data.enum_literal.identifier->data.str_lit.str));
                 break;
             }
+        case NodeTypeVarFieldType: {
+            fprintf(ar->f, "var");
+            break;
+        }
         case NodeTypeParamDecl:
         case NodeTypeTestDecl:
         case NodeTypeStructField:

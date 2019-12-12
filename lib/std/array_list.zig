@@ -35,10 +35,18 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
         /// Deinitialize with `deinit` or use `toOwnedSlice`.
         pub fn init(allocator: *Allocator) Self {
             return Self{
-                .items = [_]T{},
+                .items = &[_]T{},
                 .len = 0,
                 .allocator = allocator,
             };
+        }
+
+        /// Initialize with capacity to hold at least num elements.
+        /// Deinitialize with `deinit` or use `toOwnedSlice`.
+        pub fn initCapacity(allocator: *Allocator, num: usize) !Self {
+            var self = Self.init(allocator);
+            try self.ensureCapacity(num);
+            return self;
         }
 
         /// Release all allocated memory.
@@ -58,7 +66,7 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
             return self.items[0..self.len];
         }
 
-        /// Safely access index i of the list. 
+        /// Safely access index i of the list.
         pub fn at(self: Self, i: usize) T {
             return self.toSliceConst()[i];
         }
@@ -74,11 +82,6 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
         pub fn set(self: *Self, i: usize, item: T) void {
             assert(i < self.len);
             self.items[i] = item;
-        }
-
-        /// Return length of the list.
-        pub fn count(self: Self) usize {
-            return self.len;
         }
 
         /// Return the maximum number of items the list can hold
@@ -106,7 +109,7 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
             return result;
         }
 
-        /// Insert `item` at index `n`. Moves `list[n .. list.count()]`
+        /// Insert `item` at index `n`. Moves `list[n .. list.len]`
         /// to make room.
         pub fn insert(self: *Self, n: usize, item: T) !void {
             try self.ensureCapacity(self.len + 1);
@@ -117,7 +120,7 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
         }
 
         /// Insert slice `items` at index `n`. Moves
-        /// `list[n .. list.count()]` to make room.
+        /// `list[n .. list.len]` to make room.
         pub fn insertSlice(self: *Self, n: usize, items: SliceConst) !void {
             try self.ensureCapacity(self.len + items.len);
             self.len += items.len;
@@ -214,7 +217,7 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
         }
 
         pub fn addOneAssumeCapacity(self: *Self) *T {
-            assert(self.count() < self.capacity());
+            assert(self.len < self.capacity());
             const result = &self.items[self.len];
             self.len += 1;
             return result;
@@ -232,31 +235,6 @@ pub fn AlignedArrayList(comptime T: type, comptime alignment: ?u29) type {
             if (self.len == 0) return null;
             return self.pop();
         }
-
-        pub const Iterator = struct {
-            list: *const Self,
-            // how many items have we returned
-            count: usize,
-
-            pub fn next(it: *Iterator) ?T {
-                if (it.count >= it.list.len) return null;
-                const val = it.list.at(it.count);
-                it.count += 1;
-                return val;
-            }
-
-            pub fn reset(it: *Iterator) void {
-                it.count = 0;
-            }
-        };
-
-        /// Return an iterator over the list.
-        pub fn iterator(self: *const Self) Iterator {
-            return Iterator{
-                .list = self,
-                .count = 0,
-            };
-        }
     };
 }
 
@@ -267,8 +245,17 @@ test "std.ArrayList.init" {
     var list = ArrayList(i32).init(allocator);
     defer list.deinit();
 
-    testing.expect(list.count() == 0);
+    testing.expect(list.len == 0);
     testing.expect(list.capacity() == 0);
+}
+
+test "std.ArrayList.initCapacity" {
+    var bytes: [1024]u8 = undefined;
+    const allocator = &std.heap.FixedBufferAllocator.init(bytes[0..]).allocator;
+    var list = try ArrayList(i8).initCapacity(allocator, 200);
+    defer list.deinit();
+    testing.expect(list.len == 0);
+    testing.expect(list.capacity() >= 200);
 }
 
 test "std.ArrayList.basic" {
@@ -306,18 +293,14 @@ test "std.ArrayList.basic" {
     testing.expect(list.pop() == 10);
     testing.expect(list.len == 9);
 
-    list.appendSlice([_]i32{
-        1,
-        2,
-        3,
-    }) catch unreachable;
+    list.appendSlice(&[_]i32{ 1, 2, 3 }) catch unreachable;
     testing.expect(list.len == 12);
     testing.expect(list.pop() == 3);
     testing.expect(list.pop() == 2);
     testing.expect(list.pop() == 1);
     testing.expect(list.len == 9);
 
-    list.appendSlice([_]i32{}) catch unreachable;
+    list.appendSlice(&[_]i32{}) catch unreachable;
     testing.expect(list.len == 9);
 
     // can only set on indices < self.len
@@ -413,35 +396,6 @@ test "std.ArrayList.swapRemoveOrError" {
     testing.expectError(error.OutOfBounds, list.swapRemoveOrError(2));
 }
 
-test "std.ArrayList.iterator" {
-    var list = ArrayList(i32).init(debug.global_allocator);
-    defer list.deinit();
-
-    try list.append(1);
-    try list.append(2);
-    try list.append(3);
-
-    var count: i32 = 0;
-    var it = list.iterator();
-    while (it.next()) |next| {
-        testing.expect(next == count + 1);
-        count += 1;
-    }
-
-    testing.expect(count == 3);
-    testing.expect(it.next() == null);
-    it.reset();
-    count = 0;
-    while (it.next()) |next| {
-        testing.expect(next == count + 1);
-        count += 1;
-        if (count == 2) break;
-    }
-
-    it.reset();
-    testing.expect(it.next().? == 1);
-}
-
 test "std.ArrayList.insert" {
     var list = ArrayList(i32).init(debug.global_allocator);
     defer list.deinit();
@@ -464,10 +418,7 @@ test "std.ArrayList.insertSlice" {
     try list.append(2);
     try list.append(3);
     try list.append(4);
-    try list.insertSlice(1, [_]i32{
-        9,
-        8,
-    });
+    try list.insertSlice(1, &[_]i32{ 9, 8 });
     testing.expect(list.items[0] == 1);
     testing.expect(list.items[1] == 9);
     testing.expect(list.items[2] == 8);

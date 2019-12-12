@@ -64,13 +64,15 @@ ZIG_EXTERN_C LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, co
 
 ZIG_EXTERN_C LLVMTypeRef ZigLLVMTokenTypeInContext(LLVMContextRef context_ref);
 
-enum ZigLLVM_FnInline {
-    ZigLLVM_FnInlineAuto,
-    ZigLLVM_FnInlineAlways,
-    ZigLLVM_FnInlineNever,
+enum ZigLLVM_CallAttr {
+    ZigLLVM_CallAttrAuto,
+    ZigLLVM_CallAttrNeverTail,
+    ZigLLVM_CallAttrNeverInline,
+    ZigLLVM_CallAttrAlwaysTail,
+    ZigLLVM_CallAttrAlwaysInline,
 };
 ZIG_EXTERN_C LLVMValueRef ZigLLVMBuildCall(LLVMBuilderRef B, LLVMValueRef Fn, LLVMValueRef *Args,
-        unsigned NumArgs, unsigned CC, enum ZigLLVM_FnInline fn_inline, const char *Name);
+        unsigned NumArgs, unsigned CC, enum ZigLLVM_CallAttr attr, const char *Name);
 
 ZIG_EXTERN_C LLVMValueRef ZigLLVMBuildMemCpy(LLVMBuilderRef B, LLVMValueRef Dst, unsigned DstAlign,
         LLVMValueRef Src, unsigned SrcAlign, LLVMValueRef Size, bool isVolatile);
@@ -465,7 +467,7 @@ ZIG_EXTERN_C bool ZigLLDLink(enum ZigLLVM_ObjectFormatType oformat, const char *
 ZIG_EXTERN_C bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,
         enum ZigLLVM_OSType os_type);
 
-bool ZigLLVMWriteImportLibrary(const char *def_path, const ZigLLVM_ArchType arch,
+bool ZigLLVMWriteImportLibrary(const char *def_path, const enum ZigLLVM_ArchType arch,
                                const char *output_lib_path, const bool kill_at);
 
 ZIG_EXTERN_C void ZigLLVMGetNativeTarget(enum ZigLLVM_ArchType *arch_type, enum ZigLLVM_SubArchType *sub_arch_type,

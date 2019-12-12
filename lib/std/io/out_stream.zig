@@ -35,7 +35,7 @@ pub fn OutStream(comptime WriteError: type) type {
             }
         }
 
-        pub fn print(self: *Self, comptime format: []const u8, args: ...) Error!void {
+        pub fn print(self: *Self, comptime format: []const u8, args: var) Error!void {
             return std.fmt.format(self, Error, self.writeFn, format, args);
         }
 
@@ -56,32 +56,32 @@ pub fn OutStream(comptime WriteError: type) type {
         pub fn writeIntNative(self: *Self, comptime T: type, value: T) Error!void {
             var bytes: [(T.bit_count + 7) / 8]u8 = undefined;
             mem.writeIntNative(T, &bytes, value);
-            return self.writeFn(self, bytes);
+            return self.writeFn(self, &bytes);
         }
 
         /// Write a foreign-endian integer.
         pub fn writeIntForeign(self: *Self, comptime T: type, value: T) Error!void {
             var bytes: [(T.bit_count + 7) / 8]u8 = undefined;
             mem.writeIntForeign(T, &bytes, value);
-            return self.writeFn(self, bytes);
+            return self.writeFn(self, &bytes);
         }
 
         pub fn writeIntLittle(self: *Self, comptime T: type, value: T) Error!void {
             var bytes: [(T.bit_count + 7) / 8]u8 = undefined;
             mem.writeIntLittle(T, &bytes, value);
-            return self.writeFn(self, bytes);
+            return self.writeFn(self, &bytes);
         }
 
         pub fn writeIntBig(self: *Self, comptime T: type, value: T) Error!void {
             var bytes: [(T.bit_count + 7) / 8]u8 = undefined;
             mem.writeIntBig(T, &bytes, value);
-            return self.writeFn(self, bytes);
+            return self.writeFn(self, &bytes);
         }
 
         pub fn writeInt(self: *Self, comptime T: type, value: T, endian: builtin.Endian) Error!void {
             var bytes: [(T.bit_count + 7) / 8]u8 = undefined;
             mem.writeInt(T, &bytes, value, endian);
-            return self.writeFn(self, bytes);
+            return self.writeFn(self, &bytes);
         }
     };
 }

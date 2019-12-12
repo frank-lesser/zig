@@ -1,3 +1,82 @@
+// TODO: Remove condition after deprecating 'typeOf'. See https://github.com/ziglang/zig/issues/1348
+test "zig fmt: change @typeOf to @TypeOf" {
+    try testTransform(
+        \\const a = @typeOf(@as(usize, 10));
+        \\
+    ,
+        \\const a = @TypeOf(@as(usize, 10));
+        \\
+    );
+}
+
+test "zig fmt: comptime struct field" {
+    try testCanonical(
+        \\const Foo = struct {
+        \\    a: i32,
+        \\    comptime b: i32 = 1234,
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: c pointer type" {
+    try testCanonical(
+        \\pub extern fn repro() [*c]const u8;
+        \\
+    );
+}
+
+test "zig fmt: asm expression with comptime content" {
+    try testCanonical(
+        \\comptime {
+        \\    asm ("foo" ++ "bar");
+        \\}
+        \\pub fn main() void {
+        \\    asm volatile ("foo" ++ "bar");
+        \\    asm volatile ("foo" ++ "bar"
+        \\        : [_] "" (x)
+        \\    );
+        \\    asm volatile ("foo" ++ "bar"
+        \\        : [_] "" (x)
+        \\        : [_] "" (y)
+        \\    );
+        \\    asm volatile ("foo" ++ "bar"
+        \\        : [_] "" (x)
+        \\        : [_] "" (y)
+        \\        : "h", "e", "l", "l", "o"
+        \\    );
+        \\}
+        \\
+    );
+}
+
+test "zig fmt: var struct field" {
+    try testCanonical(
+        \\pub const Pointer = struct {
+        \\    sentinel: var,
+        \\};
+        \\
+    );
+}
+
+test "zig fmt: sentinel-terminated array type" {
+    try testCanonical(
+        \\pub fn cStrToPrefixedFileW(s: [*:0]const u8) ![PATH_MAX_WIDE:0]u16 {
+        \\    return sliceToPrefixedFileW(mem.toSliceConst(u8, s));
+        \\}
+        \\
+    );
+}
+
+test "zig fmt: sentinel-terminated slice type" {
+    try testCanonical(
+        \\pub fn toSlice(self: Buffer) [:0]u8 {
+        \\    return self.list.toSlice()[0..self.len()];
+        \\}
+        \\
+    );
+}
+
 test "zig fmt: anon literal in array" {
     try testCanonical(
         \\var arr: [2]Foo = .{
@@ -574,15 +653,6 @@ test "zig fmt: fn decl with trailing comma" {
     );
 }
 
-test "zig fmt: var_args with trailing comma" {
-    try testCanonical(
-        \\pub fn add(
-        \\    a: ...,
-        \\) void {}
-        \\
-    );
-}
-
 test "zig fmt: enum decl with no trailing comma" {
     try testTransform(
         \\const StrLitKind = enum {Normal, C};
@@ -1001,7 +1071,7 @@ test "zig fmt: line comment after doc comment" {
 test "zig fmt: float literal with exponent" {
     try testCanonical(
         \\test "bit field alignment" {
-        \\    assert(@typeOf(&blah.b) == *align(1:3:6) const u3);
+        \\    assert(@TypeOf(&blah.b) == *align(1:3:6) const u3);
         \\}
         \\
     );
@@ -1552,6 +1622,7 @@ test "zig fmt: pointer attributes" {
         \\extern fn f2(s: **align(1) *const *volatile u8) c_int;
         \\extern fn f3(s: *align(1) const *align(1) volatile *const volatile u8) c_int;
         \\extern fn f4(s: *align(1) const volatile u8) c_int;
+        \\extern fn f5(s: [*:0]align(1) const volatile u8) c_int;
         \\
     );
 }
@@ -1562,6 +1633,7 @@ test "zig fmt: slice attributes" {
         \\extern fn f2(s: **align(1) *const *volatile u8) c_int;
         \\extern fn f3(s: *align(1) const *align(1) volatile *const volatile u8) c_int;
         \\extern fn f4(s: *align(1) const volatile u8) c_int;
+        \\extern fn f5(s: [*:0]align(1) const volatile u8) c_int;
         \\
     );
 }
@@ -1680,13 +1752,6 @@ test "zig fmt: call expression" {
     );
 }
 
-test "zig fmt: var args" {
-    try testCanonical(
-        \\fn print(args: ...) void {}
-        \\
-    );
-}
-
 test "zig fmt: var type" {
     try testCanonical(
         \\fn print(args: var) var {}
@@ -1723,11 +1788,6 @@ test "zig fmt: multiline string" {
         \\        \\two)
         \\        \\three
         \\    ;
-        \\    const s2 =
-        \\        c\\one
-        \\        c\\two)
-        \\        c\\three
-        \\    ;
         \\    const s3 = // hi
         \\        \\one
         \\        \\two)
@@ -1744,7 +1804,6 @@ test "zig fmt: values" {
         \\    1;
         \\    1.0;
         \\    "string";
-        \\    c"cstring";
         \\    'c';
         \\    true;
         \\    false;
@@ -1889,6 +1948,7 @@ test "zig fmt: arrays" {
         \\        2,
         \\    };
         \\    const a: [0]u8 = []u8{};
+        \\    const x: [4:0]u8 = undefined;
         \\}
         \\
     );
@@ -2544,7 +2604,7 @@ test "zig fmt: comments at several places in struct init" {
     try testTransform(
         \\var bar = Bar{
         \\    .x = 10, // test
-        \\    .y = "test" 
+        \\    .y = "test"
         \\    // test
         \\};
         \\
@@ -2640,9 +2700,9 @@ fn testParse(source: []const u8, allocator: *mem.Allocator, anything_changed: *b
     while (error_it.next()) |parse_error| {
         const token = tree.tokens.at(parse_error.loc());
         const loc = tree.tokenLocation(0, parse_error.loc());
-        try stderr.print("(memory buffer):{}:{}: error: ", loc.line + 1, loc.column + 1);
+        try stderr.print("(memory buffer):{}:{}: error: ", .{ loc.line + 1, loc.column + 1 });
         try tree.renderError(parse_error, stderr);
-        try stderr.print("\n{}\n", source[loc.line_start..loc.line_end]);
+        try stderr.print("\n{}\n", .{source[loc.line_start..loc.line_end]});
         {
             var i: usize = 0;
             while (i < loc.column) : (i += 1) {
@@ -2678,16 +2738,16 @@ fn testTransform(source: []const u8, expected_source: []const u8) !void {
         var anything_changed: bool = undefined;
         const result_source = try testParse(source, &failing_allocator.allocator, &anything_changed);
         if (!mem.eql(u8, result_source, expected_source)) {
-            warn("\n====== expected this output: =========\n");
-            warn("{}", expected_source);
-            warn("\n======== instead found this: =========\n");
-            warn("{}", result_source);
-            warn("\n======================================\n");
+            warn("\n====== expected this output: =========\n", .{});
+            warn("{}", .{expected_source});
+            warn("\n======== instead found this: =========\n", .{});
+            warn("{}", .{result_source});
+            warn("\n======================================\n", .{});
             return error.TestFailed;
         }
         const changes_expected = source.ptr != expected_source.ptr;
         if (anything_changed != changes_expected) {
-            warn("std.zig.render returned {} instead of {}\n", anything_changed, changes_expected);
+            warn("std.zig.render returned {} instead of {}\n", .{ anything_changed, changes_expected });
             return error.TestFailed;
         }
         std.testing.expect(anything_changed == changes_expected);
@@ -2707,12 +2767,14 @@ fn testTransform(source: []const u8, expected_source: []const u8) !void {
                 if (failing_allocator.allocated_bytes != failing_allocator.freed_bytes) {
                     warn(
                         "\nfail_index: {}/{}\nallocated bytes: {}\nfreed bytes: {}\nallocations: {}\ndeallocations: {}\n",
-                        fail_index,
-                        needed_alloc_count,
-                        failing_allocator.allocated_bytes,
-                        failing_allocator.freed_bytes,
-                        failing_allocator.allocations,
-                        failing_allocator.deallocations,
+                        .{
+                            fail_index,
+                            needed_alloc_count,
+                            failing_allocator.allocated_bytes,
+                            failing_allocator.freed_bytes,
+                            failing_allocator.allocations,
+                            failing_allocator.deallocations,
+                        },
                     );
                     return error.MemoryLeakDetected;
                 }

@@ -271,38 +271,30 @@ pub const Address = extern union {
         options: std.fmt.FormatOptions,
         context: var,
         comptime Errors: type,
-        output: fn (@typeOf(context), []const u8) Errors!void,
+        output: fn (@TypeOf(context), []const u8) Errors!void,
     ) !void {
         switch (self.any.family) {
             os.AF_INET => {
                 const port = mem.bigToNative(u16, self.in.port);
                 const bytes = @ptrCast(*const [4]u8, &self.in.addr);
-                try std.fmt.format(
-                    context,
-                    Errors,
-                    output,
-                    "{}.{}.{}.{}:{}",
+                try std.fmt.format(context, Errors, output, "{}.{}.{}.{}:{}", .{
                     bytes[0],
                     bytes[1],
                     bytes[2],
                     bytes[3],
                     port,
-                );
+                });
             },
             os.AF_INET6 => {
                 const port = mem.bigToNative(u16, self.in6.port);
-                if (mem.eql(u8, self.in6.addr[0..12], [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
-                    try std.fmt.format(
-                        context,
-                        Errors,
-                        output,
-                        "[::ffff:{}.{}.{}.{}]:{}",
+                if (mem.eql(u8, self.in6.addr[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
+                    try std.fmt.format(context, Errors, output, "[::ffff:{}.{}.{}.{}]:{}", .{
                         self.in6.addr[12],
                         self.in6.addr[13],
                         self.in6.addr[14],
                         self.in6.addr[15],
                         port,
-                    );
+                    });
                     return;
                 }
                 const big_endian_parts = @ptrCast(*align(1) const [8]u16, &self.in6.addr);
@@ -327,19 +319,19 @@ pub const Address = extern union {
                         }
                         continue;
                     }
-                    try std.fmt.format(context, Errors, output, "{x}", native_endian_parts[i]);
+                    try std.fmt.format(context, Errors, output, "{x}", .{native_endian_parts[i]});
                     if (i != native_endian_parts.len - 1) {
                         try output(context, ":");
                     }
                 }
-                try std.fmt.format(context, Errors, output, "]:{}", port);
+                try std.fmt.format(context, Errors, output, "]:{}", .{port});
             },
             os.AF_UNIX => {
                 if (!has_unix_sockets) {
                     unreachable;
                 }
 
-                try std.fmt.format(context, Errors, output, "{}", self.un.path);
+                try std.fmt.format(context, Errors, output, "{}", .{&self.un.path});
             },
             else => unreachable,
         }
@@ -360,7 +352,7 @@ pub const Address = extern union {
                     unreachable;
                 }
 
-                const path_len = std.mem.len(u8, &self.un.path);
+                const path_len = std.mem.len(u8, @ptrCast([*:0]const u8, &self.un.path));
                 return @intCast(os.socklen_t, @sizeOf(os.sockaddr_un) - self.un.path.len + path_len);
             },
             else => unreachable,
@@ -445,7 +437,7 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
         const name_c = try std.cstr.addNullByte(allocator, name);
         defer allocator.free(name_c);
 
-        const port_c = try std.fmt.allocPrint(allocator, "{}\x00", port);
+        const port_c = try std.fmt.allocPrint(allocator, "{}\x00", .{port});
         defer allocator.free(port_c);
 
         const hints = os.addrinfo{
@@ -666,35 +658,35 @@ const Policy = struct {
 
 const defined_policies = [_]Policy{
     Policy{
-        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01",
+        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01".*,
         .len = 15,
         .mask = 0xff,
         .prec = 50,
         .label = 0,
     },
     Policy{
-        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x00\x00\x00\x00",
+        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x00\x00\x00\x00".*,
         .len = 11,
         .mask = 0xff,
         .prec = 35,
         .label = 4,
     },
     Policy{
-        .addr = "\x20\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        .addr = "\x20\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".*,
         .len = 1,
         .mask = 0xff,
         .prec = 30,
         .label = 2,
     },
     Policy{
-        .addr = "\x20\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        .addr = "\x20\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".*,
         .len = 3,
         .mask = 0xff,
         .prec = 5,
         .label = 5,
     },
     Policy{
-        .addr = "\xfc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        .addr = "\xfc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".*,
         .len = 0,
         .mask = 0xfe,
         .prec = 3,
@@ -708,7 +700,7 @@ const defined_policies = [_]Policy{
     // { "\x3f\xfe", 1, 0xff, 1, 12 },
     // Last rule must match all addresses to stop loop.
     Policy{
-        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        .addr = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".*,
         .len = 0,
         .mask = 0,
         .prec = 40,
@@ -812,7 +804,7 @@ fn linuxLookupNameFromHosts(
     family: os.sa_family_t,
     port: u16,
 ) !void {
-    const file = fs.File.openReadC(c"/etc/hosts") catch |err| switch (err) {
+    const file = fs.openFileAbsoluteC("/etc/hosts", .{}) catch |err| switch (err) {
         error.FileNotFound,
         error.NotDir,
         error.AccessDenied,
@@ -894,7 +886,7 @@ fn linuxLookupNameFromDnsSearch(
     }
 
     const search = if (rc.search.isNull() or dots >= rc.ndots or mem.endsWith(u8, name, "."))
-        [_]u8{}
+        &[_]u8{}
     else
         rc.search.toSliceConst();
 
@@ -959,7 +951,7 @@ fn linuxLookupNameFromDns(
 
     for (afrrs) |afrr| {
         if (family != afrr.af) {
-            const len = os.res_mkquery(0, name, 1, afrr.rr, [_]u8{}, null, &qbuf[nq]);
+            const len = os.res_mkquery(0, name, 1, afrr.rr, &[_]u8{}, null, &qbuf[nq]);
             qp[nq] = qbuf[nq][0..len];
             nq += 1;
         }
@@ -1006,7 +998,7 @@ fn getResolvConf(allocator: *mem.Allocator, rc: *ResolvConf) !void {
     };
     errdefer rc.deinit();
 
-    const file = fs.File.openReadC(c"/etc/resolv.conf") catch |err| switch (err) {
+    const file = fs.openFileAbsoluteC("/etc/resolv.conf", .{}) catch |err| switch (err) {
         error.FileNotFound,
         error.NotDir,
         error.AccessDenied,
@@ -1271,7 +1263,7 @@ fn dnsParseCallback(ctx: dpc_ctx, rr: u8, data: []const u8, packet: []const u8) 
             var tmp: [256]u8 = undefined;
             // Returns len of compressed name. strlen to get canon name.
             _ = try os.dn_expand(packet, data, &tmp);
-            const canon_name = mem.toSliceConst(u8, &tmp);
+            const canon_name = mem.toSliceConst(u8, @ptrCast([*:0]const u8, &tmp));
             if (isValidHostName(canon_name)) {
                 try ctx.canon.replaceContents(canon_name);
             }
@@ -1362,7 +1354,7 @@ pub const StreamServer = struct {
 
     pub const Connection = struct {
         file: fs.File,
-        address: Address
+        address: Address,
     };
 
     /// If this function succeeds, the returned `Connection` is a caller-managed resource.

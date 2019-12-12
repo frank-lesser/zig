@@ -4,6 +4,7 @@ const linux = std.os.linux;
 const mem = std.mem;
 const elf = std.elf;
 const expect = std.testing.expect;
+const fs = std.fs;
 
 test "getpid" {
     expect(linux.getpid() != 0);
@@ -45,18 +46,16 @@ test "timer" {
     err = linux.epoll_wait(@intCast(i32, epoll_fd), @ptrCast([*]linux.epoll_event, &events), 8, -1);
 }
 
-const File = std.fs.File;
-
 test "statx" {
     const tmp_file_name = "just_a_temporary_file.txt";
-    var file = try File.openWrite(tmp_file_name);
+    var file = try fs.cwd().createFile(tmp_file_name, .{});
     defer {
         file.close();
-        std.fs.deleteFile(tmp_file_name) catch {};
+        fs.cwd().deleteFile(tmp_file_name) catch {};
     }
 
     var statx_buf: linux.Statx = undefined;
-    switch (linux.getErrno(linux.statx(file.handle, c"", linux.AT_EMPTY_PATH, linux.STATX_BASIC_STATS, &statx_buf))) {
+    switch (linux.getErrno(linux.statx(file.handle, "", linux.AT_EMPTY_PATH, linux.STATX_BASIC_STATS, &statx_buf))) {
         0 => {},
         // The statx syscall was only introduced in linux 4.11
         linux.ENOSYS => return error.SkipZigTest,
@@ -64,7 +63,7 @@ test "statx" {
     }
 
     var stat_buf: linux.Stat = undefined;
-    switch (linux.getErrno(linux.fstatat(file.handle, c"", &stat_buf, linux.AT_EMPTY_PATH))) {
+    switch (linux.getErrno(linux.fstatat(file.handle, "", &stat_buf, linux.AT_EMPTY_PATH))) {
         0 => {},
         else => unreachable,
     }
