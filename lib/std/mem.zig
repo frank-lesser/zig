@@ -231,17 +231,12 @@ pub const Allocator = struct {
     pub fn free(self: *Allocator, memory: var) void {
         const Slice = @typeInfo(@TypeOf(memory)).Pointer;
         const bytes = @sliceToBytes(memory);
-        if (bytes.len == 0) return;
+        const bytes_len = bytes.len + @boolToInt(Slice.sentinel != null);
+        if (bytes_len == 0) return;
         const non_const_ptr = @intToPtr([*]u8, @ptrToInt(bytes.ptr));
-        const shrink_result = self.shrinkFn(self, non_const_ptr[0..bytes.len], Slice.alignment, 0, 1);
+        const shrink_result = self.shrinkFn(self, non_const_ptr[0..bytes_len], Slice.alignment, 0, 1);
         assert(shrink_result.len == 0);
     }
-};
-
-pub const Compare = enum {
-    LessThan,
-    Equal,
-    GreaterThan,
 };
 
 /// Copy all of source into dest at position 0.
@@ -296,46 +291,30 @@ test "mem.secureZero" {
     testing.expectEqualSlices(u8, a[0..], b[0..]);
 }
 
-pub fn compare(comptime T: type, lhs: []const T, rhs: []const T) Compare {
+pub fn order(comptime T: type, lhs: []const T, rhs: []const T) math.Order {
     const n = math.min(lhs.len, rhs.len);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        if (lhs[i] == rhs[i]) {
-            continue;
-        } else if (lhs[i] < rhs[i]) {
-            return Compare.LessThan;
-        } else if (lhs[i] > rhs[i]) {
-            return Compare.GreaterThan;
-        } else {
-            unreachable;
+        switch (math.order(lhs[i], rhs[i])) {
+            .eq => continue,
+            .lt => return .lt,
+            .gt => return .gt,
         }
     }
-
-    if (lhs.len == rhs.len) {
-        return Compare.Equal;
-    } else if (lhs.len < rhs.len) {
-        return Compare.LessThan;
-    } else if (lhs.len > rhs.len) {
-        return Compare.GreaterThan;
-    }
-    unreachable;
+    return math.order(lhs.len, rhs.len);
 }
 
-test "mem.compare" {
-    testing.expect(compare(u8, "abcd", "bee") == Compare.LessThan);
-    testing.expect(compare(u8, "abc", "abc") == Compare.Equal);
-    testing.expect(compare(u8, "abc", "abc0") == Compare.LessThan);
-    testing.expect(compare(u8, "", "") == Compare.Equal);
-    testing.expect(compare(u8, "", "a") == Compare.LessThan);
+test "order" {
+    testing.expect(order(u8, "abcd", "bee") == .lt);
+    testing.expect(order(u8, "abc", "abc") == .eq);
+    testing.expect(order(u8, "abc", "abc0") == .lt);
+    testing.expect(order(u8, "", "") == .eq);
+    testing.expect(order(u8, "", "a") == .lt);
 }
 
 /// Returns true if lhs < rhs, false otherwise
 pub fn lessThan(comptime T: type, lhs: []const T, rhs: []const T) bool {
-    var result = compare(T, lhs, rhs);
-    if (result == Compare.LessThan) {
-        return true;
-    } else
-        return false;
+    return order(T, lhs, rhs) == .lt;
 }
 
 test "mem.lessThan" {
@@ -363,11 +342,11 @@ pub fn len(comptime T: type, ptr: [*:0]const T) usize {
 }
 
 pub fn toSliceConst(comptime T: type, ptr: [*:0]const T) [:0]const T {
-    return ptr[0..len(T, ptr)];
+    return ptr[0..len(T, ptr) :0];
 }
 
 pub fn toSlice(comptime T: type, ptr: [*:0]T) [:0]T {
-    return ptr[0..len(T, ptr)];
+    return ptr[0..len(T, ptr) :0];
 }
 
 /// Returns true if all elements in a slice are equal to the scalar value provided

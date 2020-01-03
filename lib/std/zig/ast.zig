@@ -13,6 +13,7 @@ pub const Tree = struct {
     root_node: *Node.Root,
     arena_allocator: std.heap.ArenaAllocator,
     errors: ErrorList,
+    generated: bool = false,
 
     pub const TokenList = SegmentedList(Token, 64);
     pub const ErrorList = SegmentedList(Error, 0);
@@ -58,6 +59,8 @@ pub const Tree = struct {
             .line_start = start_index,
             .line_end = self.source.len,
         };
+        if (self.generated)
+            return loc;
         const token_start = token.start;
         for (self.source[start_index..]) |c, i| {
             if (i + start_index == token_start) {
@@ -581,7 +584,7 @@ pub const Node = struct {
     }
 
     pub const Root = struct {
-        base: Node,
+        base: Node = Node{ .id = .Root },
         decls: DeclList,
         eof_token: TokenIndex,
 
@@ -604,7 +607,7 @@ pub const Node = struct {
     };
 
     pub const VarDecl = struct {
-        base: Node,
+        base: Node = Node{ .id = .VarDecl },
         doc_comments: ?*DocComment,
         visib_token: ?TokenIndex,
         thread_local_token: ?TokenIndex,
@@ -661,7 +664,7 @@ pub const Node = struct {
     };
 
     pub const Use = struct {
-        base: Node,
+        base: Node = Node{ .id = .Use },
         doc_comments: ?*DocComment,
         visib_token: ?TokenIndex,
         use_token: TokenIndex,
@@ -688,7 +691,7 @@ pub const Node = struct {
     };
 
     pub const ErrorSetDecl = struct {
-        base: Node,
+        base: Node = Node{ .id = .ErrorSetDecl },
         error_token: TokenIndex,
         decls: DeclList,
         rbrace_token: TokenIndex,
@@ -714,7 +717,7 @@ pub const Node = struct {
     };
 
     pub const ContainerDecl = struct {
-        base: Node,
+        base: Node = Node{ .id = .ContainerDecl },
         layout_token: ?TokenIndex,
         kind_token: TokenIndex,
         init_arg_expr: InitArg,
@@ -801,7 +804,7 @@ pub const Node = struct {
     };
 
     pub const ErrorTag = struct {
-        base: Node,
+        base: Node = Node{ .id = .ErrorTag },
         doc_comments: ?*DocComment,
         name_token: TokenIndex,
 
@@ -826,7 +829,7 @@ pub const Node = struct {
     };
 
     pub const Identifier = struct {
-        base: Node,
+        base: Node = Node{ .id = .Identifier },
         token: TokenIndex,
 
         pub fn iterate(self: *Identifier, index: usize) ?*Node {
@@ -843,7 +846,7 @@ pub const Node = struct {
     };
 
     pub const FnProto = struct {
-        base: Node,
+        base: Node = Node{ .id = .FnProto },
         doc_comments: ?*DocComment,
         visib_token: ?TokenIndex,
         fn_token: TokenIndex,
@@ -925,7 +928,7 @@ pub const Node = struct {
     };
 
     pub const AnyFrameType = struct {
-        base: Node,
+        base: Node = Node{ .id = .AnyFrameType },
         anyframe_token: TokenIndex,
         result: ?Result,
 
@@ -956,7 +959,7 @@ pub const Node = struct {
     };
 
     pub const ParamDecl = struct {
-        base: Node,
+        base: Node = Node{ .id = .ParamDecl },
         doc_comments: ?*DocComment,
         comptime_token: ?TokenIndex,
         noalias_token: ?TokenIndex,
@@ -989,7 +992,7 @@ pub const Node = struct {
     };
 
     pub const Block = struct {
-        base: Node,
+        base: Node = Node{ .id = .Block },
         label: ?TokenIndex,
         lbrace: TokenIndex,
         statements: StatementList,
@@ -1020,7 +1023,7 @@ pub const Node = struct {
     };
 
     pub const Defer = struct {
-        base: Node,
+        base: Node = Node{ .id = .Defer },
         defer_token: TokenIndex,
         expr: *Node,
 
@@ -1043,7 +1046,7 @@ pub const Node = struct {
     };
 
     pub const Comptime = struct {
-        base: Node,
+        base: Node = Node{ .id = .Comptime },
         doc_comments: ?*DocComment,
         comptime_token: TokenIndex,
         expr: *Node,
@@ -1067,7 +1070,7 @@ pub const Node = struct {
     };
 
     pub const Payload = struct {
-        base: Node,
+        base: Node = Node{ .id = .Payload },
         lpipe: TokenIndex,
         error_symbol: *Node,
         rpipe: TokenIndex,
@@ -1091,7 +1094,7 @@ pub const Node = struct {
     };
 
     pub const PointerPayload = struct {
-        base: Node,
+        base: Node = Node{ .id = .PointerPayload },
         lpipe: TokenIndex,
         ptr_token: ?TokenIndex,
         value_symbol: *Node,
@@ -1116,7 +1119,7 @@ pub const Node = struct {
     };
 
     pub const PointerIndexPayload = struct {
-        base: Node,
+        base: Node = Node{ .id = .PointerIndexPayload },
         lpipe: TokenIndex,
         ptr_token: ?TokenIndex,
         value_symbol: *Node,
@@ -1147,7 +1150,7 @@ pub const Node = struct {
     };
 
     pub const Else = struct {
-        base: Node,
+        base: Node = Node{ .id = .Else },
         else_token: TokenIndex,
         payload: ?*Node,
         body: *Node,
@@ -1176,7 +1179,7 @@ pub const Node = struct {
     };
 
     pub const Switch = struct {
-        base: Node,
+        base: Node = Node{ .id = .Switch },
         switch_token: TokenIndex,
         expr: *Node,
 
@@ -1208,7 +1211,7 @@ pub const Node = struct {
     };
 
     pub const SwitchCase = struct {
-        base: Node,
+        base: Node = Node{ .id = .SwitchCase },
         items: ItemList,
         arrow_token: TokenIndex,
         payload: ?*Node,
@@ -1243,7 +1246,7 @@ pub const Node = struct {
     };
 
     pub const SwitchElse = struct {
-        base: Node,
+        base: Node = Node{ .id = .SwitchElse },
         token: TokenIndex,
 
         pub fn iterate(self: *SwitchElse, index: usize) ?*Node {
@@ -1260,7 +1263,7 @@ pub const Node = struct {
     };
 
     pub const While = struct {
-        base: Node,
+        base: Node = Node{ .id = .While },
         label: ?TokenIndex,
         inline_token: ?TokenIndex,
         while_token: TokenIndex,
@@ -1319,7 +1322,7 @@ pub const Node = struct {
     };
 
     pub const For = struct {
-        base: Node,
+        base: Node = Node{ .id = .For },
         label: ?TokenIndex,
         inline_token: ?TokenIndex,
         for_token: TokenIndex,
@@ -1370,7 +1373,7 @@ pub const Node = struct {
     };
 
     pub const If = struct {
-        base: Node,
+        base: Node = Node{ .id = .If },
         if_token: TokenIndex,
         condition: *Node,
         payload: ?*Node,
@@ -1413,7 +1416,7 @@ pub const Node = struct {
     };
 
     pub const InfixOp = struct {
-        base: Node,
+        base: Node = Node{ .id = .InfixOp },
         op_token: TokenIndex,
         lhs: *Node,
         op: Op,
@@ -1431,13 +1434,13 @@ pub const Node = struct {
             AssignBitShiftRight,
             AssignBitXor,
             AssignDiv,
-            AssignMinus,
-            AssignMinusWrap,
+            AssignSub,
+            AssignSubWrap,
             AssignMod,
-            AssignPlus,
-            AssignPlusWrap,
-            AssignTimes,
-            AssignTimesWarp,
+            AssignAdd,
+            AssignAddWrap,
+            AssignMul,
+            AssignMulWrap,
             BangEqual,
             BitAnd,
             BitOr,
@@ -1456,8 +1459,8 @@ pub const Node = struct {
             LessThan,
             MergeErrorSets,
             Mod,
-            Mult,
-            MultWrap,
+            Mul,
+            MulWrap,
             Period,
             Range,
             Sub,
@@ -1490,13 +1493,13 @@ pub const Node = struct {
                 Op.AssignBitShiftRight,
                 Op.AssignBitXor,
                 Op.AssignDiv,
-                Op.AssignMinus,
-                Op.AssignMinusWrap,
+                Op.AssignSub,
+                Op.AssignSubWrap,
                 Op.AssignMod,
-                Op.AssignPlus,
-                Op.AssignPlusWrap,
-                Op.AssignTimes,
-                Op.AssignTimesWarp,
+                Op.AssignAdd,
+                Op.AssignAddWrap,
+                Op.AssignMul,
+                Op.AssignMulWrap,
                 Op.BangEqual,
                 Op.BitAnd,
                 Op.BitOr,
@@ -1514,8 +1517,8 @@ pub const Node = struct {
                 Op.LessThan,
                 Op.MergeErrorSets,
                 Op.Mod,
-                Op.Mult,
-                Op.MultWrap,
+                Op.Mul,
+                Op.MulWrap,
                 Op.Period,
                 Op.Range,
                 Op.Sub,
@@ -1646,7 +1649,7 @@ pub const Node = struct {
     };
 
     pub const FieldInitializer = struct {
-        base: Node,
+        base: Node = Node{ .id = .FieldInitializer },
         period_token: TokenIndex,
         name_token: TokenIndex,
         expr: *Node,
@@ -1670,7 +1673,7 @@ pub const Node = struct {
     };
 
     pub const SuffixOp = struct {
-        base: Node,
+        base: Node = Node{ .id = .SuffixOp },
         lhs: Lhs,
         op: Op,
         rtoken: TokenIndex,
@@ -1701,6 +1704,7 @@ pub const Node = struct {
             pub const Slice = struct {
                 start: *Node,
                 end: ?*Node,
+                sentinel: ?*Node,
             };
         };
 
@@ -1730,6 +1734,10 @@ pub const Node = struct {
 
                     if (range.end) |end| {
                         if (i < 1) return end;
+                        i -= 1;
+                    }
+                    if (range.sentinel) |sentinel| {
+                        if (i < 1) return sentinel;
                         i -= 1;
                     }
                 },
@@ -1766,7 +1774,7 @@ pub const Node = struct {
     };
 
     pub const GroupedExpression = struct {
-        base: Node,
+        base: Node = Node{ .id = .GroupedExpression },
         lparen: TokenIndex,
         expr: *Node,
         rparen: TokenIndex,
@@ -1790,7 +1798,7 @@ pub const Node = struct {
     };
 
     pub const ControlFlowExpression = struct {
-        base: Node,
+        base: Node = Node{ .id = .ControlFlowExpression },
         ltoken: TokenIndex,
         kind: Kind,
         rhs: ?*Node,
@@ -1856,7 +1864,7 @@ pub const Node = struct {
     };
 
     pub const Suspend = struct {
-        base: Node,
+        base: Node = Node{ .id = .Suspend },
         suspend_token: TokenIndex,
         body: ?*Node,
 
@@ -1885,7 +1893,7 @@ pub const Node = struct {
     };
 
     pub const IntegerLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .IntegerLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *IntegerLiteral, index: usize) ?*Node {
@@ -1902,7 +1910,7 @@ pub const Node = struct {
     };
 
     pub const EnumLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .EnumLiteral },
         dot: TokenIndex,
         name: TokenIndex,
 
@@ -1920,7 +1928,7 @@ pub const Node = struct {
     };
 
     pub const FloatLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .FloatLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *FloatLiteral, index: usize) ?*Node {
@@ -1937,7 +1945,7 @@ pub const Node = struct {
     };
 
     pub const BuiltinCall = struct {
-        base: Node,
+        base: Node = Node{ .id = .BuiltinCall },
         builtin_token: TokenIndex,
         params: ParamList,
         rparen_token: TokenIndex,
@@ -1963,7 +1971,7 @@ pub const Node = struct {
     };
 
     pub const StringLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .StringLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *StringLiteral, index: usize) ?*Node {
@@ -1980,7 +1988,7 @@ pub const Node = struct {
     };
 
     pub const MultilineStringLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .MultilineStringLiteral },
         lines: LineList,
 
         pub const LineList = SegmentedList(TokenIndex, 4);
@@ -1999,7 +2007,7 @@ pub const Node = struct {
     };
 
     pub const CharLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .CharLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *CharLiteral, index: usize) ?*Node {
@@ -2016,7 +2024,7 @@ pub const Node = struct {
     };
 
     pub const BoolLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .BoolLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *BoolLiteral, index: usize) ?*Node {
@@ -2033,7 +2041,7 @@ pub const Node = struct {
     };
 
     pub const NullLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .NullLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *NullLiteral, index: usize) ?*Node {
@@ -2050,7 +2058,7 @@ pub const Node = struct {
     };
 
     pub const UndefinedLiteral = struct {
-        base: Node,
+        base: Node = Node{ .id = .UndefinedLiteral },
         token: TokenIndex,
 
         pub fn iterate(self: *UndefinedLiteral, index: usize) ?*Node {
@@ -2067,7 +2075,7 @@ pub const Node = struct {
     };
 
     pub const AsmOutput = struct {
-        base: Node,
+        base: Node = Node{ .id = .AsmOutput },
         lbracket: TokenIndex,
         symbolic_name: *Node,
         constraint: *Node,
@@ -2112,7 +2120,7 @@ pub const Node = struct {
     };
 
     pub const AsmInput = struct {
-        base: Node,
+        base: Node = Node{ .id = .AsmInput },
         lbracket: TokenIndex,
         symbolic_name: *Node,
         constraint: *Node,
@@ -2144,7 +2152,7 @@ pub const Node = struct {
     };
 
     pub const Asm = struct {
-        base: Node,
+        base: Node = Node{ .id = .Asm },
         asm_token: TokenIndex,
         volatile_token: ?TokenIndex,
         template: *Node,
@@ -2179,7 +2187,7 @@ pub const Node = struct {
     };
 
     pub const Unreachable = struct {
-        base: Node,
+        base: Node = Node{ .id = .Unreachable },
         token: TokenIndex,
 
         pub fn iterate(self: *Unreachable, index: usize) ?*Node {
@@ -2196,7 +2204,7 @@ pub const Node = struct {
     };
 
     pub const ErrorType = struct {
-        base: Node,
+        base: Node = Node{ .id = .ErrorType },
         token: TokenIndex,
 
         pub fn iterate(self: *ErrorType, index: usize) ?*Node {
@@ -2230,7 +2238,7 @@ pub const Node = struct {
     };
 
     pub const DocComment = struct {
-        base: Node,
+        base: Node = Node{ .id = .DocComment },
         lines: LineList,
 
         pub const LineList = SegmentedList(TokenIndex, 4);
@@ -2249,7 +2257,7 @@ pub const Node = struct {
     };
 
     pub const TestDecl = struct {
-        base: Node,
+        base: Node = Node{ .id = .TestDecl },
         doc_comments: ?*DocComment,
         test_token: TokenIndex,
         name: *Node,

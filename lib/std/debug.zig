@@ -219,7 +219,7 @@ pub fn panic(comptime format: []const u8, args: var) noreturn {
 }
 
 /// TODO multithreaded awareness
-var panicking: u8 = 0; // TODO make this a bool
+var panicking: u8 = 0;
 
 pub fn panicExtra(trace: ?*const builtin.StackTrace, first_trace_addr: ?usize, comptime format: []const u8, args: var) noreturn {
     @setCold(true);
@@ -230,21 +230,25 @@ pub fn panicExtra(trace: ?*const builtin.StackTrace, first_trace_addr: ?usize, c
         resetSegfaultHandler();
     }
 
-    if (@atomicRmw(u8, &panicking, builtin.AtomicRmwOp.Xchg, 1, builtin.AtomicOrder.SeqCst) == 1) {
-        // Panicked during a panic.
-
-        // TODO detect if a different thread caused the panic, because in that case
-        // we would want to return here instead of calling abort, so that the thread
-        // which first called panic can finish printing a stack trace.
-        os.abort();
+    switch (@atomicRmw(u8, &panicking, .Add, 1, .SeqCst)) {
+        0 => {
+            const stderr = getStderrStream();
+            stderr.print(format ++ "\n", args) catch os.abort();
+            if (trace) |t| {
+                dumpStackTrace(t.*);
+            }
+            dumpCurrentStackTrace(first_trace_addr);
+        },
+        1 => {
+            // TODO detect if a different thread caused the panic, because in that case
+            // we would want to return here instead of calling abort, so that the thread
+            // which first called panic can finish printing a stack trace.
+            warn("Panicked during a panic. Aborting.\n", .{});
+        },
+        else => {
+            // Panicked while printing "Panicked during a panic."
+        },
     }
-    const stderr = getStderrStream();
-    stderr.print(format ++ "\n", args) catch os.abort();
-    if (trace) |t| {
-        dumpStackTrace(t.*);
-    }
-    dumpCurrentStackTrace(first_trace_addr);
-
     os.abort();
 }
 
@@ -2404,6 +2408,7 @@ pub fn attachSegfaultHandler() void {
     };
 
     os.sigaction(os.SIGSEGV, &act, null);
+    os.sigaction(os.SIGILL, &act, null);
 }
 
 fn resetSegfaultHandler() void {
@@ -2420,6 +2425,7 @@ fn resetSegfaultHandler() void {
         .flags = 0,
     };
     os.sigaction(os.SIGSEGV, &act, null);
+    os.sigaction(os.SIGILL, &act, null);
 }
 
 extern fn handleSegfaultLinux(sig: i32, info: *const os.siginfo_t, ctx_ptr: *const c_void) noreturn {
@@ -2429,8 +2435,11 @@ extern fn handleSegfaultLinux(sig: i32, info: *const os.siginfo_t, ctx_ptr: *con
     resetSegfaultHandler();
 
     const addr = @ptrToInt(info.fields.sigfault.addr);
-    std.debug.warn("Segmentation fault at address 0x{x}\n", .{addr});
-
+    switch (sig) {
+        os.SIGSEGV => std.debug.warn("Segmentation fault at address 0x{x}\n", .{addr}),
+        os.SIGILL => std.debug.warn("Illegal instruction at address 0x{x}\n", .{addr}),
+        else => unreachable,
+    }
     switch (builtin.arch) {
         .i386 => {
             const ctx = @ptrCast(*const os.ucontext_t, @alignCast(@alignOf(os.ucontext_t), ctx_ptr));
