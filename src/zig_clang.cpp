@@ -1562,6 +1562,11 @@ const ZigClangTagDecl *ZigClangRecordDecl_getCanonicalDecl(const ZigClangRecordD
     return reinterpret_cast<const ZigClangTagDecl *>(tag_decl);
 }
 
+const ZigClangFieldDecl *ZigClangFieldDecl_getCanonicalDecl(const ZigClangFieldDecl *field_decl) {
+    const clang::FieldDecl *canon_decl = reinterpret_cast<const clang::FieldDecl*>(field_decl)->getCanonicalDecl();
+    return reinterpret_cast<const ZigClangFieldDecl *>(canon_decl);
+}
+
 const ZigClangTagDecl *ZigClangEnumDecl_getCanonicalDecl(const ZigClangEnumDecl *enum_decl) {
     const clang::TagDecl *tag_decl = reinterpret_cast<const clang::EnumDecl*>(enum_decl)->getCanonicalDecl();
     return reinterpret_cast<const ZigClangTagDecl *>(tag_decl);
@@ -1590,6 +1595,14 @@ const char* ZigClangVarDecl_getSectionAttribute(const struct ZigClangVarDecl *se
         return (const char *)str_ref.bytes_begin();
     }
     return nullptr;
+}
+
+bool ZigClangRecordDecl_getPackedAttribute(const ZigClangRecordDecl *zig_record_decl) {
+    const clang::RecordDecl *record_decl = reinterpret_cast<const clang::RecordDecl *>(zig_record_decl);
+    if (record_decl->getAttr<clang::PackedAttr>()) {
+      return true;
+    }
+  return false;
 }
 
 unsigned ZigClangVarDecl_getAlignedAttribute(const struct ZigClangVarDecl *self, const ZigClangASTContext* ctx) {
@@ -1736,6 +1749,11 @@ const char* ZigClangFunctionDecl_getSectionAttribute(const struct ZigClangFuncti
     return nullptr;
 }
 
+const ZigClangExpr *ZigClangOpaqueValueExpr_getSourceExpr(const ZigClangOpaqueValueExpr *self) {
+    auto casted = reinterpret_cast<const clang::OpaqueValueExpr *>(self);
+    return reinterpret_cast<const ZigClangExpr *>(casted->getSourceExpr());
+}
+
 const ZigClangTypedefNameDecl *ZigClangTypedefType_getDecl(const ZigClangTypedefType *self) {
     auto casted = reinterpret_cast<const clang::TypedefType *>(self);
     const clang::TypedefNameDecl *name_decl = casted->getDecl();
@@ -1809,9 +1827,24 @@ ZigClangQualType ZigClangType_getPointeeType(const ZigClangType *self) {
     return bitcast(casted->getPointeeType());
 }
 
+bool ZigClangType_isBooleanType(const ZigClangType *self) {
+    auto casted = reinterpret_cast<const clang::Type *>(self);
+    return casted->isBooleanType();
+}
+
 bool ZigClangType_isVoidType(const ZigClangType *self) {
     auto casted = reinterpret_cast<const clang::Type *>(self);
     return casted->isVoidType();
+}
+
+bool ZigClangType_isArrayType(const ZigClangType *self) {
+    auto casted = reinterpret_cast<const clang::Type *>(self);
+    return casted->isArrayType();
+}
+
+bool ZigClangType_isRecordType(const ZigClangType *self) {
+    auto casted = reinterpret_cast<const clang::Type *>(self);
+    return casted->isRecordType();
 }
 
 const char *ZigClangType_getTypeClassName(const ZigClangType *self) {
@@ -2401,18 +2434,18 @@ unsigned ZigClangCharacterLiteral_getValue(const struct ZigClangCharacterLiteral
     return casted->getValue();
 }
 
-const struct ZigClangExpr *ZigClangConditionalOperator_getCond(const struct ZigClangConditionalOperator *self) {
-    auto casted = reinterpret_cast<const clang::ConditionalOperator *>(self);
+const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getCond(const struct ZigClangAbstractConditionalOperator *self) {
+    auto casted = reinterpret_cast<const clang::AbstractConditionalOperator *>(self);
     return reinterpret_cast<const struct ZigClangExpr *>(casted->getCond());
 }
 
-const struct ZigClangExpr *ZigClangConditionalOperator_getTrueExpr(const struct ZigClangConditionalOperator *self) {
-    auto casted = reinterpret_cast<const clang::ConditionalOperator *>(self);
+const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getTrueExpr(const struct ZigClangAbstractConditionalOperator *self) {
+    auto casted = reinterpret_cast<const clang::AbstractConditionalOperator *>(self);
     return reinterpret_cast<const struct ZigClangExpr *>(casted->getTrueExpr());
 }
 
-const struct ZigClangExpr *ZigClangConditionalOperator_getFalseExpr(const struct ZigClangConditionalOperator *self) {
-    auto casted = reinterpret_cast<const clang::ConditionalOperator *>(self);
+const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getFalseExpr(const struct ZigClangAbstractConditionalOperator *self) {
+    auto casted = reinterpret_cast<const clang::AbstractConditionalOperator *>(self);
     return reinterpret_cast<const struct ZigClangExpr *>(casted->getFalseExpr());
 }
 
@@ -2667,6 +2700,10 @@ ZigClangRecordDecl_field_iterator ZigClangRecordDecl_field_end(const struct ZigC
 bool ZigClangFieldDecl_isBitField(const struct ZigClangFieldDecl *self) {
     auto casted = reinterpret_cast<const clang::FieldDecl *>(self);
     return casted->isBitField();
+}
+
+bool ZigClangFieldDecl_isAnonymousStructOrUnion(const ZigClangFieldDecl *field_decl) {
+    return reinterpret_cast<const clang::FieldDecl*>(field_decl)->isAnonymousStructOrUnion();
 }
 
 ZigClangSourceLocation ZigClangFieldDecl_getLocation(const struct ZigClangFieldDecl *self) {

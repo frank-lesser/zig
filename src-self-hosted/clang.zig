@@ -1,5 +1,8 @@
 const builtin = @import("builtin");
 
+pub const struct_ZigClangConditionalOperator = @OpaqueType();
+pub const struct_ZigClangBinaryConditionalOperator = @OpaqueType();
+pub const struct_ZigClangAbstractConditionalOperator = @OpaqueType();
 pub const struct_ZigClangAPInt = @OpaqueType();
 pub const struct_ZigClangAPSInt = @OpaqueType();
 pub const struct_ZigClangAPFloat = @OpaqueType();
@@ -16,7 +19,6 @@ pub const struct_ZigClangCallExpr = @OpaqueType();
 pub const struct_ZigClangCaseStmt = @OpaqueType();
 pub const struct_ZigClangCompoundAssignOperator = @OpaqueType();
 pub const struct_ZigClangCompoundStmt = @OpaqueType();
-pub const struct_ZigClangConditionalOperator = @OpaqueType();
 pub const struct_ZigClangConstantArrayType = @OpaqueType();
 pub const struct_ZigClangContinueStmt = @OpaqueType();
 pub const struct_ZigClangDecayedType = @OpaqueType();
@@ -48,6 +50,7 @@ pub const struct_ZigClangMacroQualifiedType = @OpaqueType();
 pub const struct_ZigClangMemberExpr = @OpaqueType();
 pub const struct_ZigClangNamedDecl = @OpaqueType();
 pub const struct_ZigClangNone = @OpaqueType();
+pub const struct_ZigClangOpaqueValueExpr = @OpaqueType();
 pub const struct_ZigClangPCHContainerOperations = @OpaqueType();
 pub const struct_ZigClangParenExpr = @OpaqueType();
 pub const struct_ZigClangParenType = @OpaqueType();
@@ -760,6 +763,7 @@ pub extern fn ZigClangASTUnit_visitLocalTopLevelDecls(self: *struct_ZigClangASTU
 pub extern fn ZigClangRecordType_getDecl(record_ty: ?*const struct_ZigClangRecordType) *const struct_ZigClangRecordDecl;
 pub extern fn ZigClangEnumType_getDecl(record_ty: ?*const struct_ZigClangEnumType) *const struct_ZigClangEnumDecl;
 pub extern fn ZigClangRecordDecl_getCanonicalDecl(record_decl: ?*const struct_ZigClangRecordDecl) ?*const struct_ZigClangTagDecl;
+pub extern fn ZigClangFieldDecl_getCanonicalDecl(field_decl: ?*const struct_ZigClangFieldDecl) ?*const struct_ZigClangFieldDecl;
 pub extern fn ZigClangEnumDecl_getCanonicalDecl(self: ?*const struct_ZigClangEnumDecl) ?*const struct_ZigClangTagDecl;
 pub extern fn ZigClangTypedefNameDecl_getCanonicalDecl(self: ?*const struct_ZigClangTypedefNameDecl) ?*const struct_ZigClangTypedefNameDecl;
 pub extern fn ZigClangFunctionDecl_getCanonicalDecl(self: ?*const struct_ZigClangFunctionDecl) ?*const struct_ZigClangFunctionDecl;
@@ -767,6 +771,7 @@ pub extern fn ZigClangVarDecl_getCanonicalDecl(self: ?*const struct_ZigClangVarD
 pub extern fn ZigClangVarDecl_getSectionAttribute(self: *const ZigClangVarDecl, len: *usize) ?[*]const u8;
 pub extern fn ZigClangFunctionDecl_getAlignedAttribute(self: *const ZigClangFunctionDecl, *const ZigClangASTContext) c_uint;
 pub extern fn ZigClangVarDecl_getAlignedAttribute(self: *const ZigClangVarDecl, *const ZigClangASTContext) c_uint;
+pub extern fn ZigClangRecordDecl_getPackedAttribute(self: ?*const struct_ZigClangRecordDecl) bool;
 pub extern fn ZigClangRecordDecl_getDefinition(self: ?*const struct_ZigClangRecordDecl) ?*const struct_ZigClangRecordDecl;
 pub extern fn ZigClangEnumDecl_getDefinition(self: ?*const struct_ZigClangEnumDecl) ?*const struct_ZigClangEnumDecl;
 pub extern fn ZigClangRecordDecl_getLocation(self: ?*const struct_ZigClangRecordDecl) struct_ZigClangSourceLocation;
@@ -802,6 +807,9 @@ pub extern fn ZigClangQualType_isRestrictQualified(self: struct_ZigClangQualType
 pub extern fn ZigClangType_getTypeClass(self: ?*const struct_ZigClangType) ZigClangTypeClass;
 pub extern fn ZigClangType_getPointeeType(self: ?*const struct_ZigClangType) struct_ZigClangQualType;
 pub extern fn ZigClangType_isVoidType(self: ?*const struct_ZigClangType) bool;
+pub extern fn ZigClangType_isRecordType(self: ?*const struct_ZigClangType) bool;
+pub extern fn ZigClangType_isArrayType(self: ?*const struct_ZigClangType) bool;
+pub extern fn ZigClangType_isBooleanType(self: ?*const struct_ZigClangType) bool;
 pub extern fn ZigClangType_getTypeClassName(self: *const struct_ZigClangType) [*:0]const u8;
 pub extern fn ZigClangType_getAsArrayTypeUnsafe(self: *const ZigClangType) *const ZigClangArrayType;
 pub extern fn ZigClangType_getAsRecordType(self: *const ZigClangType) ?*const ZigClangRecordType;
@@ -855,6 +863,9 @@ pub extern fn ZigClangFunctionProtoType_getReturnType(self: *const ZigClangFunct
 
 pub const ZigClangSourceLocation = struct_ZigClangSourceLocation;
 pub const ZigClangQualType = struct_ZigClangQualType;
+pub const ZigClangConditionalOperator = struct_ZigClangConditionalOperator;
+pub const ZigClangBinaryConditionalOperator = struct_ZigClangBinaryConditionalOperator;
+pub const ZigClangAbstractConditionalOperator = struct_ZigClangAbstractConditionalOperator;
 pub const ZigClangAPValueLValueBase = struct_ZigClangAPValueLValueBase;
 pub const ZigClangAPValue = struct_ZigClangAPValue;
 pub const ZigClangAPSInt = struct_ZigClangAPSInt;
@@ -872,7 +883,6 @@ pub const ZigClangCallExpr = struct_ZigClangCallExpr;
 pub const ZigClangCaseStmt = struct_ZigClangCaseStmt;
 pub const ZigClangCompoundAssignOperator = struct_ZigClangCompoundAssignOperator;
 pub const ZigClangCompoundStmt = struct_ZigClangCompoundStmt;
-pub const ZigClangConditionalOperator = struct_ZigClangConditionalOperator;
 pub const ZigClangConstantArrayType = struct_ZigClangConstantArrayType;
 pub const ZigClangContinueStmt = struct_ZigClangContinueStmt;
 pub const ZigClangDecayedType = struct_ZigClangDecayedType;
@@ -904,6 +914,7 @@ pub const ZigClangMacroQualifiedType = struct_ZigClangMacroQualifiedType;
 pub const ZigClangMemberExpr = struct_ZigClangMemberExpr;
 pub const ZigClangNamedDecl = struct_ZigClangNamedDecl;
 pub const ZigClangNone = struct_ZigClangNone;
+pub const ZigClangOpaqueValueExpr = struct_ZigClangOpaqueValueExpr;
 pub const ZigClangPCHContainerOperations = struct_ZigClangPCHContainerOperations;
 pub const ZigClangParenExpr = struct_ZigClangParenExpr;
 pub const ZigClangParenType = struct_ZigClangParenType;
@@ -1053,6 +1064,7 @@ pub extern fn ZigClangStringLiteral_getString_bytes_begin_size(*const ZigClangSt
 
 pub extern fn ZigClangParenExpr_getSubExpr(*const ZigClangParenExpr) *const ZigClangExpr;
 
+pub extern fn ZigClangFieldDecl_isAnonymousStructOrUnion(*const struct_ZigClangFieldDecl) bool;
 pub extern fn ZigClangFieldDecl_isBitField(*const struct_ZigClangFieldDecl) bool;
 pub extern fn ZigClangFieldDecl_getType(*const struct_ZigClangFieldDecl) struct_ZigClangQualType;
 pub extern fn ZigClangFieldDecl_getLocation(*const struct_ZigClangFieldDecl) struct_ZigClangSourceLocation;
@@ -1089,9 +1101,9 @@ pub extern fn ZigClangForStmt_getBody(*const ZigClangForStmt) *const ZigClangStm
 pub extern fn ZigClangAPFloat_toString(self: *const ZigClangAPFloat, precision: c_uint, maxPadding: c_uint, truncateZero: bool) [*:0]const u8;
 pub extern fn ZigClangAPFloat_getValueAsApproximateDouble(*const ZigClangFloatingLiteral) f64;
 
-pub extern fn ZigClangConditionalOperator_getCond(*const ZigClangConditionalOperator) *const ZigClangExpr;
-pub extern fn ZigClangConditionalOperator_getTrueExpr(*const ZigClangConditionalOperator) *const ZigClangExpr;
-pub extern fn ZigClangConditionalOperator_getFalseExpr(*const ZigClangConditionalOperator) *const ZigClangExpr;
+pub extern fn ZigClangAbstractConditionalOperator_getCond(*const ZigClangAbstractConditionalOperator) *const ZigClangExpr;
+pub extern fn ZigClangAbstractConditionalOperator_getTrueExpr(*const ZigClangAbstractConditionalOperator) *const ZigClangExpr;
+pub extern fn ZigClangAbstractConditionalOperator_getFalseExpr(*const ZigClangAbstractConditionalOperator) *const ZigClangExpr;
 
 pub extern fn ZigClangSwitchStmt_getConditionVariableDeclStmt(*const ZigClangSwitchStmt) ?*const ZigClangDeclStmt;
 pub extern fn ZigClangSwitchStmt_getCond(*const ZigClangSwitchStmt) *const ZigClangExpr;
@@ -1133,6 +1145,8 @@ pub extern fn ZigClangUnaryOperator_getOpcode(*const ZigClangUnaryOperator) ZigC
 pub extern fn ZigClangUnaryOperator_getType(*const ZigClangUnaryOperator) ZigClangQualType;
 pub extern fn ZigClangUnaryOperator_getSubExpr(*const ZigClangUnaryOperator) *const ZigClangExpr;
 pub extern fn ZigClangUnaryOperator_getBeginLoc(*const ZigClangUnaryOperator) ZigClangSourceLocation;
+
+pub extern fn ZigClangOpaqueValueExpr_getSourceExpr(*const ZigClangOpaqueValueExpr) ?*const ZigClangExpr;
 
 pub extern fn ZigClangCompoundAssignOperator_getType(*const ZigClangCompoundAssignOperator) ZigClangQualType;
 pub extern fn ZigClangCompoundAssignOperator_getComputationLHSType(*const ZigClangCompoundAssignOperator) ZigClangQualType;

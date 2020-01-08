@@ -116,6 +116,7 @@ struct ZigClangMacroQualifiedType;
 struct ZigClangMemberExpr;
 struct ZigClangNamedDecl;
 struct ZigClangNone;
+struct ZigClangOpaqueValueExpr;
 struct ZigClangPCHContainerOperations;
 struct ZigClangParenExpr;
 struct ZigClangParenType;
@@ -855,6 +856,7 @@ ZIG_EXTERN_C const struct ZigClangEnumDecl *ZigClangEnumType_getDecl(const struc
 
 ZIG_EXTERN_C const struct ZigClangTagDecl *ZigClangRecordDecl_getCanonicalDecl(const struct ZigClangRecordDecl *record_decl);
 ZIG_EXTERN_C const struct ZigClangTagDecl *ZigClangEnumDecl_getCanonicalDecl(const struct ZigClangEnumDecl *);
+ZIG_EXTERN_C const struct ZigClangFieldDecl *ZigClangFieldDecl_getCanonicalDecl(const ZigClangFieldDecl *);
 ZIG_EXTERN_C const struct ZigClangTypedefNameDecl *ZigClangTypedefNameDecl_getCanonicalDecl(const struct ZigClangTypedefNameDecl *);
 ZIG_EXTERN_C const struct ZigClangFunctionDecl *ZigClangFunctionDecl_getCanonicalDecl(const ZigClangFunctionDecl *self);
 ZIG_EXTERN_C const struct ZigClangVarDecl *ZigClangVarDecl_getCanonicalDecl(const ZigClangVarDecl *self);
@@ -862,6 +864,7 @@ ZIG_EXTERN_C const char* ZigClangVarDecl_getSectionAttribute(const struct ZigCla
 ZIG_EXTERN_C unsigned ZigClangVarDecl_getAlignedAttribute(const struct ZigClangVarDecl *self, const ZigClangASTContext* ctx);
 ZIG_EXTERN_C unsigned ZigClangFunctionDecl_getAlignedAttribute(const struct ZigClangFunctionDecl *self, const ZigClangASTContext* ctx);
 
+ZIG_EXTERN_C bool ZigClangRecordDecl_getPackedAttribute(const struct ZigClangRecordDecl *);
 ZIG_EXTERN_C const struct ZigClangRecordDecl *ZigClangRecordDecl_getDefinition(const struct ZigClangRecordDecl *);
 ZIG_EXTERN_C const struct ZigClangEnumDecl *ZigClangEnumDecl_getDefinition(const struct ZigClangEnumDecl *);
 
@@ -931,7 +934,10 @@ ZIG_EXTERN_C bool ZigClangQualType_isRestrictQualified(struct ZigClangQualType);
 
 ZIG_EXTERN_C enum ZigClangTypeClass ZigClangType_getTypeClass(const struct ZigClangType *self);
 ZIG_EXTERN_C struct ZigClangQualType ZigClangType_getPointeeType(const struct ZigClangType *self);
+ZIG_EXTERN_C bool ZigClangType_isBooleanType(const struct ZigClangType *self);
 ZIG_EXTERN_C bool ZigClangType_isVoidType(const struct ZigClangType *self);
+ZIG_EXTERN_C bool ZigClangType_isArrayType(const struct ZigClangType *self);
+ZIG_EXTERN_C bool ZigClangType_isRecordType(const struct ZigClangType *self);
 ZIG_EXTERN_C const char *ZigClangType_getTypeClassName(const struct ZigClangType *self);
 ZIG_EXTERN_C const struct ZigClangArrayType *ZigClangType_getAsArrayTypeUnsafe(const struct ZigClangType *self);
 ZIG_EXTERN_C const ZigClangRecordType *ZigClangType_getAsRecordType(const ZigClangType *self);
@@ -1051,9 +1057,9 @@ ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangCharacterLiteral_getBeginLoc(
 ZIG_EXTERN_C enum ZigClangCharacterLiteral_CharacterKind ZigClangCharacterLiteral_getKind(const struct ZigClangCharacterLiteral *);
 ZIG_EXTERN_C unsigned ZigClangCharacterLiteral_getValue(const struct ZigClangCharacterLiteral *);
 
-ZIG_EXTERN_C const struct ZigClangExpr *ZigClangConditionalOperator_getCond(const struct ZigClangConditionalOperator *);
-ZIG_EXTERN_C const struct ZigClangExpr *ZigClangConditionalOperator_getTrueExpr(const struct ZigClangConditionalOperator *);
-ZIG_EXTERN_C const struct ZigClangExpr *ZigClangConditionalOperator_getFalseExpr(const struct ZigClangConditionalOperator *);
+ZIG_EXTERN_C const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getCond(const struct ZigClangAbstractConditionalOperator *);
+ZIG_EXTERN_C const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getTrueExpr(const struct ZigClangAbstractConditionalOperator *);
+ZIG_EXTERN_C const struct ZigClangExpr *ZigClangAbstractConditionalOperator_getFalseExpr(const struct ZigClangAbstractConditionalOperator *);
 
 ZIG_EXTERN_C struct ZigClangQualType ZigClangCompoundAssignOperator_getType(const struct ZigClangCompoundAssignOperator *);
 ZIG_EXTERN_C struct ZigClangQualType ZigClangCompoundAssignOperator_getComputationLHSType(const struct ZigClangCompoundAssignOperator *);
@@ -1082,6 +1088,8 @@ ZIG_EXTERN_C const struct ZigClangExpr * const * ZigClangCallExpr_getArgs(const 
 ZIG_EXTERN_C const struct ZigClangExpr *ZigClangMemberExpr_getBase(const struct ZigClangMemberExpr *);
 ZIG_EXTERN_C bool ZigClangMemberExpr_isArrow(const struct ZigClangMemberExpr *);
 ZIG_EXTERN_C const struct ZigClangValueDecl * ZigClangMemberExpr_getMemberDecl(const struct ZigClangMemberExpr *);
+
+ZIG_EXTERN_C const ZigClangExpr *ZigClangOpaqueValueExpr_getSourceExpr(const struct ZigClangOpaqueValueExpr *);
 
 ZIG_EXTERN_C const struct ZigClangExpr *ZigClangArraySubscriptExpr_getBase(const struct ZigClangArraySubscriptExpr *);
 ZIG_EXTERN_C const struct ZigClangExpr *ZigClangArraySubscriptExpr_getIdx(const struct ZigClangArraySubscriptExpr *);
@@ -1116,6 +1124,7 @@ ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangMacroDefinitionRecord_getSour
 ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangMacroDefinitionRecord_getSourceRange_getEnd(const struct ZigClangMacroDefinitionRecord *);
 
 ZIG_EXTERN_C bool ZigClangFieldDecl_isBitField(const struct ZigClangFieldDecl *);
+ZIG_EXTERN_C bool ZigClangFieldDecl_isAnonymousStructOrUnion(const ZigClangFieldDecl *);
 ZIG_EXTERN_C struct ZigClangQualType ZigClangFieldDecl_getType(const struct ZigClangFieldDecl *);
 ZIG_EXTERN_C struct ZigClangSourceLocation ZigClangFieldDecl_getLocation(const struct ZigClangFieldDecl *);
 
