@@ -761,6 +761,7 @@ pub extern fn ZigClangASTUnit_getASTContext(self: ?*struct_ZigClangASTUnit) ?*st
 pub extern fn ZigClangASTUnit_getSourceManager(self: *struct_ZigClangASTUnit) *struct_ZigClangSourceManager;
 pub extern fn ZigClangASTUnit_visitLocalTopLevelDecls(self: *struct_ZigClangASTUnit, context: ?*c_void, Fn: ?extern fn (?*c_void, *const struct_ZigClangDecl) bool) bool;
 pub extern fn ZigClangRecordType_getDecl(record_ty: ?*const struct_ZigClangRecordType) *const struct_ZigClangRecordDecl;
+pub extern fn ZigClangTagDecl_isThisDeclarationADefinition(self: *const ZigClangTagDecl) bool;
 pub extern fn ZigClangEnumType_getDecl(record_ty: ?*const struct_ZigClangEnumType) *const struct_ZigClangEnumDecl;
 pub extern fn ZigClangRecordDecl_getCanonicalDecl(record_decl: ?*const struct_ZigClangRecordDecl) ?*const struct_ZigClangTagDecl;
 pub extern fn ZigClangFieldDecl_getCanonicalDecl(field_decl: ?*const struct_ZigClangFieldDecl) ?*const struct_ZigClangFieldDecl;
@@ -792,7 +793,8 @@ pub extern fn ZigClangEnumDecl_enumerator_end(*const ZigClangEnumDecl) ZigClangE
 pub extern fn ZigClangEnumDecl_enumerator_iterator_next(ZigClangEnumDecl_enumerator_iterator) ZigClangEnumDecl_enumerator_iterator;
 pub extern fn ZigClangEnumDecl_enumerator_iterator_deref(ZigClangEnumDecl_enumerator_iterator) *const ZigClangEnumConstantDecl;
 pub extern fn ZigClangEnumDecl_enumerator_iterator_neq(ZigClangEnumDecl_enumerator_iterator, ZigClangEnumDecl_enumerator_iterator) bool;
-pub extern fn ZigClangDecl_getName_bytes_begin(decl: ?*const struct_ZigClangDecl) [*:0]const u8;
+pub extern fn ZigClangDecl_castToNamedDecl(decl: *const struct_ZigClangDecl) ?*const ZigClangNamedDecl;
+pub extern fn ZigClangNamedDecl_getName_bytes_begin(decl: ?*const struct_ZigClangNamedDecl) [*:0]const u8;
 pub extern fn ZigClangSourceLocation_eq(a: struct_ZigClangSourceLocation, b: struct_ZigClangSourceLocation) bool;
 pub extern fn ZigClangTypedefType_getDecl(self: ?*const struct_ZigClangTypedefType) *const struct_ZigClangTypedefNameDecl;
 pub extern fn ZigClangTypedefNameDecl_getUnderlyingType(self: ?*const struct_ZigClangTypedefNameDecl) struct_ZigClangQualType;
@@ -847,7 +849,11 @@ pub extern fn ZigClangFunctionDecl_getStorageClass(self: *const ZigClangFunction
 pub extern fn ZigClangFunctionDecl_getParamDecl(self: *const ZigClangFunctionDecl, i: c_uint) *const struct_ZigClangParmVarDecl;
 pub extern fn ZigClangFunctionDecl_getBody(self: *const ZigClangFunctionDecl) *const struct_ZigClangStmt;
 pub extern fn ZigClangFunctionDecl_doesDeclarationForceExternallyVisibleDefinition(self: *const ZigClangFunctionDecl) bool;
+pub extern fn ZigClangFunctionDecl_isThisDeclarationADefinition(self: *const ZigClangFunctionDecl) bool;
+pub extern fn ZigClangFunctionDecl_doesThisDeclarationHaveABody(self: *const ZigClangFunctionDecl) bool;
 pub extern fn ZigClangFunctionDecl_isInlineSpecified(self: *const ZigClangFunctionDecl) bool;
+pub extern fn ZigClangFunctionDecl_isDefined(self: *const ZigClangFunctionDecl) bool;
+pub extern fn ZigClangFunctionDecl_getDefinition(self: *const ZigClangFunctionDecl) ?*const struct_ZigClangFunctionDecl;
 pub extern fn ZigClangFunctionDecl_getSectionAttribute(self: *const ZigClangFunctionDecl, len: *usize) ?[*]const u8;
 
 pub extern fn ZigClangBuiltinType_getKind(self: *const struct_ZigClangBuiltinType) ZigClangBuiltinTypeKind;
