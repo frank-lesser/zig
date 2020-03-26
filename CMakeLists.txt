@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.5)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING
-        "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
+        "Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel." FORCE)
 endif()
 
 if(NOT CMAKE_INSTALL_PREFIX)
@@ -45,7 +45,6 @@ message("Configuring zig version ${ZIG_VERSION}")
 
 set(ZIG_STATIC off CACHE BOOL "Attempt to build a static zig executable (not compatible with glibc)")
 set(ZIG_STATIC_LLVM off CACHE BOOL "Prefer linking against static LLVM libraries")
-set(ZIG_SKIP_INSTALL_LIB_FILES off CACHE BOOL "Disable copying lib/ files to install prefix")
 set(ZIG_ENABLE_MEM_PROFILE off CACHE BOOL "Activate memory usage instrumentation")
 
 if(ZIG_STATIC)
@@ -58,12 +57,14 @@ string(REGEX REPLACE "\\\\" "\\\\\\\\" ZIG_LIBC_INCLUDE_DIR_ESCAPED "${ZIG_LIBC_
 
 option(ZIG_TEST_COVERAGE "Build Zig with test coverage instrumentation" OFF)
 
-# To see what patches have been applied to LLD in this repository:
-# git log -p -- deps/lld
-option(ZIG_FORCE_EXTERNAL_LLD "If your system has the LLD patches use it instead of the embedded LLD" OFF)
+# Zig no longer has embedded LLD. This option is kept for package maintainers
+# so that they don't have to update their scripts in case we ever re-introduce
+# LLD to the tree. This option does nothing.
+option(ZIG_FORCE_EXTERNAL_LLD "does nothing" OFF)
 
 find_package(llvm)
 find_package(clang)
+find_package(lld)
 
 if(APPLE AND ZIG_STATIC)
     list(REMOVE_ITEM LLVM_LIBRARIES "-lz")
@@ -83,205 +84,9 @@ foreach(CONFIG_TYPE ${CMAKE_CONFIGURATION_TYPES})
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${CONFIG_TYPE} ${ZIG_CPP_LIB_DIR})
 endforeach(CONFIG_TYPE CMAKE_CONFIGURATION_TYPES)
 
-if(ZIG_FORCE_EXTERNAL_LLD)
-    find_package(lld)
-    include_directories(${LLVM_INCLUDE_DIRS})
-    include_directories(${LLD_INCLUDE_DIRS})
-    include_directories(${CLANG_INCLUDE_DIRS})
-else()
-    # This goes first so that we find embedded LLD instead
-    # of system LLD.
-    include_directories("${CMAKE_SOURCE_DIR}/deps/lld/include")
-
-    include_directories(${LLVM_INCLUDE_DIRS})
-    include_directories(${CLANG_INCLUDE_DIRS})
-    set(EMBEDDED_LLD_LIB_SOURCES
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Args.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/ErrorHandler.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Filesystem.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Memory.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Reproduce.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Strings.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/TargetOptionsCommandFlags.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Threads.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Timer.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/Common/Version.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/DefinedAtom.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/Error.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/File.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/LinkingContext.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/Reader.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/Resolver.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/SymbolTable.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Core/Writer.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/Driver/DarwinLdDriver.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/FileArchive.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ArchHandler.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ArchHandler_arm.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ArchHandler_arm64.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ArchHandler_x86.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ArchHandler_x86_64.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/CompactUnwindPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/GOTPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/LayoutPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachOLinkingContext.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachONormalizedFileBinaryReader.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachONormalizedFileBinaryWriter.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachONormalizedFileFromAtoms.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachONormalizedFileToAtoms.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/MachONormalizedFileYAML.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ObjCPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/ShimPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/StubsPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/TLVPass.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/MachO/WriterMachO.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/lib/ReaderWriter/YAML/ReaderWriterYAML.cpp"
-    )
-
-    set(EMBEDDED_LLD_ELF_SOURCES
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/AArch64ErrataFix.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/AArch64.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/AMDGPU.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/ARM.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/AVR.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/Hexagon.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/MSP430.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/Mips.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/MipsArchTree.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/PPC.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/PPC64.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/RISCV.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/SPARCV9.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/X86.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Arch/X86_64.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/CallGraphSort.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/DWARF.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Driver.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/DriverUtils.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/EhFrame.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/ICF.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/InputFiles.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/InputSection.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/LTO.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/LinkerScript.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/MapFile.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/MarkLive.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/OutputSections.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Relocations.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/ScriptLexer.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/ScriptParser.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/SymbolTable.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Symbols.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/SyntheticSections.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Target.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Thunks.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF/Writer.cpp"
-    )
-
-    set(EMBEDDED_LLD_COFF_SOURCES
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Chunks.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DLL.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DebugTypes.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Driver.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/DriverUtils.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/ICF.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/InputFiles.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/LTO.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/MapFile.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/MarkLive.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/MinGW.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/PDB.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/SymbolTable.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Symbols.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF/Writer.cpp"
-    )
-    set(EMBEDDED_LLD_MINGW_SOURCES
-        "${CMAKE_SOURCE_DIR}/deps/lld/MinGW/Driver.cpp"
-    )
-    set(EMBEDDED_LLD_WASM_SOURCES
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Driver.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/InputChunks.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/InputFiles.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/LTO.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/MarkLive.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/OutputSections.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Relocations.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/SymbolTable.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Symbols.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/SyntheticSections.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/Writer.cpp"
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm/WriterUtils.cpp"
-    )
-    add_library(embedded_lld_lib STATIC ${EMBEDDED_LLD_LIB_SOURCES})
-    add_library(embedded_lld_elf STATIC ${EMBEDDED_LLD_ELF_SOURCES})
-    add_library(embedded_lld_coff STATIC ${EMBEDDED_LLD_COFF_SOURCES})
-    add_library(embedded_lld_mingw STATIC ${EMBEDDED_LLD_MINGW_SOURCES})
-    add_library(embedded_lld_wasm STATIC ${EMBEDDED_LLD_WASM_SOURCES})
-    if(MSVC)
-        set(ZIG_LLD_COMPILE_FLAGS "-std=c++11 -D_CRT_SECURE_NO_WARNINGS /w")
-    else()
-      set(ZIG_LLD_COMPILE_FLAGS "-std=c++11 -fvisibility-inlines-hidden -fno-exceptions -fno-rtti -Wno-comment")
-      if(MINGW)
-        set(ZIG_LLD_COMPILE_FLAGS "${ZIG_LLD_COMPILE_FLAGS} -D__STDC_FORMAT_MACROS -D__USE_MINGW_ANSI_STDIO")
-      endif()
-    endif()
-    set_target_properties(embedded_lld_lib PROPERTIES
-        COMPILE_FLAGS ${ZIG_LLD_COMPILE_FLAGS}
-        LINK_FLAGS " "
-    )
-    set_target_properties(embedded_lld_elf PROPERTIES
-        COMPILE_FLAGS ${ZIG_LLD_COMPILE_FLAGS}
-        LINK_FLAGS " "
-    )
-    set_target_properties(embedded_lld_coff PROPERTIES
-        COMPILE_FLAGS ${ZIG_LLD_COMPILE_FLAGS}
-        LINK_FLAGS " "
-    )
-    set_target_properties(embedded_lld_mingw PROPERTIES
-        COMPILE_FLAGS ${ZIG_LLD_COMPILE_FLAGS}
-        LINK_FLAGS " "
-    )
-    set_target_properties(embedded_lld_wasm PROPERTIES
-        COMPILE_FLAGS ${ZIG_LLD_COMPILE_FLAGS}
-        LINK_FLAGS " "
-    )
-    target_include_directories(embedded_lld_lib PRIVATE
-        "${CMAKE_SOURCE_DIR}/deps/lld/include"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt"
-    )
-    target_include_directories(embedded_lld_elf PRIVATE
-        "${CMAKE_SOURCE_DIR}/deps/lld/ELF"
-        "${CMAKE_SOURCE_DIR}/deps/lld/include"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt/ELF"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt"
-    )
-    target_include_directories(embedded_lld_coff PRIVATE
-        "${CMAKE_SOURCE_DIR}/deps/lld/COFF"
-        "${CMAKE_SOURCE_DIR}/deps/lld/include"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt/COFF"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt"
-    )
-    target_include_directories(embedded_lld_mingw PRIVATE
-        "${CMAKE_SOURCE_DIR}/deps/lld/MinGW"
-        "${CMAKE_SOURCE_DIR}/deps/lld/include"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt/MinGW"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt"
-    )
-    target_include_directories(embedded_lld_wasm PRIVATE
-        "${CMAKE_SOURCE_DIR}/deps/lld/wasm"
-        "${CMAKE_SOURCE_DIR}/deps/lld/include"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt/wasm"
-        "${CMAKE_SOURCE_DIR}/deps/lld-prebuilt"
-    )
-    set(LLD_INCLUDE_DIRS "")
-    set(LLD_LIBRARIES
-        embedded_lld_elf
-        embedded_lld_coff
-        embedded_lld_mingw
-        embedded_lld_wasm
-        embedded_lld_lib
-    )
-endif()
+include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(${LLD_INCLUDE_DIRS})
+include_directories(${CLANG_INCLUDE_DIRS})
 
 # No patches have been applied to SoftFloat-3e
 set(EMBEDDED_SOFTFLOAT_SOURCES
@@ -435,11 +240,11 @@ find_package(Threads)
 # CMake doesn't let us create an empty executable, so we hang on to this one separately.
 set(ZIG_MAIN_SRC "${CMAKE_SOURCE_DIR}/src/main.cpp")
 
-# This is our shim which will be replaced by libuserland written in Zig.
-set(ZIG0_SHIM_SRC "${CMAKE_SOURCE_DIR}/src/userland.cpp")
+# This is our shim which will be replaced by libstage2 written in Zig.
+set(ZIG0_SHIM_SRC "${CMAKE_SOURCE_DIR}/src/stage2.cpp")
 
 if(ZIG_ENABLE_MEM_PROFILE)
-    set(ZIG_SOURCES_MEM_PROFILE "${CMAKE_SOURCE_DIR}/src/memory_profiling.cpp")
+    set(ZIG_SOURCES_MEM_PROFILE "${CMAKE_SOURCE_DIR}/src/mem_profile.cpp")
 endif()
 
 set(ZIG_SOURCES
@@ -455,10 +260,11 @@ set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/errmsg.cpp"
     "${CMAKE_SOURCE_DIR}/src/error.cpp"
     "${CMAKE_SOURCE_DIR}/src/glibc.cpp"
+    "${CMAKE_SOURCE_DIR}/src/heap.cpp"
     "${CMAKE_SOURCE_DIR}/src/ir.cpp"
     "${CMAKE_SOURCE_DIR}/src/ir_print.cpp"
-    "${CMAKE_SOURCE_DIR}/src/libc_installation.cpp"
     "${CMAKE_SOURCE_DIR}/src/link.cpp"
+    "${CMAKE_SOURCE_DIR}/src/mem.cpp"
     "${CMAKE_SOURCE_DIR}/src/os.cpp"
     "${CMAKE_SOURCE_DIR}/src/parser.cpp"
     "${CMAKE_SOURCE_DIR}/src/range_set.cpp"
@@ -506,7 +312,7 @@ include_directories(
 )
 
 # These have to go before the -Wno- flags
-set(EXE_CFLAGS "-std=c++11")
+set(EXE_CFLAGS "-std=c++14")
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
     if(MSVC)
         set(EXE_CFLAGS "${EXE_CFLAGS} /w")
@@ -559,36 +365,38 @@ add_library(zig_cpp STATIC ${ZIG_CPP_SOURCES})
 set_target_properties(zig_cpp PROPERTIES
     COMPILE_FLAGS ${EXE_CFLAGS}
 )
+target_link_libraries(zig_cpp LINK_PUBLIC
+    ${CLANG_LIBRARIES}
+    ${LLD_LIBRARIES}
+    ${LLVM_LIBRARIES}
+)
 
 add_library(opt_c_util STATIC ${OPTIMIZED_C_SOURCES})
 set_target_properties(opt_c_util PROPERTIES
     COMPILE_FLAGS "${OPTIMIZED_C_FLAGS}"
 )
 
-add_library(compiler STATIC ${ZIG_SOURCES})
-set_target_properties(compiler PROPERTIES
+add_library(zigcompiler STATIC ${ZIG_SOURCES})
+set_target_properties(zigcompiler PROPERTIES
     COMPILE_FLAGS ${EXE_CFLAGS}
     LINK_FLAGS ${EXE_LDFLAGS}
 )
-target_link_libraries(compiler LINK_PUBLIC
+target_link_libraries(zigcompiler LINK_PUBLIC
     zig_cpp
     opt_c_util
     ${SOFTFLOAT_LIBRARIES}
-    ${CLANG_LIBRARIES}
-    ${LLD_LIBRARIES}
-    ${LLVM_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )
 if(NOT MSVC)
-    target_link_libraries(compiler LINK_PUBLIC ${LIBXML2})
+    target_link_libraries(zigcompiler LINK_PUBLIC ${LIBXML2})
 endif()
 
 if(ZIG_DIA_GUIDS_LIB)
-    target_link_libraries(compiler LINK_PUBLIC ${ZIG_DIA_GUIDS_LIB})
+    target_link_libraries(zigcompiler LINK_PUBLIC ${ZIG_DIA_GUIDS_LIB})
 endif()
 
 if(MSVC OR MINGW)
-    target_link_libraries(compiler LINK_PUBLIC version)
+    target_link_libraries(zigcompiler LINK_PUBLIC version)
 endif()
 
 add_executable(zig0 "${ZIG_MAIN_SRC}" "${ZIG0_SHIM_SRC}")
@@ -596,33 +404,42 @@ set_target_properties(zig0 PROPERTIES
     COMPILE_FLAGS ${EXE_CFLAGS}
     LINK_FLAGS ${EXE_LDFLAGS}
 )
-target_link_libraries(zig0 compiler)
+target_link_libraries(zig0 zigcompiler)
 
 if(MSVC)
-    set(LIBUSERLAND "${CMAKE_BINARY_DIR}/userland.lib")
+    set(LIBSTAGE2 "${CMAKE_BINARY_DIR}/zigstage2.lib")
 else()
-    set(LIBUSERLAND "${CMAKE_BINARY_DIR}/libuserland.a")
+    set(LIBSTAGE2 "${CMAKE_BINARY_DIR}/libzigstage2.a")
 endif()
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-    set(LIBUSERLAND_RELEASE_MODE "false")
+    set(LIBSTAGE2_RELEASE_ARG "")
 else()
-    set(LIBUSERLAND_RELEASE_MODE "true")
+    set(LIBSTAGE2_RELEASE_ARG --release-fast --strip)
 endif()
-if(ZIG_SKIP_INSTALL_LIB_FILES)
-    set(ZIG_BUILD_INSTALL_STEP "")
+if(WIN32)
+    set(LIBSTAGE2_WINDOWS_ARGS "-lntdll")
 else()
-    set(ZIG_BUILD_INSTALL_STEP "install")
+    set(LIBSTAGE2_WINDOWS_ARGS "")
 endif()
-add_custom_target(zig_build_libuserland ALL
-    COMMAND zig0 build
-        --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
-        libuserland ${ZIG_BUILD_INSTALL_STEP}
-        "-Doutput-dir=${CMAKE_BINARY_DIR}"
-        "-Drelease=${LIBUSERLAND_RELEASE_MODE}"
-        "-Dlib-files-only"
-        --prefix "${CMAKE_INSTALL_PREFIX}"
+
+set(BUILD_LIBSTAGE2_ARGS "build-lib"
+    "src-self-hosted/stage2.zig"
+    -mcpu=baseline
+    --name zigstage2
+    --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
+    --cache on
+    --output-dir "${CMAKE_BINARY_DIR}"
+    ${LIBSTAGE2_RELEASE_ARG}
+    --bundle-compiler-rt
+    -fPIC
+    -lc
+    ${LIBSTAGE2_WINDOWS_ARGS}
+)
+
+add_custom_target(zig_build_libstage2 ALL
+    COMMAND zig0 ${BUILD_LIBSTAGE2_ARGS}
     DEPENDS zig0
-    BYPRODUCTS "${LIBUSERLAND}"
+    BYPRODUCTS "${LIBSTAGE2}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 add_executable(zig "${ZIG_MAIN_SRC}")
@@ -631,11 +448,40 @@ set_target_properties(zig PROPERTIES
     COMPILE_FLAGS ${EXE_CFLAGS}
     LINK_FLAGS ${EXE_LDFLAGS}
 )
-target_link_libraries(zig compiler "${LIBUSERLAND}")
+target_link_libraries(zig zigcompiler "${LIBSTAGE2}")
 if(MSVC)
   target_link_libraries(zig ntdll.lib)
 elseif(MINGW) 
   target_link_libraries(zig ntdll)
 endif()
-add_dependencies(zig zig_build_libuserland)
+add_dependencies(zig zig_build_libstage2)
+
 install(TARGETS zig DESTINATION bin)
+
+set(ZIG_INSTALL_ARGS "build"
+    --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
+    "-Dlib-files-only"
+    --prefix "${CMAKE_INSTALL_PREFIX}"
+    install
+)
+
+# CODE has no effect with Visual Studio build system generator, therefore
+# when using Visual Studio build system generator we resort to running
+# `zig build install` during the build phase.
+if(MSVC)
+    set(ZIG_SKIP_INSTALL_LIB_FILES off CACHE BOOL
+        "Windows-only: Disable copying lib/ files to install prefix during the build phase")
+    if(NOT ZIG_SKIP_INSTALL_LIB_FILES)
+        add_custom_target(zig_install_lib_files ALL
+            COMMAND zig ${ZIG_INSTALL_ARGS}
+            DEPENDS zig
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        )
+    endif()
+else()
+    get_target_property(zig_BINARY_DIR zig BINARY_DIR)
+    install(CODE "set(zig_EXE \"${zig_BINARY_DIR}/zig\")")
+    install(CODE "set(ZIG_INSTALL_ARGS \"${ZIG_INSTALL_ARGS}\")")
+    install(CODE "set(CMAKE_SOURCE_DIR \"${CMAKE_SOURCE_DIR}\")")
+    install(SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/install.cmake)
+endif()

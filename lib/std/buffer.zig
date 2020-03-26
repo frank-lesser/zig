@@ -57,21 +57,17 @@ pub const Buffer = struct {
 
     /// The caller owns the returned memory. The Buffer becomes null and
     /// is safe to `deinit`.
-    pub fn toOwnedSlice(self: *Buffer) []u8 {
+    pub fn toOwnedSlice(self: *Buffer) [:0]u8 {
         const allocator = self.list.allocator;
-        const result = allocator.shrink(self.list.items, self.len());
+        const result = self.list.toOwnedSlice();
         self.* = initNull(allocator);
-        return result;
+        return result[0 .. result.len - 1 :0];
     }
 
     pub fn allocPrint(allocator: *Allocator, comptime format: []const u8, args: var) !Buffer {
-        const countSize = struct {
-            fn countSize(size: *usize, bytes: []const u8) (error{}!void) {
-                size.* += bytes.len;
-            }
-        }.countSize;
-        var size: usize = 0;
-        std.fmt.format(&size, error{}, countSize, format, args) catch |err| switch (err) {};
+        const size = std.math.cast(usize, std.fmt.count(format, args)) catch |err| switch (err) {
+            error.Overflow => return error.OutOfMemory,
+        };
         var self = try Buffer.initSize(allocator, size);
         assert((std.fmt.bufPrint(self.list.items, format, args) catch unreachable).len == size);
         return self;
@@ -81,12 +77,18 @@ pub const Buffer = struct {
         self.list.deinit();
     }
 
-    pub fn toSlice(self: Buffer) [:0]u8 {
-        return self.list.toSlice()[0..self.len() :0];
+    pub fn span(self: var) @TypeOf(self.list.items[0 .. self.list.len - 1 :0]) {
+        return self.list.span()[0..self.len() :0];
     }
 
+    /// Deprecated: use `span`
+    pub fn toSlice(self: Buffer) [:0]u8 {
+        return self.span();
+    }
+
+    /// Deprecated: use `span`
     pub fn toSliceConst(self: Buffer) [:0]const u8 {
-        return self.list.toSliceConst()[0..self.len() :0];
+        return self.span();
     }
 
     pub fn shrink(self: *Buffer, new_len: usize) void {
@@ -147,10 +149,23 @@ pub const Buffer = struct {
         try self.resize(m.len);
         mem.copy(u8, self.list.toSlice(), m);
     }
+
+    pub fn outStream(self: *Buffer) std.io.OutStream(*Buffer, error{OutOfMemory}, appendWrite) {
+        return .{ .context = self };
+    }
+
+    /// Same as `append` except it returns the number of bytes written, which is always the same
+    /// as `m.len`. The purpose of this function existing is to match `std.io.OutStream` API.
+    pub fn appendWrite(self: *Buffer, m: []const u8) !usize {
+        try self.append(m);
+        return m.len;
+    }
 };
 
 test "simple Buffer" {
-    var buf = try Buffer.init(debug.global_allocator, "");
+    var buf = try Buffer.init(testing.allocator, "");
+    defer buf.deinit();
+
     testing.expect(buf.len() == 0);
     try buf.append("hello");
     try buf.append(" ");
@@ -159,6 +174,7 @@ test "simple Buffer" {
     testing.expect(mem.eql(u8, mem.toSliceConst(u8, buf.toSliceConst().ptr), buf.toSliceConst()));
 
     var buf2 = try Buffer.initFromBuffer(buf);
+    defer buf2.deinit();
     testing.expect(buf.eql(buf2.toSliceConst()));
 
     testing.expect(buf.startsWith("hell"));
@@ -169,14 +185,16 @@ test "simple Buffer" {
 }
 
 test "Buffer.initSize" {
-    var buf = try Buffer.initSize(debug.global_allocator, 3);
+    var buf = try Buffer.initSize(testing.allocator, 3);
+    defer buf.deinit();
     testing.expect(buf.len() == 3);
     try buf.append("hello");
     testing.expect(mem.eql(u8, buf.toSliceConst()[3..], "hello"));
 }
 
 test "Buffer.initCapacity" {
-    var buf = try Buffer.initCapacity(debug.global_allocator, 10);
+    var buf = try Buffer.initCapacity(testing.allocator, 10);
+    defer buf.deinit();
     testing.expect(buf.len() == 0);
     testing.expect(buf.capacity() >= 10);
     const old_cap = buf.capacity();
@@ -184,4 +202,24 @@ test "Buffer.initCapacity" {
     testing.expect(buf.len() == 5);
     testing.expect(buf.capacity() == old_cap);
     testing.expect(mem.eql(u8, buf.toSliceConst(), "hello"));
+}
+
+test "Buffer.print" {
+    var buf = try Buffer.init(testing.allocator, "");
+    defer buf.deinit();
+
+    try buf.outStream().print("Hello {} the {}", .{ 2, "world" });
+    testing.expect(buf.eql("Hello 2 the world"));
+}
+
+test "Buffer.outStream" {
+    var buffer = try Buffer.initSize(testing.allocator, 0);
+    defer buffer.deinit();
+    const buf_stream = buffer.outStream();
+
+    const x: i32 = 42;
+    const y: i32 = 1234;
+    try buf_stream.print("x: {}\ny: {}\n", .{ x, y });
+
+    testing.expect(mem.eql(u8, buffer.toSlice(), "x: 42\ny: 1234\n"));
 }

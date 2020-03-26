@@ -4,7 +4,9 @@ usingnamespace @import("../windows/bits.zig");
 const ws2_32 = @import("../windows/ws2_32.zig");
 
 pub const fd_t = HANDLE;
+pub const ino_t = LARGE_INTEGER;
 pub const pid_t = HANDLE;
+pub const mode_t = u0;
 
 pub const PATH_MAX = 260;
 

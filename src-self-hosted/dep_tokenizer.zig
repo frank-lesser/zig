@@ -306,12 +306,12 @@ pub const Tokenizer = struct {
 
     fn errorPosition(self: *Tokenizer, position: usize, bytes: []const u8, comptime fmt: []const u8, args: var) Error {
         var buffer = try std.Buffer.initSize(&self.arena.allocator, 0);
-        std.fmt.format(&buffer, anyerror, std.Buffer.append, fmt, args) catch {};
+        try buffer.outStream().print(fmt, args);
         try buffer.append(" '");
         var out = makeOutput(std.Buffer.append, &buffer);
         try printCharValues(&out, bytes);
         try buffer.append("'");
-        std.fmt.format(&buffer, anyerror, std.Buffer.append, " at position {}", .{position - (bytes.len - 1)}) catch {};
+        try buffer.outStream().print(" at position {}", .{position - (bytes.len - 1)});
         self.error_text = buffer.toSlice();
         return Error.InvalidInput;
     }
@@ -319,10 +319,9 @@ pub const Tokenizer = struct {
     fn errorIllegalChar(self: *Tokenizer, position: usize, char: u8, comptime fmt: []const u8, args: var) Error {
         var buffer = try std.Buffer.initSize(&self.arena.allocator, 0);
         try buffer.append("illegal char ");
-        var out = makeOutput(std.Buffer.append, &buffer);
-        try printUnderstandableChar(&out, char);
-        std.fmt.format(&buffer, anyerror, std.Buffer.append, " at position {}", .{position}) catch {};
-        if (fmt.len != 0) std.fmt.format(&buffer, anyerror, std.Buffer.append, ": " ++ fmt, args) catch {};
+        try printUnderstandableChar(&buffer, char);
+        try buffer.outStream().print(" at position {}", .{position});
+        if (fmt.len != 0) try buffer.outStream().print(": " ++ fmt, args);
         self.error_text = buffer.toSlice();
         return Error.InvalidInput;
     }
@@ -894,7 +893,7 @@ fn printSection(out: var, label: []const u8, bytes: []const u8) !void {
 
 fn printLabel(out: var, label: []const u8, bytes: []const u8) !void {
     var buf: [80]u8 = undefined;
-    var text = try std.fmt.bufPrint(buf[0..], "{} {} bytes ", .{label, bytes.len});
+    var text = try std.fmt.bufPrint(buf[0..], "{} {} bytes ", .{ label, bytes.len });
     try out.write(text);
     var i: usize = text.len;
     const end = 79;
@@ -996,13 +995,13 @@ fn printCharValues(out: var, bytes: []const u8) !void {
     }
 }
 
-fn printUnderstandableChar(out: var, char: u8) !void {
+fn printUnderstandableChar(buffer: *std.Buffer, char: u8) !void {
     if (!std.ascii.isPrint(char) or char == ' ') {
-        std.fmt.format(out.context, anyerror, out.output, "\\x{X:2}", .{char}) catch {};
+        try buffer.outStream().print("\\x{X:2}", .{char});
     } else {
-        try out.write("'");
-        try out.write(&[_]u8{printable_char_tab[char]});
-        try out.write("'");
+        try buffer.append("'");
+        try buffer.appendByte(printable_char_tab[char]);
+        try buffer.append("'");
     }
 }
 
@@ -1021,34 +1020,20 @@ comptime {
 // output: must be a function that takes a `self` idiom parameter
 // and a bytes parameter
 // context: must be that self
-fn makeOutput(output: var, context: var) Output(@TypeOf(output)) {
-    return Output(@TypeOf(output)){
-        .output = output,
+fn makeOutput(comptime output: var, context: var) Output(output, @TypeOf(context)) {
+    return Output(output, @TypeOf(context)){
         .context = context,
     };
 }
 
-fn Output(comptime T: type) type {
-    const args = switch (@typeInfo(T)) {
-        .Fn => |f| f.args,
-        else => @compileError("output parameter is not a function"),
-    };
-    if (args.len != 2) {
-        @compileError("output function must take 2 arguments");
-    }
-    const at0 = args[0].arg_type orelse @compileError("output arg[0] does not have a type");
-    const at1 = args[1].arg_type orelse @compileError("output arg[1] does not have a type");
-    const arg1p = switch (@typeInfo(at1)) {
-        .Pointer => |p| p,
-        else => @compileError("output arg[1] is not a slice"),
-    };
-    if (arg1p.child != u8) @compileError("output arg[1] is not a u8 slice");
+fn Output(comptime output_func: var, comptime Context: type) type {
     return struct {
-        output: T,
-        context: at0,
+        context: Context,
 
-        fn write(self: *@This(), bytes: []const u8) !void {
-            try self.output(self.context, bytes);
+        pub const output = output_func;
+
+        fn write(self: @This(), bytes: []const u8) !void {
+            try output_func(self.context, bytes);
         }
     };
 }

@@ -237,9 +237,11 @@ fn testStruct() void {
     const struct_info = @typeInfo(TestStruct);
     expect(@as(TypeId, struct_info) == TypeId.Struct);
     expect(struct_info.Struct.layout == TypeInfo.ContainerLayout.Packed);
-    expect(struct_info.Struct.fields.len == 3);
+    expect(struct_info.Struct.fields.len == 4);
     expect(struct_info.Struct.fields[1].offset == null);
     expect(struct_info.Struct.fields[2].field_type == *TestStruct);
+    expect(struct_info.Struct.fields[2].default_value == null);
+    expect(struct_info.Struct.fields[3].default_value.? == 4);
     expect(struct_info.Struct.decls.len == 2);
     expect(struct_info.Struct.decls[0].is_pub);
     expect(!struct_info.Struct.decls[0].data.Fn.is_extern);
@@ -254,6 +256,7 @@ const TestStruct = packed struct {
     fieldA: usize,
     fieldB: void,
     fieldC: *Self,
+    fieldD: u32 = 4,
 
     pub fn foo(self: *const Self) void {}
 };
@@ -371,4 +374,20 @@ test "data field is a compile-time value" {
 test "sentinel of opaque pointer type" {
     const c_void_info = @typeInfo(*c_void);
     expect(c_void_info.Pointer.sentinel == null);
+}
+
+test "@typeInfo does not force declarations into existence" {
+    const S = struct {
+        x: i32,
+
+        fn doNotReferenceMe() void {
+            @compileError("test failed");
+        }
+    };
+    comptime expect(@typeInfo(S).Struct.fields.len == 1);
+}
+
+test "defaut value for a var-typed field" {
+    const S = struct { x: var };
+    expect(@typeInfo(S).Struct.fields[0].default_value == null);
 }

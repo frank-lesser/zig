@@ -17,7 +17,7 @@ const is_msvc = switch (builtin.abi) {
     .msvc => true,
     else => false,
 };
-const is_freestanding = switch (builtin.os) {
+const is_freestanding = switch (builtin.os.tag) {
     .freestanding => true,
     else => false,
 };
@@ -32,8 +32,6 @@ comptime {
         @export(strlen, .{ .name = "strlen", .linkage = .Strong });
     } else if (is_msvc) {
         @export(_fltused, .{ .name = "_fltused", .linkage = .Strong });
-    } else if (builtin.arch == builtin.Arch.arm and builtin.os == .linux) {
-        @export(std.os.linux.getThreadPointer, .{ .name = "__aeabi_read_tp", .linkage = .Strong });
     }
 }
 
@@ -49,7 +47,7 @@ fn strcmp(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.C) c_int {
 }
 
 fn strlen(s: [*:0]const u8) callconv(.C) usize {
-    return std.mem.len(u8, s);
+    return std.mem.len(s);
 }
 
 fn strncmp(_l: [*:0]const u8, _r: [*:0]const u8, _n: usize) callconv(.C) c_int {
@@ -83,7 +81,7 @@ pub fn panic(msg: []const u8, error_return_trace: ?*builtin.StackTrace) noreturn
         @setCold(true);
         std.debug.panic("{}", .{msg});
     }
-    if (builtin.os != .freestanding and builtin.os != .other) {
+    if (builtin.os.tag != .freestanding and builtin.os.tag != .other) {
         std.os.abort();
     }
     while (true) {}
@@ -180,11 +178,11 @@ test "test_bcmp" {
 comptime {
     if (builtin.mode != builtin.Mode.ReleaseFast and
         builtin.mode != builtin.Mode.ReleaseSmall and
-        builtin.os != builtin.Os.windows)
+        builtin.os.tag != .windows)
     {
         @export(__stack_chk_fail, .{ .name = "__stack_chk_fail" });
     }
-    if (builtin.os == builtin.Os.linux) {
+    if (builtin.os.tag == .linux) {
         @export(clone, .{ .name = "clone" });
     }
 }
@@ -513,7 +511,7 @@ export fn roundf(a: f32) f32 {
 fn generic_fmod(comptime T: type, x: T, y: T) T {
     @setRuntimeSafety(false);
 
-    const uint = @IntType(false, T.bit_count);
+    const uint = std.meta.IntType(false, T.bit_count);
     const log2uint = math.Log2Int(uint);
     const digits = if (T == f32) 23 else 52;
     const exp_bits = if (T == f32) 9 else 12;

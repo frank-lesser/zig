@@ -73,7 +73,7 @@ pub const Mutex = if (builtin.single_threaded)
             return self.tryAcquire() orelse @panic("deadlock detected");
         }
     }
-else if (builtin.os == .windows)
+else if (builtin.os.tag == .windows)
 // https://locklessinc.com/articles/keyed_events/
     extern union {
         locked: u8,
@@ -126,7 +126,7 @@ else if (builtin.os == .windows)
                     // then unset the WAKE bit so that another unlocker can wake up a thread.
                 } else if (@cmpxchgWeak(u32, &self.waiters, waiters, (waiters + WAIT) | 1, .Monotonic, .Monotonic) == null) {
                     const rc = windows.ntdll.NtWaitForKeyedEvent(handle, key, windows.FALSE, null);
-                    assert(rc == 0);
+                    assert(rc == .SUCCESS);
                     _ = @atomicRmw(u32, &self.waiters, .Sub, WAKE, .Monotonic);
                 }
             }
@@ -154,14 +154,14 @@ else if (builtin.os == .windows)
                     // try to decrease the waiter count & set the WAKE bit meaning a thread is waking up
                     if (@cmpxchgWeak(u32, &self.mutex.waiters, waiters, waiters - WAIT + WAKE, .Release, .Monotonic) == null) {
                         const rc = windows.ntdll.NtReleaseKeyedEvent(handle, key, windows.FALSE, null);
-                        assert(rc == 0);
+                        assert(rc == .SUCCESS);
                         return;
                     }
                 }
             }
         };
     }
-else if (builtin.link_libc or builtin.os == .linux)
+else if (builtin.link_libc or builtin.os.tag == .linux)
 // stack-based version of https://github.com/Amanieu/parking_lot/blob/master/core/src/word_lock.rs
     struct {
         state: usize,
@@ -306,12 +306,6 @@ const TestContext = struct {
 };
 
 test "std.Mutex" {
-    var plenty_of_memory = try std.heap.page_allocator.alloc(u8, 300 * 1024);
-    defer std.heap.page_allocator.free(plenty_of_memory);
-
-    var fixed_buffer_allocator = std.heap.ThreadSafeFixedBufferAllocator.init(plenty_of_memory);
-    var a = &fixed_buffer_allocator.allocator;
-
     var mutex = Mutex.init();
     defer mutex.deinit();
 

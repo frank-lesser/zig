@@ -1,7 +1,5 @@
 const std = @import("../std.zig");
 const builtin = @import("builtin");
-const AtomicOrder = builtin.AtomicOrder;
-const AtomicRmwOp = builtin.AtomicRmwOp;
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 
@@ -104,20 +102,25 @@ pub fn Queue(comptime T: type) type {
         }
 
         pub fn dump(self: *Self) void {
-            var stderr_file = std.io.getStdErr() catch return;
-            const stderr = &stderr_file.outStream().stream;
-            const Error = @typeInfo(@TypeOf(stderr)).Pointer.child.Error;
-
-            self.dumpToStream(Error, stderr) catch return;
+            self.dumpToStream(std.io.getStdErr().outStream()) catch return;
         }
 
-        pub fn dumpToStream(self: *Self, comptime Error: type, stream: *std.io.OutStream(Error)) Error!void {
+        pub fn dumpToStream(self: *Self, stream: var) !void {
             const S = struct {
-                fn dumpRecursive(s: *std.io.OutStream(Error), optional_node: ?*Node, indent: usize) Error!void {
+                fn dumpRecursive(
+                    s: var,
+                    optional_node: ?*Node,
+                    indent: usize,
+                    comptime depth: comptime_int,
+                ) !void {
                     try s.writeByteNTimes(' ', indent);
                     if (optional_node) |node| {
                         try s.print("0x{x}={}\n", .{ @ptrToInt(node), node.data });
-                        try dumpRecursive(s, node.next, indent + 1);
+                        if (depth == 0) {
+                            try s.print("(max depth)\n", .{});
+                            return;
+                        }
+                        try dumpRecursive(s, node.next, indent + 1, depth - 1);
                     } else {
                         try s.print("(null)\n", .{});
                     }
@@ -127,9 +130,9 @@ pub fn Queue(comptime T: type) type {
             defer held.release();
 
             try stream.print("head: ", .{});
-            try S.dumpRecursive(stream, self.head, 0);
+            try S.dumpRecursive(stream, self.head, 0, 4);
             try stream.print("tail: ", .{});
-            try S.dumpRecursive(stream, self.tail, 0);
+            try S.dumpRecursive(stream, self.tail, 0, 4);
         }
     };
 }
@@ -140,7 +143,7 @@ const Context = struct {
     put_sum: isize,
     get_sum: isize,
     get_count: usize,
-    puts_done: u8, // TODO make this a bool
+    puts_done: bool,
 };
 
 // TODO add lazy evaluated build options and then put puts_per_thread behind
@@ -164,7 +167,7 @@ test "std.atomic.Queue" {
         .queue = &queue,
         .put_sum = 0,
         .get_sum = 0,
-        .puts_done = 0,
+        .puts_done = false,
         .get_count = 0,
     };
 
@@ -177,7 +180,7 @@ test "std.atomic.Queue" {
             }
         }
         expect(!context.queue.isEmpty());
-        context.puts_done = 1;
+        context.puts_done = true;
         {
             var i: usize = 0;
             while (i < put_thread_count) : (i += 1) {
@@ -199,7 +202,7 @@ test "std.atomic.Queue" {
 
         for (putters) |t|
             t.wait();
-        @atomicStore(u8, &context.puts_done, 1, AtomicOrder.SeqCst);
+        @atomicStore(bool, &context.puts_done, true, .SeqCst);
         for (getters) |t|
             t.wait();
 
@@ -226,25 +229,25 @@ fn startPuts(ctx: *Context) u8 {
         std.time.sleep(1); // let the os scheduler be our fuzz
         const x = @bitCast(i32, r.random.scalar(u32));
         const node = ctx.allocator.create(Queue(i32).Node) catch unreachable;
-        node.* = Queue(i32).Node{
+        node.* = .{
             .prev = undefined,
             .next = undefined,
             .data = x,
         };
         ctx.queue.put(node);
-        _ = @atomicRmw(isize, &ctx.put_sum, builtin.AtomicRmwOp.Add, x, AtomicOrder.SeqCst);
+        _ = @atomicRmw(isize, &ctx.put_sum, .Add, x, .SeqCst);
     }
     return 0;
 }
 
 fn startGets(ctx: *Context) u8 {
     while (true) {
-        const last = @atomicLoad(u8, &ctx.puts_done, builtin.AtomicOrder.SeqCst) == 1;
+        const last = @atomicLoad(bool, &ctx.puts_done, .SeqCst);
 
         while (ctx.queue.get()) |node| {
             std.time.sleep(1); // let the os scheduler be our fuzz
-            _ = @atomicRmw(isize, &ctx.get_sum, builtin.AtomicRmwOp.Add, node.data, builtin.AtomicOrder.SeqCst);
-            _ = @atomicRmw(usize, &ctx.get_count, builtin.AtomicRmwOp.Add, 1, builtin.AtomicOrder.SeqCst);
+            _ = @atomicRmw(isize, &ctx.get_sum, .Add, node.data, .SeqCst);
+            _ = @atomicRmw(usize, &ctx.get_count, .Add, 1, .SeqCst);
         }
 
         if (last) return 0;
@@ -317,17 +320,16 @@ test "std.atomic.Queue single-threaded" {
 
 test "std.atomic.Queue dump" {
     const mem = std.mem;
-    const SliceOutStream = std.io.SliceOutStream;
     var buffer: [1024]u8 = undefined;
     var expected_buffer: [1024]u8 = undefined;
-    var sos = SliceOutStream.init(buffer[0..]);
+    var fbs = std.io.fixedBufferStream(&buffer);
 
     var queue = Queue(i32).init();
 
     // Test empty stream
-    sos.reset();
-    try queue.dumpToStream(SliceOutStream.Error, &sos.stream);
-    expect(mem.eql(u8, buffer[0..sos.pos],
+    fbs.reset();
+    try queue.dumpToStream(fbs.outStream());
+    expect(mem.eql(u8, buffer[0..fbs.pos],
         \\head: (null)
         \\tail: (null)
         \\
@@ -341,8 +343,8 @@ test "std.atomic.Queue dump" {
     };
     queue.put(&node_0);
 
-    sos.reset();
-    try queue.dumpToStream(SliceOutStream.Error, &sos.stream);
+    fbs.reset();
+    try queue.dumpToStream(fbs.outStream());
 
     var expected = try std.fmt.bufPrint(expected_buffer[0..],
         \\head: 0x{x}=1
@@ -351,7 +353,7 @@ test "std.atomic.Queue dump" {
         \\ (null)
         \\
     , .{ @ptrToInt(queue.head), @ptrToInt(queue.tail) });
-    expect(mem.eql(u8, buffer[0..sos.pos], expected));
+    expect(mem.eql(u8, buffer[0..fbs.pos], expected));
 
     // Test a stream with two elements
     var node_1 = Queue(i32).Node{
@@ -361,8 +363,8 @@ test "std.atomic.Queue dump" {
     };
     queue.put(&node_1);
 
-    sos.reset();
-    try queue.dumpToStream(SliceOutStream.Error, &sos.stream);
+    fbs.reset();
+    try queue.dumpToStream(fbs.outStream());
 
     expected = try std.fmt.bufPrint(expected_buffer[0..],
         \\head: 0x{x}=1
@@ -372,5 +374,5 @@ test "std.atomic.Queue dump" {
         \\ (null)
         \\
     , .{ @ptrToInt(queue.head), @ptrToInt(queue.head.?.next), @ptrToInt(queue.tail) });
-    expect(mem.eql(u8, buffer[0..sos.pos], expected));
+    expect(mem.eql(u8, buffer[0..fbs.pos], expected));
 }

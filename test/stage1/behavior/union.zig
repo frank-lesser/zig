@@ -1,5 +1,6 @@
 const std = @import("std");
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 
 const Value = union(enum) {
     Int: u64,
@@ -531,7 +532,7 @@ var glbl: Foo1 = undefined;
 
 test "global union with single field is correctly initialized" {
     glbl = Foo1{
-        .f = @memberType(Foo1, 0){ .x = 123 },
+        .f = @typeInfo(Foo1).Union.fields[0].field_type{ .x = 123 },
     };
     expect(glbl.f.x == 123);
 }
@@ -619,4 +620,49 @@ test "0-sized extern union definition" {
     };
 
     expect(U.f == 1);
+}
+
+test "union initializer generates padding only if needed" {
+    const U = union(enum) {
+        A: u24,
+    };
+
+    var v = U{ .A = 532 };
+    expect(v.A == 532);
+}
+
+test "runtime tag name with single field" {
+    const U = union(enum) {
+        A: i32,
+    };
+
+    var v = U{ .A = 42 };
+    expect(std.mem.eql(u8, @tagName(v), "A"));
+}
+
+test "cast from anonymous struct to union" {
+    const S = struct {
+        const U = union(enum) {
+            A: u32,
+            B: []const u8,
+            C: void,
+        };
+        fn doTheTest() void {
+            var y: u32 = 42;
+            const t0 = .{ .A = 123 };
+            const t1 = .{ .B = "foo" };
+            const t2 = .{ .C = {} };
+            const t3 = .{ .A = y };
+            const x0: U = t0;
+            var x1: U = t1;
+            const x2: U = t2;
+            var x3: U = t3;
+            expect(x0.A == 123);
+            expect(std.mem.eql(u8, x1.B, "foo"));
+            expect(x2 == .C);
+            expect(x3.A == y);
+        }
+    };
+    S.doTheTest();
+    comptime S.doTheTest();
 }

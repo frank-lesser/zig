@@ -3,6 +3,7 @@ const maxInt = std.math.maxInt;
 
 pub const fd_t = c_int;
 pub const pid_t = c_int;
+pub const mode_t = c_uint;
 
 pub const socklen_t = u32;
 
@@ -45,7 +46,7 @@ pub const RTLD_NOLOAD = 0x02000;
 
 pub const dl_phdr_info = extern struct {
     dlpi_addr: usize,
-    dlpi_name: ?[*]const u8,
+    dlpi_name: ?[*:0]const u8,
     dlpi_phdr: [*]std.elf.Phdr,
     dlpi_phnum: u16,
 };
@@ -97,6 +98,7 @@ pub const msghdr_const = extern struct {
 };
 
 pub const off_t = i64;
+pub const ino_t = u64;
 
 /// Renamed to Stat to not conflict with the stat function.
 /// atime, mtime, and ctime have functions to return `timespec`,
@@ -106,7 +108,7 @@ pub const off_t = i64;
 /// methods to accomplish this.
 pub const Stat = extern struct {
     dev: u64,
-    ino: u64,
+    ino: ino_t,
     nlink: usize,
 
     mode: u16,
@@ -352,6 +354,8 @@ pub const F_SETOWN_EX = 15;
 pub const F_GETOWN_EX = 16;
 
 pub const F_GETOWNER_UIDS = 17;
+
+pub const FD_CLOEXEC = 1;
 
 pub const SEEK_SET = 0;
 pub const SEEK_CUR = 1;

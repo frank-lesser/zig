@@ -18,7 +18,7 @@ pub const Address = extern union {
     in6: os.sockaddr_in6,
     un: if (has_unix_sockets) os.sockaddr_un else void,
 
-    // TODO this crashed the compiler
+    // TODO this crashed the compiler. https://github.com/ziglang/zig/issues/3512
     //pub const localhost = initIp4(parseIp4("127.0.0.1") catch unreachable, 0);
 
     pub fn parseIp(name: []const u8, port: u16) !Address {
@@ -120,7 +120,7 @@ pub const Address = extern union {
                 ip_slice[10] = 0xff;
                 ip_slice[11] = 0xff;
 
-                const ptr = @sliceToBytes(@as(*const [1]u32, &addr)[0..]);
+                const ptr = mem.sliceAsBytes(@as(*const [1]u32, &addr)[0..]);
 
                 ip_slice[12] = ptr[0];
                 ip_slice[13] = ptr[1];
@@ -164,7 +164,7 @@ pub const Address = extern union {
                 .addr = undefined,
             },
         };
-        const out_ptr = @sliceToBytes(@as(*[1]u32, &result.in.addr)[0..]);
+        const out_ptr = mem.sliceAsBytes(@as(*[1]u32, &result.in.addr)[0..]);
 
         var x: u8 = 0;
         var index: u8 = 0;
@@ -269,15 +269,13 @@ pub const Address = extern union {
         self: Address,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
-        context: var,
-        comptime Errors: type,
-        output: fn (@TypeOf(context), []const u8) Errors!void,
+        out_stream: var,
     ) !void {
         switch (self.any.family) {
             os.AF_INET => {
                 const port = mem.bigToNative(u16, self.in.port);
                 const bytes = @ptrCast(*const [4]u8, &self.in.addr);
-                try std.fmt.format(context, Errors, output, "{}.{}.{}.{}:{}", .{
+                try std.fmt.format(out_stream, "{}.{}.{}.{}:{}", .{
                     bytes[0],
                     bytes[1],
                     bytes[2],
@@ -288,7 +286,7 @@ pub const Address = extern union {
             os.AF_INET6 => {
                 const port = mem.bigToNative(u16, self.in6.port);
                 if (mem.eql(u8, self.in6.addr[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
-                    try std.fmt.format(context, Errors, output, "[::ffff:{}.{}.{}.{}]:{}", .{
+                    try std.fmt.format(out_stream, "[::ffff:{}.{}.{}.{}]:{}", .{
                         self.in6.addr[12],
                         self.in6.addr[13],
                         self.in6.addr[14],
@@ -308,30 +306,30 @@ pub const Address = extern union {
                         break :blk buf;
                     },
                 };
-                try output(context, "[");
+                try out_stream.writeAll("[");
                 var i: usize = 0;
                 var abbrv = false;
                 while (i < native_endian_parts.len) : (i += 1) {
                     if (native_endian_parts[i] == 0) {
                         if (!abbrv) {
-                            try output(context, if (i == 0) "::" else ":");
+                            try out_stream.writeAll(if (i == 0) "::" else ":");
                             abbrv = true;
                         }
                         continue;
                     }
-                    try std.fmt.format(context, Errors, output, "{x}", .{native_endian_parts[i]});
+                    try std.fmt.format(out_stream, "{x}", .{native_endian_parts[i]});
                     if (i != native_endian_parts.len - 1) {
-                        try output(context, ":");
+                        try out_stream.writeAll(":");
                     }
                 }
-                try std.fmt.format(context, Errors, output, "]:{}", .{port});
+                try std.fmt.format(out_stream, "]:{}", .{port});
             },
             os.AF_UNIX => {
                 if (!has_unix_sockets) {
                     unreachable;
                 }
 
-                try std.fmt.format(context, Errors, output, "{}", .{&self.un.path});
+                try std.fmt.format(out_stream, "{}", .{&self.un.path});
             },
             else => unreachable,
         }
@@ -352,7 +350,7 @@ pub const Address = extern union {
                     unreachable;
                 }
 
-                const path_len = std.mem.len(u8, @ptrCast([*:0]const u8, &self.un.path));
+                const path_len = std.mem.len(@ptrCast([*:0]const u8, &self.un.path));
                 return @intCast(os.socklen_t, @sizeOf(os.sockaddr_un) - self.un.path.len + path_len);
             },
             else => unreachable,
@@ -361,7 +359,7 @@ pub const Address = extern union {
 };
 
 pub fn connectUnixSocket(path: []const u8) !fs.File {
-    const opt_non_block = if (std.io.mode == .evented) os.SOCK_NONBLOCK else 0;
+    const opt_non_block = if (std.io.is_async) os.SOCK_NONBLOCK else 0;
     const sockfd = try os.socket(
         os.AF_UNIX,
         os.SOCK_STREAM | os.SOCK_CLOEXEC | opt_non_block,
@@ -377,7 +375,10 @@ pub fn connectUnixSocket(path: []const u8) !fs.File {
         addr.getOsSockLen(),
     );
 
-    return fs.File.openHandle(sockfd);
+    return fs.File{
+        .handle = sockfd,
+        .io_mode = std.io.mode,
+    };
 }
 
 pub const AddressList = struct {
@@ -412,7 +413,7 @@ pub fn tcpConnectToAddress(address: Address) !fs.File {
     errdefer os.close(sockfd);
     try os.connect(sockfd, &address.any, address.getOsSockLen());
 
-    return fs.File{ .handle = sockfd };
+    return fs.File{ .handle = sockfd, .io_mode = std.io.mode };
 }
 
 /// Call `AddressList.deinit` on the result.
@@ -452,18 +453,18 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
         };
         var res: *os.addrinfo = undefined;
         switch (os.system.getaddrinfo(name_c.ptr, @ptrCast([*:0]const u8, port_c.ptr), &hints, &res)) {
-            0 => {},
-            c.EAI_ADDRFAMILY => return error.HostLacksNetworkAddresses,
-            c.EAI_AGAIN => return error.TemporaryNameServerFailure,
-            c.EAI_BADFLAGS => unreachable, // Invalid hints
-            c.EAI_FAIL => return error.NameServerFailure,
-            c.EAI_FAMILY => return error.AddressFamilyNotSupported,
-            c.EAI_MEMORY => return error.OutOfMemory,
-            c.EAI_NODATA => return error.HostLacksNetworkAddresses,
-            c.EAI_NONAME => return error.UnknownHostName,
-            c.EAI_SERVICE => return error.ServiceUnavailable,
-            c.EAI_SOCKTYPE => unreachable, // Invalid socket type requested in hints
-            c.EAI_SYSTEM => switch (os.errno(-1)) {
+            @intToEnum(os.system.EAI, 0) => {},
+            .ADDRFAMILY => return error.HostLacksNetworkAddresses,
+            .AGAIN => return error.TemporaryNameServerFailure,
+            .BADFLAGS => unreachable, // Invalid hints
+            .FAIL => return error.NameServerFailure,
+            .FAMILY => return error.AddressFamilyNotSupported,
+            .MEMORY => return error.OutOfMemory,
+            .NODATA => return error.HostLacksNetworkAddresses,
+            .NONAME => return error.UnknownHostName,
+            .SERVICE => return error.ServiceUnavailable,
+            .SOCKTYPE => unreachable, // Invalid socket type requested in hints
+            .SYSTEM => switch (os.errno(-1)) {
                 else => |e| return os.unexpectedErrno(e),
             },
             else => unreachable,
@@ -498,7 +499,7 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
 
         return result;
     }
-    if (builtin.os == .linux) {
+    if (builtin.os.tag == .linux) {
         const flags = std.c.AI_NUMERICSERV;
         const family = os.AF_UNSPEC;
         var lookup_addrs = std.ArrayList(LookupAddr).init(allocator);
@@ -611,8 +612,7 @@ fn linuxLookupName(
         } else {
             mem.copy(u8, &sa6.addr, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff");
             mem.copy(u8, &da6.addr, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff");
-            // TODO https://github.com/ziglang/zig/issues/863
-            mem.writeIntNative(u32, @ptrCast(*[4]u8, da6.addr[12..].ptr), addr.addr.in.addr);
+            mem.writeIntNative(u32, da6.addr[12..], addr.addr.in.addr);
             da4.addr = addr.addr.in.addr;
             da = @ptrCast(*os.sockaddr, &da4);
             dalen = @sizeOf(os.sockaddr_in);
@@ -813,14 +813,14 @@ fn linuxLookupNameFromHosts(
     };
     defer file.close();
 
-    const stream = &std.io.BufferedInStream(fs.File.ReadError).init(&file.inStream().stream).stream;
+    const stream = std.io.bufferedInStream(file.inStream()).inStream();
     var line_buf: [512]u8 = undefined;
     while (stream.readUntilDelimiterOrEof(&line_buf, '\n') catch |err| switch (err) {
         error.StreamTooLong => blk: {
             // Skip to the delimiter in the stream, to fix parsing
             try stream.skipUntilDelimiterOrEof('\n');
             // Use the truncated line. A truncated comment or hostname will be handled correctly.
-            break :blk line_buf[0..];
+            break :blk &line_buf;
         },
         else => |e| return e,
     }) |line| {
@@ -957,7 +957,10 @@ fn linuxLookupNameFromDns(
         }
     }
 
-    var ap = [2][]u8{ apbuf[0][0..0], apbuf[1][0..0] };
+    var ap = [2][]u8{ apbuf[0], apbuf[1] };
+    ap[0].len = 0;
+    ap[1].len = 0;
+
     try resMSendRc(qp[0..nq], ap[0..nq], apbuf[0..nq], rc);
 
     var i: usize = 0;
@@ -1007,7 +1010,7 @@ fn getResolvConf(allocator: *mem.Allocator, rc: *ResolvConf) !void {
     };
     defer file.close();
 
-    const stream = &std.io.BufferedInStream(fs.File.ReadError).init(&file.inStream().stream).stream;
+    const stream = std.io.bufferedInStream(file.inStream()).inStream();
     var line_buf: [512]u8 = undefined;
     while (stream.readUntilDelimiterOrEof(&line_buf, '\n') catch |err| switch (err) {
         error.StreamTooLong => blk: {
@@ -1379,7 +1382,10 @@ pub const StreamServer = struct {
         var adr_len: os.socklen_t = @sizeOf(Address);
         if (os.accept4(self.sockfd.?, &accepted_addr.any, &adr_len, accept_flags)) |fd| {
             return Connection{
-                .file = fs.File.openHandle(fd),
+                .file = fs.File{
+                    .handle = fd,
+                    .io_mode = std.io.mode,
+                },
                 .address = accepted_addr,
             };
         } else |err| switch (err) {

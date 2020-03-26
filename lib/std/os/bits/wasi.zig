@@ -130,6 +130,7 @@ pub const EVENTTYPE_FD_WRITE: eventtype_t = 2;
 pub const exitcode_t = u32;
 
 pub const fd_t = u32;
+pub const mode_t = u32;
 
 pub const fdflags_t = u16;
 pub const FDFLAG_APPEND: fdflags_t = 0x0001;
@@ -177,6 +178,7 @@ pub const FILESTAT_SET_MTIM: fstflags_t = 0x0004;
 pub const FILESTAT_SET_MTIM_NOW: fstflags_t = 0x0008;
 
 pub const inode_t = u64;
+pub const ino_t = inode_t;
 
 pub const linkcount_t = u32;
 

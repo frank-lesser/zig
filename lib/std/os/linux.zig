@@ -6,7 +6,7 @@
 //   provide `rename` when only the `renameat` syscall exists.
 // * Does not support POSIX thread cancellation.
 const std = @import("../std.zig");
-const builtin = @import("builtin");
+const builtin = std.builtin;
 const assert = std.debug.assert;
 const maxInt = std.math.maxInt;
 const elf = std.elf;
@@ -39,6 +39,13 @@ pub fn getauxval(index: usize) usize {
     return 0;
 }
 
+// Some architectures require 64bit parameters for some syscalls to be passed in
+// even-aligned register pair
+const require_aligned_register_pair = //
+    std.Target.current.cpu.arch.isMIPS() or
+    std.Target.current.cpu.arch.isARM() or
+    std.Target.current.cpu.arch.isThumb();
+
 /// Get the errno from a syscall return value, or 0 for no error.
 pub fn getErrno(r: usize) u12 {
     const signed_r = @bitCast(isize, r);
@@ -67,6 +74,10 @@ pub fn dup3(old: i32, new: i32, flags: u32) usize {
 
 pub fn chdir(path: [*:0]const u8) usize {
     return syscall1(SYS_chdir, @ptrToInt(path));
+}
+
+pub fn fchdir(fd: fd_t) usize {
+    return syscall1(SYS_fchdir, @bitCast(usize, @as(isize, fd)));
 }
 
 pub fn chroot(path: [*:0]const u8) usize {
@@ -316,8 +327,37 @@ pub fn symlinkat(existing: [*:0]const u8, newfd: i32, newpath: [*:0]const u8) us
     return syscall3(SYS_symlinkat, @ptrToInt(existing), @bitCast(usize, @as(isize, newfd)), @ptrToInt(newpath));
 }
 
-pub fn pread(fd: i32, buf: [*]u8, count: usize, offset: usize) usize {
-    return syscall4(SYS_pread, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), count, offset);
+pub fn pread(fd: i32, buf: [*]u8, count: usize, offset: u64) usize {
+    if (@hasDecl(@This(), "SYS_pread64")) {
+        if (require_aligned_register_pair) {
+            return syscall6(
+                SYS_pread64,
+                @bitCast(usize, @as(isize, fd)),
+                @ptrToInt(buf),
+                count,
+                0,
+                @truncate(usize, offset),
+                @truncate(usize, offset >> 32),
+            );
+        } else {
+            return syscall5(
+                SYS_pread64,
+                @bitCast(usize, @as(isize, fd)),
+                @ptrToInt(buf),
+                count,
+                @truncate(usize, offset),
+                @truncate(usize, offset >> 32),
+            );
+        }
+    } else {
+        return syscall4(
+            SYS_pread,
+            @bitCast(usize, @as(isize, fd)),
+            @ptrToInt(buf),
+            count,
+            offset,
+        );
+    }
 }
 
 pub fn access(path: [*:0]const u8, mode: u32) usize {
@@ -333,7 +373,7 @@ pub fn faccessat(dirfd: i32, path: [*:0]const u8, mode: u32, flags: u32) usize {
 }
 
 pub fn pipe(fd: *[2]i32) usize {
-    if (builtin.arch == .mipsel) {
+    if (comptime builtin.arch.isMIPS()) {
         return syscall_pipe(fd);
     } else if (@hasDecl(@This(), "SYS_pipe")) {
         return syscall1(SYS_pipe, @ptrToInt(fd));
@@ -350,8 +390,64 @@ pub fn write(fd: i32, buf: [*]const u8, count: usize) usize {
     return syscall3(SYS_write, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), count);
 }
 
+pub fn ftruncate(fd: i32, length: u64) usize {
+    if (@hasDecl(@This(), "SYS_ftruncate64")) {
+        if (require_aligned_register_pair) {
+            return syscall4(
+                SYS_ftruncate64,
+                @bitCast(usize, @as(isize, fd)),
+                0,
+                @truncate(usize, length),
+                @truncate(usize, length >> 32),
+            );
+        } else {
+            return syscall3(
+                SYS_ftruncate64,
+                @bitCast(usize, @as(isize, fd)),
+                @truncate(usize, length),
+                @truncate(usize, length >> 32),
+            );
+        }
+    } else {
+        return syscall2(
+            SYS_ftruncate,
+            @bitCast(usize, @as(isize, fd)),
+            @truncate(usize, length),
+        );
+    }
+}
+
 pub fn pwrite(fd: i32, buf: [*]const u8, count: usize, offset: usize) usize {
-    return syscall4(SYS_pwrite, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), count, offset);
+    if (@hasDecl(@This(), "SYS_pwrite64")) {
+        if (require_aligned_register_pair) {
+            return syscall6(
+                SYS_pwrite64,
+                @bitCast(usize, @as(isize, fd)),
+                @ptrToInt(buf),
+                count,
+                0,
+                @truncate(usize, offset),
+                @truncate(usize, offset >> 32),
+            );
+        } else {
+            return syscall5(
+                SYS_pwrite64,
+                @bitCast(usize, @as(isize, fd)),
+                @ptrToInt(buf),
+                count,
+                @truncate(usize, offset),
+                @truncate(usize, offset >> 32),
+            );
+        }
+    } else {
+        return syscall4(
+            SYS_pwrite,
+            @bitCast(usize, @as(isize, fd)),
+            @ptrToInt(buf),
+            count,
+            offset,
+        );
+    }
 }
 
 pub fn rename(old: [*:0]const u8, new: [*:0]const u8) usize {
@@ -369,17 +465,17 @@ pub fn renameat(oldfd: i32, oldpath: [*]const u8, newfd: i32, newpath: [*]const 
         return syscall4(
             SYS_renameat,
             @bitCast(usize, @as(isize, oldfd)),
-            @ptrToInt(old),
+            @ptrToInt(oldpath),
             @bitCast(usize, @as(isize, newfd)),
-            @ptrToInt(new),
+            @ptrToInt(newpath),
         );
     } else {
         return syscall5(
             SYS_renameat2,
             @bitCast(usize, @as(isize, oldfd)),
-            @ptrToInt(old),
+            @ptrToInt(oldpath),
             @bitCast(usize, @as(isize, newfd)),
-            @ptrToInt(new),
+            @ptrToInt(newpath),
             0,
         );
     }
@@ -490,6 +586,10 @@ pub fn unlinkat(dirfd: i32, path: [*:0]const u8, flags: u32) usize {
 
 pub fn waitpid(pid: pid_t, status: *u32, flags: u32) usize {
     return syscall4(SYS_wait4, @bitCast(usize, @as(isize, pid)), @ptrToInt(status), flags, 0);
+}
+
+pub fn fcntl(fd: fd_t, cmd: i32, arg: usize) usize {
+    return syscall3(SYS_fcntl, @bitCast(usize, @as(isize, fd)), @bitCast(usize, @as(isize, cmd)), arg);
 }
 
 var vdso_clock_gettime = @ptrCast(?*const c_void, init_vdso_clock_gettime);
@@ -846,6 +946,26 @@ pub fn sendto(fd: i32, buf: [*]const u8, len: usize, flags: u32, addr: ?*const s
     return syscall6(SYS_sendto, @bitCast(usize, @as(isize, fd)), @ptrToInt(buf), len, flags, @ptrToInt(addr), @intCast(usize, alen));
 }
 
+pub fn sendfile(outfd: i32, infd: i32, offset: ?*i64, count: usize) usize {
+    if (@hasDecl(@This(), "SYS_sendfile64")) {
+        return syscall4(
+            SYS_sendfile64,
+            @bitCast(usize, @as(isize, outfd)),
+            @bitCast(usize, @as(isize, infd)),
+            @ptrToInt(offset),
+            count,
+        );
+    } else {
+        return syscall4(
+            SYS_sendfile,
+            @bitCast(usize, @as(isize, outfd)),
+            @bitCast(usize, @as(isize, infd)),
+            @ptrToInt(offset),
+            count,
+        );
+    }
+}
+
 pub fn socketpair(domain: i32, socket_type: i32, protocol: i32, fd: [2]i32) usize {
     if (builtin.arch == .i386) {
         return socketcall(SC_socketpair, &[4]usize{ @intCast(usize, domain), @intCast(usize, socket_type), @intCast(usize, protocol), @ptrToInt(&fd[0]) });
@@ -1041,63 +1161,6 @@ pub fn uname(uts: *utsname) usize {
     return syscall1(SYS_uname, @ptrToInt(uts));
 }
 
-// XXX: This should be weak
-extern const __ehdr_start: elf.Ehdr = undefined;
-
-pub fn dl_iterate_phdr(comptime T: type, callback: extern fn (info: *dl_phdr_info, size: usize, data: ?*T) i32, data: ?*T) isize {
-    if (builtin.link_libc) {
-        return std.c.dl_iterate_phdr(@ptrCast(std.c.dl_iterate_phdr_callback, callback), @ptrCast(?*c_void, data));
-    }
-
-    const elf_base = @ptrToInt(&__ehdr_start);
-    const n_phdr = __ehdr_start.e_phnum;
-    const phdrs = (@intToPtr([*]elf.Phdr, elf_base + __ehdr_start.e_phoff))[0..n_phdr];
-
-    var it = dl.linkmap_iterator(phdrs) catch return 0;
-
-    // The executable has no dynamic link segment, create a single entry for
-    // the whole ELF image
-    if (it.end()) {
-        var info = dl_phdr_info{
-            .dlpi_addr = elf_base,
-            .dlpi_name = "/proc/self/exe",
-            .dlpi_phdr = @intToPtr([*]elf.Phdr, elf_base + __ehdr_start.e_phoff),
-            .dlpi_phnum = __ehdr_start.e_phnum,
-        };
-
-        return callback(&info, @sizeOf(dl_phdr_info), data);
-    }
-
-    // Last return value from the callback function
-    var last_r: isize = 0;
-    while (it.next()) |entry| {
-        var dlpi_phdr: usize = undefined;
-        var dlpi_phnum: u16 = undefined;
-
-        if (entry.l_addr != 0) {
-            const elf_header = @intToPtr(*elf.Ehdr, entry.l_addr);
-            dlpi_phdr = entry.l_addr + elf_header.e_phoff;
-            dlpi_phnum = elf_header.e_phnum;
-        } else {
-            // This is the running ELF image
-            dlpi_phdr = elf_base + __ehdr_start.e_phoff;
-            dlpi_phnum = __ehdr_start.e_phnum;
-        }
-
-        var info = dl_phdr_info{
-            .dlpi_addr = entry.l_addr,
-            .dlpi_name = entry.l_name,
-            .dlpi_phdr = @intToPtr([*]elf.Phdr, dlpi_phdr),
-            .dlpi_phnum = dlpi_phnum,
-        };
-
-        last_r = callback(&info, @sizeOf(dl_phdr_info), data);
-        if (last_r != 0) break;
-    }
-
-    return last_r;
-}
-
 pub fn io_uring_setup(entries: u32, p: *io_uring_params) usize {
     return syscall2(SYS_io_uring_setup, entries, @ptrToInt(p));
 }
@@ -1118,8 +1181,16 @@ pub fn getrusage(who: i32, usage: *rusage) usize {
     return syscall2(SYS_getrusage, @bitCast(usize, @as(isize, who)), @ptrToInt(usage));
 }
 
+pub fn tcgetattr(fd: fd_t, termios_p: *termios) usize {
+    return syscall3(SYS_ioctl, @bitCast(usize, @as(isize, fd)), TCGETS, @ptrToInt(termios_p));
+}
+
+pub fn tcsetattr(fd: fd_t, optional_action: TCSA, termios_p: *const termios) usize {
+    return syscall3(SYS_ioctl, @bitCast(usize, @as(isize, fd)), TCSETS + @enumToInt(optional_action), @ptrToInt(termios_p));
+}
+
 test "" {
-    if (builtin.os == .linux) {
+    if (builtin.os.tag == .linux) {
         _ = @import("linux/test.zig");
     }
 }

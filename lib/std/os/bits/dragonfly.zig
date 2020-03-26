@@ -7,6 +7,7 @@ pub fn S_ISCHR(m: u32) bool {
 pub const fd_t = c_int;
 pub const pid_t = c_int;
 pub const off_t = c_long;
+pub const mode_t = c_uint;
 
 pub const ENOTSUP = EOPNOTSUPP;
 pub const EWOULDBLOCK = EAGAIN;
@@ -137,8 +138,10 @@ pub const MAP_SIZEALIGN = 262144;
 
 pub const PATH_MAX = 1024;
 
+pub const ino_t = c_ulong;
+
 pub const Stat = extern struct {
-    ino: c_ulong,
+    ino: ino_t,
     nlink: c_uint,
     dev: c_uint,
     mode: c_ushort,
@@ -279,6 +282,8 @@ pub const F_ULOCK = 0;
 pub const F_LOCK = 1;
 pub const F_TLOCK = 2;
 pub const F_TEST = 3;
+
+pub const FD_CLOEXEC = 1;
 
 pub const AT_FDCWD = -328243;
 pub const AT_SYMLINK_NOFOLLOW = 1;
@@ -612,7 +617,7 @@ pub const sockaddr_storage = extern struct {
 };
 pub const dl_phdr_info = extern struct {
     dlpi_addr: usize,
-    dlpi_name: ?[*]const u8,
+    dlpi_name: ?[*:0]const u8,
     dlpi_phdr: [*]std.elf.Phdr,
     dlpi_phnum: u16,
 };
