@@ -24,6 +24,7 @@ else()
         string(TOUPPER ${_libname_} _prettylibname_)
         find_library(LLD_${_prettylibname_}_LIB NAMES ${_libname_}
             PATHS
+                ${LLD_LIBDIRS}
                 /usr/lib/llvm-10/lib
                 /usr/local/llvm100/lib
                 /mingw64/lib
@@ -47,6 +48,6 @@ else()
 endif()
 
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(LLD DEFAULT_MSG LLD_LIBRARIES LLD_INCLUDE_DIRS)
+find_package_handle_standard_args(lld DEFAULT_MSG LLD_LIBRARIES LLD_INCLUDE_DIRS)
 
 mark_as_advanced(LLD_INCLUDE_DIRS LLD_LIBRARIES)

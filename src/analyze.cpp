@@ -363,6 +363,7 @@ bool type_is_resolved(ZigType *type_entry, ResolveStatus status) {
                 case ResolveStatusLLVMFull:
                     return type_entry->llvm_type != nullptr;
             }
+            zig_unreachable();
         case ZigTypeIdOpaque:
             return status < ResolveStatusSizeKnown;
         case ZigTypeIdPointer:
@@ -381,6 +382,7 @@ bool type_is_resolved(ZigType *type_entry, ResolveStatus status) {
                 case ResolveStatusLLVMFull:
                     return type_entry->llvm_type != nullptr;
             }
+            zig_unreachable();
         case ZigTypeIdMetaType:
         case ZigTypeIdVoid:
         case ZigTypeIdBool:
@@ -5156,6 +5158,7 @@ ZigType *get_vector_type(CodeGen *g, uint32_t len, ZigType *elem_type) {
     }
     entry->data.vector.len = len;
     entry->data.vector.elem_type = elem_type;
+    entry->data.vector.padding = 0;
 
     buf_resize(&entry->name, 0);
     buf_appendf(&entry->name, "@Vector(%u, %s)", len, buf_ptr(&elem_type->name));
@@ -7756,9 +7759,13 @@ LinkLib *create_link_lib(Buf *name) {
 
 LinkLib *add_link_lib(CodeGen *g, Buf *name) {
     bool is_libc = buf_eql_str(name, "c");
+    bool is_libcpp = buf_eql_str(name, "c++") || buf_eql_str(name, "c++abi");
 
     if (is_libc && g->libc_link_lib != nullptr)
         return g->libc_link_lib;
+
+    if (is_libcpp && g->libcpp_link_lib != nullptr)
+        return g->libcpp_link_lib;
 
     for (size_t i = 0; i < g->link_libs_list.length; i += 1) {
         LinkLib *existing_lib = g->link_libs_list.at(i);
@@ -7772,6 +7779,8 @@ LinkLib *add_link_lib(CodeGen *g, Buf *name) {
 
     if (is_libc)
         g->libc_link_lib = link_lib;
+    if (is_libcpp)
+        g->libcpp_link_lib = link_lib;
 
     return link_lib;
 }

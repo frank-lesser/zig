@@ -412,6 +412,7 @@ static int main0(int argc, char **argv) {
     ZigList<const char *> framework_dirs = {0};
     ZigList<const char *> frameworks = {0};
     bool have_libc = false;
+    bool have_libcpp = false;
     const char *target_string = nullptr;
     bool rdynamic = false;
     const char *linker_script = nullptr;
@@ -454,8 +455,9 @@ static int main0(int argc, char **argv) {
     const char *mcpu = nullptr;
     CodeModel code_model = CodeModelDefault;
     const char *override_soname = nullptr;
-    bool only_preprocess = false;
+    bool only_pp_or_asm = false;
     bool ensure_libc_on_non_freestanding = false;
+    bool ensure_libcpp_on_non_freestanding = false;
 
     ZigList<const char *> llvm_argv = {0};
     llvm_argv.append("zig (LLVM option parsing)");
@@ -580,10 +582,11 @@ static int main0(int argc, char **argv) {
         return (term.how == TerminationIdClean) ? term.code : -1;
     } else if (argc >= 2 && strcmp(argv[1], "fmt") == 0) {
         return stage2_fmt(argc, argv);
-    } else if (argc >= 2 && strcmp(argv[1], "cc") == 0) {
+    } else if (argc >= 2 && (strcmp(argv[1], "cc") == 0 || strcmp(argv[1], "c++") == 0)) {
         emit_h = false;
         strip = true;
         ensure_libc_on_non_freestanding = true;
+        ensure_libcpp_on_non_freestanding = (strcmp(argv[1], "c++") == 0);
 
         bool c_arg = false;
         Stage2ClangArgIterator it;
@@ -612,26 +615,30 @@ static int main0(int argc, char **argv) {
                     }
                     break;
                 case Stage2ClangArgPositional: {
-                    Buf *arg_buf = buf_create_from_str(it.only_arg);
-                    if (buf_ends_with_str(arg_buf, ".c") ||
-                        buf_ends_with_str(arg_buf, ".C") ||
-                        buf_ends_with_str(arg_buf, ".cc") ||
-                        buf_ends_with_str(arg_buf, ".cpp") ||
-                        buf_ends_with_str(arg_buf, ".cxx") ||
-                        buf_ends_with_str(arg_buf, ".s") ||
-                        buf_ends_with_str(arg_buf, ".S"))
-                    {
-                        CFile *c_file = heap::c_allocator.create<CFile>();
-                        c_file->source_path = it.only_arg;
-                        c_source_files.append(c_file);
-                    } else {
-                        objects.append(it.only_arg);
+                    FileExt file_ext = classify_file_ext(it.only_arg, strlen(it.only_arg));
+                    switch (file_ext) {
+                        case FileExtAsm:
+                        case FileExtC:
+                        case FileExtCpp:
+                        case FileExtLLVMIr:
+                        case FileExtLLVMBitCode:
+                        case FileExtHeader: {
+                            CFile *c_file = heap::c_allocator.create<CFile>();
+                            c_file->source_path = it.only_arg;
+                            c_source_files.append(c_file);
+                            break;
+                        }
+                        case FileExtUnknown:
+                            objects.append(it.only_arg);
+                            break;
                     }
                     break;
                 }
                 case Stage2ClangArgL: // -l
                     if (strcmp(it.only_arg, "c") == 0)
                         have_libc = true;
+                    if (strcmp(it.only_arg, "c++") == 0)
+                        have_libcpp = true;
                     link_libs.append(it.only_arg);
                     break;
                 case Stage2ClangArgIgnore:
@@ -647,6 +654,9 @@ static int main0(int argc, char **argv) {
                     break;
                 case Stage2ClangArgNoStdLib:
                     ensure_libc_on_non_freestanding = false;
+                    break;
+                case Stage2ClangArgNoStdLibCpp:
+                    ensure_libcpp_on_non_freestanding = false;
                     break;
                 case Stage2ClangArgShared:
                     is_dynamic = true;
@@ -666,8 +676,12 @@ static int main0(int argc, char **argv) {
                     }
                     break;
                 }
-                case Stage2ClangArgPreprocess:
-                    only_preprocess = true;
+                case Stage2ClangArgPreprocessOrAsm:
+                    // this handles both -E and -S
+                    only_pp_or_asm = true;
+                    for (size_t i = 0; i < it.other_args_len; i += 1) {
+                        clang_argv.append(it.other_args_ptr[i]);
+                    }
                     break;
                 case Stage2ClangArgOptimize:
                     // alright what release mode do they want?
@@ -678,7 +692,9 @@ static int main0(int argc, char **argv) {
                             strcmp(it.only_arg, "O4") == 0)
                     {
                         build_mode = BuildModeFastRelease;
-                    } else if (strcmp(it.only_arg, "Og") == 0) {
+                    } else if (strcmp(it.only_arg, "Og") == 0 ||
+                            strcmp(it.only_arg, "O0") == 0)
+                    {
                         build_mode = BuildModeDebug;
                     } else {
                         for (size_t i = 0; i < it.other_args_len; i += 1) {
@@ -711,6 +727,19 @@ static int main0(int argc, char **argv) {
                 case Stage2ClangArgVerboseCmds:
                     verbose_cc = true;
                     verbose_link = true;
+                    break;
+                case Stage2ClangArgForLinker:
+                    linker_args.append(buf_create_from_str(it.only_arg));
+                    break;
+                case Stage2ClangArgLinkerInputZ:
+                    linker_args.append(buf_create_from_str("-z"));
+                    linker_args.append(buf_create_from_str(it.only_arg));
+                    break;
+                case Stage2ClangArgLibDir:
+                    lib_dirs.append(it.only_arg);
+                    break;
+                case Stage2ClangArgMCpu:
+                    mcpu = it.only_arg;
                     break;
             }
         }
@@ -768,6 +797,11 @@ static int main0(int argc, char **argv) {
                     return EXIT_FAILURE;
                 }
                 dynamic_linker = buf_ptr(linker_args.at(i));
+            } else if (buf_eql_str(arg, "-E") ||
+                buf_eql_str(arg, "--export-dynamic") ||
+                buf_eql_str(arg, "-export-dynamic"))
+            {
+                rdynamic = true;
             } else {
                 fprintf(stderr, "warning: unsupported linker arg: %s\n", buf_ptr(arg));
             }
@@ -777,7 +811,7 @@ static int main0(int argc, char **argv) {
             build_mode = BuildModeSafeRelease;
         }
 
-        if (only_preprocess) {
+        if (only_pp_or_asm) {
             cmd = CmdBuild;
             out_type = OutTypeObj;
             emit_bin = false;
@@ -916,6 +950,8 @@ static int main0(int argc, char **argv) {
                 const char *l = &arg[2];
                 if (strcmp(l, "c") == 0)
                     have_libc = true;
+                if (strcmp(l, "c++") == 0)
+                    have_libcpp = true;
                 link_libs.append(l);
             } else if (arg[1] == 'I' && arg[2] != 0) {
                 clang_argv.append("-I");
@@ -1057,6 +1093,8 @@ static int main0(int argc, char **argv) {
                 } else if (strcmp(arg, "--library") == 0 || strcmp(arg, "-l") == 0) {
                     if (strcmp(argv[i], "c") == 0)
                         have_libc = true;
+                    if (strcmp(argv[i], "c++") == 0)
+                        have_libcpp = true;
                     link_libs.append(argv[i]);
                 } else if (strcmp(arg, "--forbid-library") == 0) {
                     forbidden_link_libs.append(argv[i]);
@@ -1221,6 +1259,10 @@ static int main0(int argc, char **argv) {
         have_libc = true;
         link_libs.append("c");
     }
+    if (!have_libcpp && ensure_libcpp_on_non_freestanding && target.os != OsFreestanding) {
+        have_libcpp = true;
+        link_libs.append("c++");
+    }
 
     Buf zig_triple_buf = BUF_INIT;
     target_triple_zig(&zig_triple_buf, &target);
@@ -1325,15 +1367,17 @@ static int main0(int argc, char **argv) {
                 return print_error_usage(arg0);
             }
 
-            bool any_non_c_link_libs = false;
+            bool any_system_lib_dependencies = false;
             for (size_t i = 0; i < link_libs.length; i += 1) {
-                if (!target_is_libc_lib_name(&target, link_libs.at(i))) {
-                    any_non_c_link_libs = true;
+                if (!target_is_libc_lib_name(&target, link_libs.at(i)) &&
+                    !target_is_libcpp_lib_name(&target, link_libs.at(i)))
+                {
+                    any_system_lib_dependencies = true;
                     break;
                 }
             }
 
-            if (target.is_native_os && any_non_c_link_libs) {
+            if (target.is_native_os && any_system_lib_dependencies) {
                 Error err;
                 Stage2NativePaths paths;
                 if ((err = stage2_detect_native_paths(&paths))) {
@@ -1565,7 +1609,7 @@ static int main0(int argc, char **argv) {
 #endif
                         Buf *dest_path = buf_create_from_str(emit_bin_override_path);
                         Buf *source_path;
-                        if (only_preprocess) {
+                        if (only_pp_or_asm) {
                             source_path = buf_alloc();
                             Buf *pp_only_basename = buf_create_from_str(
                                     c_source_files.at(0)->preprocessor_only_basename);
@@ -1579,7 +1623,7 @@ static int main0(int argc, char **argv) {
                                     buf_ptr(dest_path), err_str(err));
                             return main_exit(root_progress_node, EXIT_FAILURE);
                         }
-                    } else if (only_preprocess) {
+                    } else if (only_pp_or_asm) {
 #if defined(ZIG_OS_WINDOWS)
                         buf_replace(g->c_artifact_dir, '/', '\\');
 #endif
