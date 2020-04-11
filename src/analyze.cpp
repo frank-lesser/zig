@@ -3498,7 +3498,7 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
             }
         } else {
             fn_table_entry->inferred_async_node = inferred_async_none;
-            g->external_prototypes.put_unique(tld_fn->base.name, &tld_fn->base);
+            g->external_symbol_names.put_unique(tld_fn->base.name, &tld_fn->base);
         }
 
         Scope *child_scope = fn_table_entry->fndef_scope ? &fn_table_entry->fndef_scope->base : tld_fn->base.parent_scope;
@@ -4046,6 +4046,10 @@ static void resolve_decl_var(CodeGen *g, TldVar *tld_var, bool allow_lazy) {
     if (is_export) {
         validate_export_var_type(g, type, source_node);
         add_var_export(g, tld_var->var, tld_var->var->name, GlobalLinkageIdStrong);
+    }
+
+    if (is_extern) {
+        g->external_symbol_names.put_unique(tld_var->base.name, &tld_var->base);
     }
 
     g->global_vars.append(tld_var);
@@ -5361,7 +5365,7 @@ static uint32_t hash_const_val(ZigValue *const_val) {
                 return result;
             }
         case ZigTypeIdEnumLiteral:
-            return buf_hash(const_val->data.x_enum_literal) * 2691276464;
+            return buf_hash(const_val->data.x_enum_literal) * (uint32_t)2691276464;
         case ZigTypeIdEnum:
             {
                 uint32_t result = 31643936;
@@ -5429,12 +5433,12 @@ static uint32_t hash_const_val(ZigValue *const_val) {
             return 2709806591;
         case ZigTypeIdOptional:
             if (get_src_ptr_type(const_val->type) != nullptr) {
-                return hash_const_val_ptr(const_val) * 1992916303;
+                return hash_const_val_ptr(const_val) * (uint32_t)1992916303;
             } else if (const_val->type->data.maybe.child_type->id == ZigTypeIdErrorSet) {
-                return hash_const_val_error_set(const_val) * 3147031929;
+                return hash_const_val_error_set(const_val) * (uint32_t)3147031929;
             } else {
                 if (const_val->data.x_optional) {
-                    return hash_const_val(const_val->data.x_optional) * 1992916303;
+                    return hash_const_val(const_val->data.x_optional) * (uint32_t)1992916303;
                 } else {
                     return 4016830364;
                 }
@@ -5769,6 +5773,10 @@ OnePossibleValue type_has_one_possible_value(CodeGen *g, ZigType *type_entry) {
             type_entry->one_possible_value = OnePossibleValueNo;
             for (size_t i = 0; i < type_entry->data.structure.src_field_count; i += 1) {
                 TypeStructField *field = type_entry->data.structure.fields[i];
+                if (field->is_comptime) {
+                    // If this field is comptime then the field can only be one possible value
+                    continue;
+                }
                 OnePossibleValue opv = (field->type_entry != nullptr) ?
                     type_has_one_possible_value(g, field->type_entry) :
                     type_val_resolve_has_one_possible_value(g, field->type_val);
@@ -5825,6 +5833,10 @@ ZigValue *get_the_one_possible_value(CodeGen *g, ZigType *type_entry) {
         result->data.x_struct.fields = alloc_const_vals_ptrs(g, field_count);
         for (size_t i = 0; i < field_count; i += 1) {
             TypeStructField *field = struct_type->data.structure.fields[i];
+            if (field->is_comptime) {
+                copy_const_val(g, result->data.x_struct.fields[i], field->init_val);
+                continue;
+            }
             ZigType *field_type = resolve_struct_field_type(g, field);
             assert(field_type != nullptr);
             result->data.x_struct.fields[i] = get_the_one_possible_value(g, field_type);
