@@ -36,9 +36,9 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\struct foo { int x; int y[]; };
         \\struct bar { int x; int y[0]; };
     , &[_][]const u8{
-        \\pub const struct_foo = @OpaqueType();
+        \\pub const struct_foo = @Type(.Opaque);
     ,
-        \\pub const struct_bar = @OpaqueType();
+        \\pub const struct_bar = @Type(.Opaque);
     });
 
     cases.add("nested loops without blocks",
@@ -106,7 +106,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub const struct_arcan_shmif_page = //
     ,
         \\warning: unsupported type: 'Atomic'
-        \\    @OpaqueType(); // 
+        \\    @Type(.Opaque); //
     ,
         \\ warning: struct demoted to opaque type - unable to translate type of field abufused
     , // TODO should be `addr: *struct_arcan_shmif_page`
@@ -189,20 +189,20 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\} outer;
         \\void foo(outer *x) { x->y = x->x; }
     , &[_][]const u8{
-        \\const struct_unnamed_5 = extern struct {
+        \\const struct_unnamed_3 = extern struct {
         \\    y: c_int,
         \\};
-        \\const union_unnamed_3 = extern union {
+        \\const union_unnamed_2 = extern union {
         \\    x: u8,
-        \\    unnamed_4: struct_unnamed_5,
+        \\    unnamed_0: struct_unnamed_3,
         \\};
         \\const struct_unnamed_1 = extern struct {
-        \\    unnamed_2: union_unnamed_3,
+        \\    unnamed_0: union_unnamed_2,
         \\};
         \\pub const outer = struct_unnamed_1;
         \\pub export fn foo(arg_x: [*c]outer) void {
         \\    var x = arg_x;
-        \\    x.*.unnamed_2.unnamed_4.y = @bitCast(c_int, @as(c_uint, x.*.unnamed_2.x));
+        \\    x.*.unnamed_0.unnamed_0.y = @bitCast(c_int, @as(c_uint, x.*.unnamed_0.x));
         \\}
     });
 
@@ -285,8 +285,8 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    struct opaque_2 *cast = (struct opaque_2 *)opaque;
         \\}
     , &[_][]const u8{
-        \\pub const struct_opaque = @OpaqueType();
-        \\pub const struct_opaque_2 = @OpaqueType();
+        \\pub const struct_opaque = @Type(.Opaque);
+        \\pub const struct_opaque_2 = @Type(.Opaque);
         \\pub export fn function(arg_opaque_1: ?*struct_opaque) void {
         \\    var opaque_1 = arg_opaque_1;
         \\    var cast: ?*struct_opaque_2 = @ptrCast(?*struct_opaque_2, opaque_1);
@@ -524,7 +524,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    struct Foo *foo;
         \\};
     , &[_][]const u8{
-        \\pub const struct_Foo = @OpaqueType();
+        \\pub const struct_Foo = @Type(.Opaque);
     ,
         \\pub const struct_Bar = extern struct {
         \\    foo: ?*struct_Foo,
@@ -601,7 +601,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\struct Foo;
         \\struct Foo *some_func(struct Foo *foo, int x);
     , &[_][]const u8{
-        \\pub const struct_Foo = @OpaqueType();
+        \\pub const struct_Foo = @Type(.Opaque);
     ,
         \\pub extern fn some_func(foo: ?*struct_Foo, x: c_int) ?*struct_Foo;
     ,
@@ -2879,7 +2879,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     , &[_][]const u8{
         \\pub const FOO = 0x61626364;
     });
-    
+
     cases.add("Make sure casts are grouped",
         \\typedef struct
         \\{
@@ -2895,22 +2895,15 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    cases.add("Cast from integer literals to poiter",
+    cases.add("macro integer literal casts",
         \\#define NULL ((void*)0)
-        \\#define GPIO_0_MEM_MAP ((unsigned*)0x8000)
-        \\#define GPIO_1_MEM_MAP ((unsigned*)0x8004)
-        \\#define GPIO_2_MEM_MAP ((unsigned*)0x8008)
-        \\
+        \\#define FOO ((int)0x8000)
     , &[_][]const u8{
-        \\pub const NULL = @intToPtr(?*c_void, 0);
+        \\pub const NULL = (if (@typeInfo(?*c_void) == .Pointer) @intToPtr(?*c_void, 0) else @as(?*c_void, 0));
     ,
-        \\pub const GPIO_0_MEM_MAP = @intToPtr([*c]c_uint, 0x8000);
-    ,
-        \\pub const GPIO_1_MEM_MAP = @intToPtr([*c]c_uint, 0x8004);
-    ,
-        \\pub const GPIO_2_MEM_MAP = @intToPtr([*c]c_uint, 0x8008);
+        \\pub const FOO = (if (@typeInfo(c_int) == .Pointer) @intToPtr(c_int, 0x8000) else @as(c_int, 0x8000));
     });
-    
+
     if (std.Target.current.abi == .msvc) {
         cases.add("nameless struct fields",
             \\typedef struct NAMED
@@ -2929,7 +2922,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
             \\};
             \\pub const NAMED = struct_NAMED;
             \\pub const struct_ONENAMEWITHSTRUCT = extern struct {
-            \\    unnamed_1: struct_NAMED,
+            \\    unnamed_0: struct_NAMED,
             \\    b: c_long,
             \\};
         });
@@ -2955,4 +2948,22 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
             \\};
         });
     }
+
+    cases.add("unnamed fields have predictabile names",
+        \\struct a {
+        \\    struct {};
+        \\};
+        \\struct b {
+        \\    struct {};
+        \\};
+    , &[_][]const u8{
+        \\const struct_unnamed_1 = extern struct {};
+        \\pub const struct_a = extern struct {
+        \\    unnamed_0: struct_unnamed_1,
+        \\};
+        \\const struct_unnamed_2 = extern struct {};
+        \\pub const struct_b = extern struct {
+        \\    unnamed_0: struct_unnamed_2,
+        \\};
+    });
 }

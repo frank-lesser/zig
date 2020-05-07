@@ -1054,7 +1054,7 @@ pub const Target = std.zig.CrossTarget;
 pub const Pkg = struct {
     name: []const u8,
     path: []const u8,
-    dependencies: ?[]Pkg = null,
+    dependencies: ?[]const Pkg = null,
 };
 
 const CSourceFile = struct {
@@ -1132,6 +1132,7 @@ pub const LibExeObjStep = struct {
     name_prefix: []const u8,
     filter: ?[]const u8,
     single_threaded: bool,
+    test_evented_io: bool = false,
     code_model: builtin.CodeModel = .default,
 
     root_src: ?FileSource,
@@ -1864,6 +1865,10 @@ pub const LibExeObjStep = struct {
             try zig_args.append(filter);
         }
 
+        if (self.test_evented_io) {
+            try zig_args.append("--test-evented-io");
+        }
+
         if (self.name_prefix.len != 0) {
             try zig_args.append("--test-name-prefix");
             try zig_args.append(self.name_prefix);
@@ -2154,6 +2159,9 @@ pub const LibExeObjStep = struct {
             if (self.output_dir) |output_dir| {
                 var src_dir = try std.fs.cwd().openDir(build_output_dir, .{ .iterate = true });
                 defer src_dir.close();
+
+                // Create the output directory if it doesn't exist.
+                try std.fs.cwd().makePath(output_dir);
 
                 var dest_dir = try std.fs.cwd().openDir(output_dir, .{});
                 defer dest_dir.close();

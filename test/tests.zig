@@ -147,6 +147,31 @@ const test_targets = blk: {
 
         TestTarget{
             .target = .{
+                .cpu_arch = .mips,
+                .os_tag = .linux,
+                .abi = .none,
+            },
+        },
+        TestTarget{
+            .target = .{
+                .cpu_arch = .mips,
+                .os_tag = .linux,
+                .abi = .musl,
+            },
+            .link_libc = true,
+        },
+        // https://github.com/ziglang/zig/issues/4927
+        //TestTarget{
+        //    .target = .{
+        //        .cpu_arch = .mips,
+        //        .os_tag = .linux,
+        //        .abi = .gnu,
+        //    },
+        //    .link_libc = true,
+        //},
+
+        TestTarget{
+            .target = .{
                 .cpu_arch = .mipsel,
                 .os_tag = .linux,
                 .abi = .none,
@@ -880,7 +905,7 @@ pub const CompileErrorContext = struct {
                 var i: usize = 0;
                 ok = while (err_iter.next()) |line| : (i += 1) {
                     if (i >= self.case.expected_errors.items.len) break false;
-                    const expected = self.case.expected_errors.at(i);
+                    const expected = self.case.expected_errors.items[i];
                     if (mem.indexOf(u8, line, expected) == null) break false;
                     continue;
                 } else true;

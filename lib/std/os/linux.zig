@@ -19,7 +19,7 @@ pub usingnamespace switch (builtin.arch) {
     .aarch64 => @import("linux/arm64.zig"),
     .arm => @import("linux/arm-eabi.zig"),
     .riscv64 => @import("linux/riscv64.zig"),
-    .mipsel => @import("linux/mipsel.zig"),
+    .mips, .mipsel => @import("linux/mips.zig"),
     else => struct {},
 };
 pub usingnamespace @import("bits.zig");
@@ -492,7 +492,7 @@ pub fn renameat2(oldfd: i32, oldpath: [*:0]const u8, newfd: i32, newpath: [*:0]c
     );
 }
 
-pub fn open(path: [*:0]const u8, flags: u32, perm: usize) usize {
+pub fn open(path: [*:0]const u8, flags: u32, perm: mode_t) usize {
     if (@hasField(SYS, "open")) {
         return syscall3(.open, @ptrToInt(path), flags, perm);
     } else {
@@ -506,11 +506,11 @@ pub fn open(path: [*:0]const u8, flags: u32, perm: usize) usize {
     }
 }
 
-pub fn create(path: [*:0]const u8, perm: usize) usize {
+pub fn create(path: [*:0]const u8, perm: mode_t) usize {
     return syscall2(.creat, @ptrToInt(path), perm);
 }
 
-pub fn openat(dirfd: i32, path: [*:0]const u8, flags: u32, mode: usize) usize {
+pub fn openat(dirfd: i32, path: [*:0]const u8, flags: u32, mode: mode_t) usize {
     // dirfd could be negative, for example AT_FDCWD is -100
     return syscall4(.openat, @bitCast(usize, @as(isize, dirfd)), @ptrToInt(path), flags, mode);
 }

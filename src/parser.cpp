@@ -55,7 +55,7 @@ static AstNode *ast_parse_bool_or_expr(ParseContext *pc);
 static AstNode *ast_parse_bool_and_expr(ParseContext *pc);
 static AstNode *ast_parse_compare_expr(ParseContext *pc);
 static AstNode *ast_parse_bitwise_expr(ParseContext *pc);
-static AstNode *ast_parse_bit_shit_expr(ParseContext *pc);
+static AstNode *ast_parse_bit_shift_expr(ParseContext *pc);
 static AstNode *ast_parse_addition_expr(ParseContext *pc);
 static AstNode *ast_parse_multiply_expr(ParseContext *pc);
 static AstNode *ast_parse_prefix_expr(ParseContext *pc);
@@ -526,6 +526,15 @@ static void ast_parse_container_doc_comments(ParseContext *pc, Buf *buf) {
     }
 }
 
+enum ContainerFieldState {
+    // no fields have been seen
+    ContainerFieldStateNone,
+    // currently parsing fields
+    ContainerFieldStateSeen,
+    // saw fields and then a declaration after them
+    ContainerFieldStateEnd,
+};
+
 // ContainerMembers
 //     <- TestDecl ContainerMembers
 //      / TopLevelComptime ContainerMembers
@@ -537,17 +546,29 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
     AstNodeContainerDecl res = {};
     Buf tld_doc_comment_buf = BUF_INIT;
     buf_resize(&tld_doc_comment_buf, 0);
+    ContainerFieldState field_state = ContainerFieldStateNone;
+    Token *first_token = nullptr;
     for (;;) {
         ast_parse_container_doc_comments(pc, &tld_doc_comment_buf);
 
+        Token *peeked_token = peek_token(pc);
+
         AstNode *test_decl = ast_parse_test_decl(pc);
         if (test_decl != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(test_decl);
             continue;
         }
 
         AstNode *top_level_comptime = ast_parse_top_level_comptime(pc);
         if (top_level_comptime != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(top_level_comptime);
             continue;
         }
@@ -555,11 +576,17 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
         Buf doc_comment_buf = BUF_INIT;
         ast_parse_doc_comments(pc, &doc_comment_buf);
 
+        peeked_token = peek_token(pc);
+
         Token *visib_token = eat_token_if(pc, TokenIdKeywordPub);
         VisibMod visib_mod = visib_token != nullptr ? VisibModPub : VisibModPrivate;
 
         AstNode *top_level_decl = ast_parse_top_level_decl(pc, visib_mod, &doc_comment_buf);
         if (top_level_decl != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(top_level_decl);
             continue;
         }
@@ -572,6 +599,16 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
 
         AstNode *container_field = ast_parse_container_field(pc);
         if (container_field != nullptr) {
+            switch (field_state) {
+                case ContainerFieldStateNone:
+                    field_state = ContainerFieldStateSeen;
+                    break;
+                case ContainerFieldStateSeen:
+                    break;
+                case ContainerFieldStateEnd:
+                    ast_error(pc, first_token, "declarations are not allowed between container fields");                    
+            }
+
             assert(container_field->type == NodeTypeStructField);
             container_field->data.struct_field.doc_comments = doc_comment_buf;
             container_field->data.struct_field.comptime_token = comptime_token;
@@ -876,7 +913,7 @@ static AstNode *ast_parse_container_field(ParseContext *pc) {
 // Statement
 //     <- KEYWORD_comptime? VarDecl
 //      / KEYWORD_comptime BlockExprStatement
-//      / KEYWORD_noasync BlockExprStatement
+//      / KEYWORD_nosuspend BlockExprStatement
 //      / KEYWORD_suspend (SEMICOLON / BlockExprStatement)
 //      / KEYWORD_defer BlockExprStatement
 //      / KEYWORD_errdefer Payload? BlockExprStatement
@@ -900,11 +937,11 @@ static AstNode *ast_parse_statement(ParseContext *pc) {
         return res;
     }
 
-    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
-    if (noasync != nullptr) {
+    Token *nosuspend = eat_token_if(pc, TokenIdKeywordNoSuspend);
+    if (nosuspend != nullptr) {
         AstNode *statement = ast_expect(pc, ast_parse_block_expr_statement);
-        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
-        res->data.noasync_expr.expr = statement;
+        AstNode *res = ast_create_node(pc, NodeTypeNoSuspend, nosuspend);
+        res->data.nosuspend_expr.expr = statement;
         return res;
     }
 
@@ -1220,11 +1257,11 @@ static AstNode *ast_parse_compare_expr(ParseContext *pc) {
 
 // BitwiseExpr <- BitShiftExpr (BitwiseOp BitShiftExpr)*
 static AstNode *ast_parse_bitwise_expr(ParseContext *pc) {
-    return ast_parse_bin_op_expr(pc, BinOpChainInf, ast_parse_bitwise_op, ast_parse_bit_shit_expr);
+    return ast_parse_bin_op_expr(pc, BinOpChainInf, ast_parse_bitwise_op, ast_parse_bit_shift_expr);
 }
 
 // BitShiftExpr <- AdditionExpr (BitShiftOp AdditionExpr)*
-static AstNode *ast_parse_bit_shit_expr(ParseContext *pc) {
+static AstNode *ast_parse_bit_shift_expr(ParseContext *pc) {
     return ast_parse_bin_op_expr(pc, BinOpChainInf, ast_parse_bit_shift_op, ast_parse_addition_expr);
 }
 
@@ -1252,7 +1289,7 @@ static AstNode *ast_parse_prefix_expr(ParseContext *pc) {
 //      / IfExpr
 //      / KEYWORD_break BreakLabel? Expr?
 //      / KEYWORD_comptime Expr
-//      / KEYWORD_noasync Expr
+//      / KEYWORD_nosuspend Expr
 //      / KEYWORD_continue BreakLabel?
 //      / KEYWORD_resume Expr
 //      / KEYWORD_return Expr?
@@ -1287,11 +1324,11 @@ static AstNode *ast_parse_primary_expr(ParseContext *pc) {
         return res;
     }
 
-    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
-    if (noasync != nullptr) {
+    Token *nosuspend = eat_token_if(pc, TokenIdKeywordNoSuspend);
+    if (nosuspend != nullptr) {
         AstNode *expr = ast_expect(pc, ast_parse_expr);
-        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
-        res->data.noasync_expr.expr = expr;
+        AstNode *res = ast_create_node(pc, NodeTypeNoSuspend, nosuspend);
+        res->data.nosuspend_expr.expr = expr;
         return res;
     }
 
@@ -1603,7 +1640,7 @@ static AstNode *ast_parse_suffix_expr(ParseContext *pc) {
 //      / IfTypeExpr
 //      / INTEGER
 //      / KEYWORD_comptime TypeExpr
-//      / KEYWORD_noasync TypeExpr
+//      / KEYWORD_nosuspend TypeExpr
 //      / KEYWORD_error DOT IDENTIFIER
 //      / KEYWORD_false
 //      / KEYWORD_null
@@ -1705,11 +1742,11 @@ static AstNode *ast_parse_primary_type_expr(ParseContext *pc) {
         return res;
     }
 
-    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
-    if (noasync != nullptr) {
+    Token *nosuspend = eat_token_if(pc, TokenIdKeywordNoSuspend);
+    if (nosuspend != nullptr) {
         AstNode *expr = ast_expect(pc, ast_parse_type_expr);
-        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
-        res->data.noasync_expr.expr = expr;
+        AstNode *res = ast_create_node(pc, NodeTypeNoSuspend, nosuspend);
+        res->data.nosuspend_expr.expr = expr;
         return res;
     }
 
@@ -3152,7 +3189,7 @@ void ast_visit_node_children(AstNode *node, void (*visit)(AstNode **, void *cont
         case NodeTypeCompTime:
             visit_field(&node->data.comptime_expr.expr, visit, context);
             break;
-        case NodeTypeNoAsync:
+        case NodeTypeNoSuspend:
             visit_field(&node->data.comptime_expr.expr, visit, context);
             break;
         case NodeTypeBreak:

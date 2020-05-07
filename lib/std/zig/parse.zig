@@ -88,6 +88,18 @@ fn parseRoot(arena: *Allocator, it: *TokenIterator, tree: *Tree) Error!*Node.Roo
 fn parseContainerMembers(arena: *Allocator, it: *TokenIterator, tree: *Tree) !Node.Root.DeclList {
     var list = Node.Root.DeclList.init(arena);
 
+    var field_state: union(enum) {
+        /// no fields have been seen
+        none,
+        /// currently parsing fields
+        seen,
+        /// saw fields and then a declaration after them.
+        /// payload is first token of previous declaration.
+        end: TokenIndex,
+        /// ther was a declaration between fields, don't report more errors
+        err,
+    } = .none;
+
     while (true) {
         if (try parseContainerDocComments(arena, it, tree)) |node| {
             try list.push(node);
@@ -97,12 +109,18 @@ fn parseContainerMembers(arena: *Allocator, it: *TokenIterator, tree: *Tree) !No
         const doc_comments = try parseDocComment(arena, it, tree);
 
         if (try parseTestDecl(arena, it, tree)) |node| {
+            if (field_state == .seen) {
+                field_state = .{ .end = node.firstToken() };
+            }
             node.cast(Node.TestDecl).?.doc_comments = doc_comments;
             try list.push(node);
             continue;
         }
 
         if (try parseTopLevelComptime(arena, it, tree)) |node| {
+            if (field_state == .seen) {
+                field_state = .{ .end = node.firstToken() };
+            }
             node.cast(Node.Comptime).?.doc_comments = doc_comments;
             try list.push(node);
             continue;
@@ -111,6 +129,9 @@ fn parseContainerMembers(arena: *Allocator, it: *TokenIterator, tree: *Tree) !No
         const visib_token = eatToken(it, .Keyword_pub);
 
         if (try parseTopLevelDecl(arena, it, tree)) |node| {
+            if (field_state == .seen) {
+                field_state = .{ .end = visib_token orelse node.firstToken() };
+            }
             switch (node.id) {
                 .FnProto => {
                     node.cast(Node.FnProto).?.doc_comments = doc_comments;
@@ -146,6 +167,18 @@ fn parseContainerMembers(arena: *Allocator, it: *TokenIterator, tree: *Tree) !No
         }
 
         if (try parseContainerField(arena, it, tree)) |node| {
+            switch (field_state) {
+                .none => field_state = .seen,
+                .err, .seen => {},
+                .end => |tok| {
+                    try tree.errors.push(.{
+                        .DeclBetweenFields = .{ .token = tok },
+                    });
+                    // continue parsing, error will be reported later
+                    field_state = .err;
+                },
+            }
+
             const field = node.cast(Node.ContainerField).?;
             field.doc_comments = doc_comments;
             try list.push(node);
@@ -462,7 +495,7 @@ fn parseContainerField(arena: *Allocator, it: *TokenIterator, tree: *Tree) !?*No
 /// Statement
 ///     <- KEYWORD_comptime? VarDecl
 ///      / KEYWORD_comptime BlockExprStatement
-///      / KEYWORD_noasync BlockExprStatement
+///      / KEYWORD_nosuspend BlockExprStatement
 ///      / KEYWORD_suspend (SEMICOLON / BlockExprStatement)
 ///      / KEYWORD_defer BlockExprStatement
 ///      / KEYWORD_errdefer Payload? BlockExprStatement
@@ -494,14 +527,14 @@ fn parseStatement(arena: *Allocator, it: *TokenIterator, tree: *Tree) Error!?*No
         return &node.base;
     }
 
-    if (eatToken(it, .Keyword_noasync)) |noasync_token| {
+    if (eatToken(it, .Keyword_nosuspend)) |nosuspend_token| {
         const block_expr = try expectNode(arena, it, tree, parseBlockExprStatement, .{
             .ExpectedBlockOrAssignment = .{ .token = it.index },
         });
 
-        const node = try arena.create(Node.Noasync);
+        const node = try arena.create(Node.Nosuspend);
         node.* = .{
-            .noasync_token = noasync_token,
+            .nosuspend_token = nosuspend_token,
             .expr = block_expr,
         };
         return &node.base;
@@ -875,7 +908,7 @@ fn parsePrefixExpr(arena: *Allocator, it: *TokenIterator, tree: *Tree) !?*Node {
 ///      / IfExpr
 ///      / KEYWORD_break BreakLabel? Expr?
 ///      / KEYWORD_comptime Expr
-///      / KEYWORD_noasync Expr
+///      / KEYWORD_nosuspend Expr
 ///      / KEYWORD_continue BreakLabel?
 ///      / KEYWORD_resume Expr
 ///      / KEYWORD_return Expr?
@@ -911,13 +944,13 @@ fn parsePrimaryExpr(arena: *Allocator, it: *TokenIterator, tree: *Tree) !?*Node 
         return &node.base;
     }
 
-    if (eatToken(it, .Keyword_noasync)) |token| {
+    if (eatToken(it, .Keyword_nosuspend)) |token| {
         const expr_node = try expectNode(arena, it, tree, parseExpr, .{
             .ExpectedExpr = .{ .token = it.index },
         });
-        const node = try arena.create(Node.Noasync);
+        const node = try arena.create(Node.Nosuspend);
         node.* = .{
-            .noasync_token = token,
+            .nosuspend_token = token,
             .expr = expr_node,
         };
         return &node.base;
@@ -1255,7 +1288,7 @@ fn parseSuffixExpr(arena: *Allocator, it: *TokenIterator, tree: *Tree) !?*Node {
 ///      / IfTypeExpr
 ///      / INTEGER
 ///      / KEYWORD_comptime TypeExpr
-///      / KEYWORD_noasync TypeExpr
+///      / KEYWORD_nosuspend TypeExpr
 ///      / KEYWORD_error DOT IDENTIFIER
 ///      / KEYWORD_false
 ///      / KEYWORD_null
@@ -1294,11 +1327,11 @@ fn parsePrimaryTypeExpr(arena: *Allocator, it: *TokenIterator, tree: *Tree) !?*N
         };
         return &node.base;
     }
-    if (eatToken(it, .Keyword_noasync)) |token| {
+    if (eatToken(it, .Keyword_nosuspend)) |token| {
         const expr = (try parseTypeExpr(arena, it, tree)) orelse return null;
-        const node = try arena.create(Node.Noasync);
+        const node = try arena.create(Node.Nosuspend);
         node.* = .{
-            .noasync_token = token,
+            .nosuspend_token = token,
             .expr = expr,
         };
         return &node.base;

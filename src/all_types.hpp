@@ -19,6 +19,11 @@
 #include "target.hpp"
 #include "tokenizer.hpp"
 
+#ifndef NDEBUG
+#define DBG_MACRO_NO_WARNING
+#include <dbg.h>
+#endif
+
 struct AstNode;
 struct ZigFn;
 struct Scope;
@@ -524,9 +529,10 @@ struct ZigValue {
         RuntimeHintSlice rh_slice;
     } data;
 
-    // uncomment these to find bugs. can't leave them uncommented because of a gcc-9 warning
-    //ZigValue(const ZigValue &other) = delete; // plz zero initialize with {}
+    // uncomment this to find bugs. can't leave it uncommented because of a gcc-9 warning
     //ZigValue& operator= (const ZigValue &other) = delete; // use copy_const_val
+
+    ZigValue(const ZigValue &other) = delete; // plz zero initialize with ZigValue val = {};
 
     // for use in debuggers
     void dump();
@@ -666,7 +672,7 @@ enum NodeType {
     NodeTypeSwitchProng,
     NodeTypeSwitchRange,
     NodeTypeCompTime,
-    NodeTypeNoAsync,
+    NodeTypeNoSuspend,
     NodeTypeBreak,
     NodeTypeContinue,
     NodeTypeAsmExpr,
@@ -856,7 +862,7 @@ enum CallModifier {
     CallModifierAsync,
     CallModifierNeverTail,
     CallModifierNeverInline,
-    CallModifierNoAsync,
+    CallModifierNoSuspend,
     CallModifierAlwaysTail,
     CallModifierAlwaysInline,
     CallModifierCompileTime,
@@ -1008,7 +1014,7 @@ struct AstNodeCompTime {
     AstNode *expr;
 };
 
-struct AstNodeNoAsync {
+struct AstNodeNoSuspend {
     AstNode *expr;
 };
 
@@ -1219,7 +1225,7 @@ struct AstNode {
         AstNodeSwitchProng switch_prong;
         AstNodeSwitchRange switch_range;
         AstNodeCompTime comptime_expr;
-        AstNodeNoAsync noasync_expr;
+        AstNodeNoSuspend nosuspend_expr;
         AstNodeAsmExpr asm_expr;
         AstNodeFieldAccessExpr field_access_expr;
         AstNodePtrDerefExpr ptr_deref_expr;
@@ -1852,7 +1858,7 @@ enum PanicMsgId {
     PanicMsgIdResumedAnAwaitingFn,
     PanicMsgIdFrameTooSmall,
     PanicMsgIdResumedFnPendingAwait,
-    PanicMsgIdBadNoAsyncCall,
+    PanicMsgIdBadNoSuspendCall,
     PanicMsgIdResumeNotSuspendedFn,
     PanicMsgIdBadSentinel,
     PanicMsgIdShxTooBigRhs,
@@ -2269,6 +2275,7 @@ struct CodeGen {
     CodeModel code_model;
     OptionalBool linker_gc_sections;
     OptionalBool linker_allow_shlib_undefined;
+    OptionalBool linker_bind_global_refs_locally;
     bool strip_debug_symbols;
     bool is_test_build;
     bool is_single_threaded;
@@ -2369,7 +2376,7 @@ enum ScopeId {
     ScopeIdRuntime,
     ScopeIdTypeOf,
     ScopeIdExpr,
-    ScopeIdNoAsync,
+    ScopeIdNoSuspend,
 };
 
 struct Scope {
@@ -2503,9 +2510,9 @@ struct ScopeCompTime {
     Scope base;
 };
 
-// This scope is created for a noasync expression.
-// NodeTypeNoAsync
-struct ScopeNoAsync {
+// This scope is created for a nosuspend expression.
+// NodeTypeNoSuspend
+struct ScopeNoSuspend {
     Scope base;
 };
 
@@ -2589,11 +2596,8 @@ struct IrBasicBlockSrc {
 
 struct IrBasicBlockGen {
     ZigList<IrInstGen *> instruction_list;
-    IrBasicBlockSrc *parent;
     Scope *scope;
     const char *name_hint;
-    uint32_t index; // index into the basic block list
-    uint32_t ref_count;
     LLVMBasicBlockRef llvm_block;
     LLVMBasicBlockRef llvm_exit_block;
     // The instruction that referenced this basic block and caused us to
@@ -3454,7 +3458,6 @@ struct IrInstSrcOptionalUnwrapPtr {
 
     IrInstSrc *base_ptr;
     bool safety_check_on;
-    bool initializing;
 };
 
 struct IrInstGenOptionalUnwrapPtr {
@@ -4485,7 +4488,7 @@ struct IrInstSrcAwait {
 
     IrInstSrc *frame;
     ResultLoc *result_loc;
-    bool is_noasync;
+    bool is_nosuspend;
 };
 
 struct IrInstGenAwait {
@@ -4494,7 +4497,7 @@ struct IrInstGenAwait {
     IrInstGen *frame;
     IrInstGen *result_loc;
     ZigFn *target_fn;
-    bool is_noasync;
+    bool is_nosuspend;
 };
 
 struct IrInstSrcResume {

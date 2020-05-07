@@ -19,7 +19,7 @@ project(zig C CXX)
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
 
 set(ZIG_VERSION_MAJOR 0)
-set(ZIG_VERSION_MINOR 5)
+set(ZIG_VERSION_MINOR 6)
 set(ZIG_VERSION_PATCH 0)
 set(ZIG_VERSION "${ZIG_VERSION_MAJOR}.${ZIG_VERSION_MINOR}.${ZIG_VERSION_PATCH}")
 
@@ -239,6 +239,7 @@ target_include_directories(embedded_softfloat PUBLIC
 )
 include_directories("${CMAKE_SOURCE_DIR}/deps/SoftFloat-3e/source/include")
 set(SOFTFLOAT_LIBRARIES embedded_softfloat)
+include_directories("${CMAKE_SOURCE_DIR}/deps/dbg-macro")
 
 find_package(Threads)
 

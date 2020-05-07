@@ -44,7 +44,7 @@ pub fn build(b: *Builder) !void {
         try findAndReadConfigH(b);
 
     var test_stage2 = b.addTest("src-self-hosted/test.zig");
-    test_stage2.setBuildMode(builtin.Mode.Debug);
+    test_stage2.setBuildMode(.Debug); // note this is only the mode of the test harness
     test_stage2.addPackagePath("stage2_tests", "test/stage2/test.zig");
 
     const fmt_build_zig = b.addFmt(&[_][]const u8{"build.zig"});
@@ -68,7 +68,6 @@ pub fn build(b: *Builder) !void {
         var ctx = parseConfigH(b, config_h_text);
         ctx.llvm = try findLLVM(b, ctx.llvm_config_exe);
 
-        try configureStage2(b, test_stage2, ctx);
         try configureStage2(b, exe, ctx);
 
         b.default_step.dependOn(&exe.step);
@@ -136,14 +135,14 @@ pub fn build(b: *Builder) !void {
 }
 
 fn dependOnLib(b: *Builder, lib_exe_obj: var, dep: LibraryDep) void {
-    for (dep.libdirs.toSliceConst()) |lib_dir| {
+    for (dep.libdirs.items) |lib_dir| {
         lib_exe_obj.addLibPath(lib_dir);
     }
     const lib_dir = fs.path.join(
         b.allocator,
         &[_][]const u8{ dep.prefix, "lib" },
     ) catch unreachable;
-    for (dep.system_libs.toSliceConst()) |lib| {
+    for (dep.system_libs.items) |lib| {
         const static_bare_name = if (mem.eql(u8, lib, "curses"))
             @as([]const u8, "libncurses.a")
         else
@@ -159,10 +158,10 @@ fn dependOnLib(b: *Builder, lib_exe_obj: var, dep: LibraryDep) void {
             lib_exe_obj.linkSystemLibrary(lib);
         }
     }
-    for (dep.libs.toSliceConst()) |lib| {
+    for (dep.libs.items) |lib| {
         lib_exe_obj.addObjectFile(lib);
     }
-    for (dep.includes.toSliceConst()) |include_path| {
+    for (dep.includes.items) |include_path| {
         lib_exe_obj.addIncludeDir(include_path);
     }
 }

@@ -49,8 +49,9 @@ pub const Token = struct {
         Keyword.init("inline", .Keyword_inline),
         Keyword.init("nakedcc", .Keyword_nakedcc),
         Keyword.init("noalias", .Keyword_noalias),
-        Keyword.init("noasync", .Keyword_noasync),
+        Keyword.init("noasync", .Keyword_nosuspend), // TODO: remove this
         Keyword.init("noinline", .Keyword_noinline),
+        Keyword.init("nosuspend", .Keyword_nosuspend),
         Keyword.init("null", .Keyword_null),
         Keyword.init("or", .Keyword_or),
         Keyword.init("orelse", .Keyword_orelse),
@@ -182,8 +183,8 @@ pub const Token = struct {
         Keyword_inline,
         Keyword_nakedcc,
         Keyword_noalias,
-        Keyword_noasync,
         Keyword_noinline,
+        Keyword_nosuspend,
         Keyword_null,
         Keyword_or,
         Keyword_orelse,
@@ -307,8 +308,8 @@ pub const Token = struct {
                 .Keyword_inline => "inline",
                 .Keyword_nakedcc => "nakedcc",
                 .Keyword_noalias => "noalias",
-                .Keyword_noasync => "noasync",
                 .Keyword_noinline => "noinline",
+                .Keyword_nosuspend => "nosuspend",
                 .Keyword_null => "null",
                 .Keyword_or => "or",
                 .Keyword_orelse => "orelse",
@@ -848,6 +849,7 @@ pub const Tokenizer = struct {
                         self.index += 1;
                         break;
                     },
+                    '\t' => {},
                     else => self.checkLiteralCharacter(),
                 },
 
@@ -1684,6 +1686,14 @@ test "tokenizer - string identifier and builtin fns" {
         Token.Id.StringLiteral,
         Token.Id.RParen,
         Token.Id.Semicolon,
+    });
+}
+
+test "tokenizer - multiline string literal with literal tab" {
+    testTokenize(
+        \\\\foo	bar
+    , &[_]Token.Id{
+        Token.Id.MultilineStringLiteralLine,
     });
 }
 

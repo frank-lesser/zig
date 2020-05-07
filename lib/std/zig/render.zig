@@ -391,11 +391,15 @@ fn renderExpression(
             try renderToken(tree, stream, comptime_node.comptime_token, indent, start_col, Space.Space);
             return renderExpression(allocator, stream, tree, indent, start_col, comptime_node.expr, space);
         },
-        .Noasync => {
-            const noasync_node = @fieldParentPtr(ast.Node.Noasync, "base", base);
-
-            try renderToken(tree, stream, noasync_node.noasync_token, indent, start_col, Space.Space);
-            return renderExpression(allocator, stream, tree, indent, start_col, noasync_node.expr, space);
+        .Nosuspend => {
+            const nosuspend_node = @fieldParentPtr(ast.Node.Nosuspend, "base", base);
+            if (mem.eql(u8, tree.tokenSlice(nosuspend_node.nosuspend_token), "noasync")) {
+                // TODO: remove this
+                try stream.writeAll("nosuspend ");
+            } else {
+                try renderToken(tree, stream, nosuspend_node.nosuspend_token, indent, start_col, Space.Space);
+            }
+            return renderExpression(allocator, stream, tree, indent, start_col, nosuspend_node.expr, space);
         },
 
         .Suspend => {
@@ -1359,12 +1363,7 @@ fn renderExpression(
         .BuiltinCall => {
             const builtin_call = @fieldParentPtr(ast.Node.BuiltinCall, "base", base);
 
-            // TODO: Remove condition after deprecating 'typeOf'. See https://github.com/ziglang/zig/issues/1348
-            if (mem.eql(u8, tree.tokenSlicePtr(tree.tokens.at(builtin_call.builtin_token)), "@typeOf")) {
-                try stream.writeAll("@TypeOf");
-            } else {
-                try renderToken(tree, stream, builtin_call.builtin_token, indent, start_col, Space.None); // @name
-            }
+            try renderToken(tree, stream, builtin_call.builtin_token, indent, start_col, Space.None); // @name
 
             const src_params_trailing_comma = blk: {
                 if (builtin_call.params.len < 2) break :blk false;

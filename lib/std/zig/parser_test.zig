@@ -1,3 +1,27 @@
+test "zig fmt: top-level fields" {
+    try testCanonical(
+        \\a: did_you_know,
+        \\b: all_files_are,
+        \\structs: ?x,
+        \\
+    );
+}
+
+test "zig fmt: decl between fields" {
+    try testError(
+        \\const S = struct {
+        \\    const foo = 2;
+        \\    const bar = 2;
+        \\    const baz = 2;
+        \\    a: usize,
+        \\    const foo1 = 2;
+        \\    const bar1 = 2;
+        \\    const baz1 = 2;
+        \\    b: usize,
+        \\};
+    );
+}
+
 test "zig fmt: errdefer with payload" {
     try testCanonical(
         \\pub fn main() anyerror!void {
@@ -11,10 +35,10 @@ test "zig fmt: errdefer with payload" {
     );
 }
 
-test "zig fmt: noasync block" {
+test "zig fmt: nosuspend block" {
     try testCanonical(
         \\pub fn main() anyerror!void {
-        \\    noasync {
+        \\    nosuspend {
         \\        var foo: Foo = .{ .bar = 42 };
         \\    }
         \\}
@@ -22,10 +46,10 @@ test "zig fmt: noasync block" {
     );
 }
 
-test "zig fmt: noasync await" {
+test "zig fmt: nosuspend await" {
     try testCanonical(
         \\fn foo() void {
-        \\    x = noasync await y;
+        \\    x = nosuspend await y;
         \\}
         \\
     );
@@ -95,17 +119,6 @@ test "zig fmt: trailing comma in fn parameter list" {
         \\    a: i32,
         \\    b: i32,
         \\) linksection(".text") callconv(.C) i32 {}
-        \\
-    );
-}
-
-// TODO: Remove condition after deprecating 'typeOf'. See https://github.com/ziglang/zig/issues/1348
-test "zig fmt: change @typeOf to @TypeOf" {
-    try testTransform(
-        \\const a = @typeOf(@as(usize, 10));
-        \\
-    ,
-        \\const a = @TypeOf(@as(usize, 10));
         \\
     );
 }
@@ -387,7 +400,7 @@ test "zig fmt: correctly space struct fields with doc comments" {
         \\    c: u8,
         \\};
         \\
-        ,
+    ,
         \\pub const S = struct {
         \\    /// A
         \\    a: u8,
@@ -2001,11 +2014,11 @@ test "zig fmt: struct declaration" {
         \\    f1: u8,
         \\    f3: u8,
         \\
+        \\    f2: u8,
+        \\
         \\    fn method(self: *Self) Self {
         \\        return self.*;
         \\    }
-        \\
-        \\    f2: u8,
         \\};
         \\
         \\const Ps = packed struct {
@@ -2506,9 +2519,9 @@ test "zig fmt: async functions" {
     );
 }
 
-test "zig fmt: noasync" {
+test "zig fmt: nosuspend" {
     try testCanonical(
-        \\const a = noasync foo();
+        \\const a = nosuspend foo();
         \\
     );
 }
@@ -2913,6 +2926,20 @@ test "zig fmt: hexadeciaml float literals with underscore separators" {
     );
 }
 
+test "zig fmt: noasync to nosuspend" {
+    // TODO: remove this
+    try testTransform(
+        \\pub fn main() void {
+        \\    noasync call();
+        \\}
+    ,
+        \\pub fn main() void {
+        \\    nosuspend call();
+        \\}
+        \\
+    );
+}
+
 const std = @import("std");
 const mem = std.mem;
 const warn = std.debug.warn;
@@ -2967,14 +2994,7 @@ fn testTransform(source: []const u8, expected_source: []const u8) !void {
         var failing_allocator = std.testing.FailingAllocator.init(&fixed_allocator.allocator, maxInt(usize));
         var anything_changed: bool = undefined;
         const result_source = try testParse(source, &failing_allocator.allocator, &anything_changed);
-        if (!mem.eql(u8, result_source, expected_source)) {
-            warn("\n====== expected this output: =========\n", .{});
-            warn("{}", .{expected_source});
-            warn("\n======== instead found this: =========\n", .{});
-            warn("{}", .{result_source});
-            warn("\n======================================\n", .{});
-            return error.TestFailed;
-        }
+        std.testing.expectEqualStrings(expected_source, result_source);
         const changes_expected = source.ptr != expected_source.ptr;
         if (anything_changed != changes_expected) {
             warn("std.zig.render returned {} instead of {}\n", .{ anything_changed, changes_expected });
