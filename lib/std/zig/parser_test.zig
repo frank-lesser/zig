@@ -1,3 +1,223 @@
+test "recovery: top level" {
+    try testError(
+        \\test "" {inline}
+        \\test "" {inline}
+    , &[_]Error{
+        .ExpectedInlinable,
+        .ExpectedInlinable,
+    });
+}
+
+test "recovery: block statements" {
+    try testError(
+        \\test "" {
+        \\    foo + +;
+        \\    inline;
+        \\}
+    , &[_]Error{
+        .InvalidToken,
+        .ExpectedInlinable,
+    });
+}
+
+test "recovery: missing comma" {
+    try testError(
+        \\test "" {
+        \\    switch (foo) {
+        \\        2 => {}
+        \\        3 => {}
+        \\        else => {
+        \\            foo && bar +;
+        \\        }
+        \\    }
+        \\}
+    , &[_]Error{
+        .ExpectedToken,
+        .ExpectedToken,
+        .InvalidAnd,
+        .InvalidToken,
+    });
+}
+
+test "recovery: extra qualifier" {
+    try testError(
+        \\const a: *const const u8;
+        \\test ""
+    , &[_]Error{
+        .ExtraConstQualifier,
+        .ExpectedLBrace,
+    });
+}
+
+test "recovery: missing return type" {
+    try testError(
+        \\fn foo() {
+        \\    a && b;
+        \\}
+        \\test ""
+    , &[_]Error{
+        .ExpectedReturnType,
+        .InvalidAnd,
+        .ExpectedLBrace,
+    });
+}
+
+test "recovery: continue after invalid decl" {
+    try testError(
+        \\fn foo {
+        \\    inline;
+        \\}
+        \\pub test "" {
+        \\    async a && b;
+        \\}
+    , &[_]Error{
+        .ExpectedToken,
+        .ExpectedPubItem,
+        .ExpectedParamList,
+        .InvalidAnd,
+    });
+    try testError(
+        \\threadlocal test "" {
+        \\    @a && b;
+        \\}
+    , &[_]Error{
+        .ExpectedVarDecl,
+        .ExpectedParamList,
+        .InvalidAnd,
+    });
+}
+
+test "recovery: invalid extern/inline" {
+    try testError(
+        \\inline test "" { a && b; }
+    , &[_]Error{
+        .ExpectedFn,
+        .InvalidAnd,
+    });
+    try testError(
+        \\extern "" test "" { a && b; }
+    , &[_]Error{
+        .ExpectedVarDeclOrFn,
+        .InvalidAnd,
+    });
+}
+
+test "recovery: missing semicolon" {
+    try testError(
+        \\test "" {
+        \\    comptime a && b
+        \\    c && d
+        \\    @foo
+        \\}
+    , &[_]Error{
+        .InvalidAnd,
+        .ExpectedToken,
+        .InvalidAnd,
+        .ExpectedToken,
+        .ExpectedParamList,
+        .ExpectedToken,
+    });
+}
+
+test "recovery: invalid container members" {
+    try testError(
+        \\usingnamespace;
+        \\foo+
+        \\bar@,
+        \\while (a == 2) { test "" {}}
+        \\test "" {
+        \\    a && b
+        \\}
+    , &[_]Error{
+        .ExpectedExpr,
+        .ExpectedToken,
+        .ExpectedToken,
+        .ExpectedContainerMembers,
+        .InvalidAnd,
+        .ExpectedToken,
+    });
+}
+
+test "recovery: invalid parameter" {
+    try testError(
+        \\fn main() void {
+        \\    a(comptime T: type)
+        \\}
+    , &[_]Error{
+        .ExpectedToken,
+    });
+}
+
+test "recovery: extra '}' at top level" {
+    try testError(
+        \\}}}
+        \\test "" {
+        \\    a && b;
+        \\}
+    , &[_]Error{
+        .ExpectedContainerMembers,
+        .ExpectedContainerMembers,
+        .ExpectedContainerMembers,
+        .InvalidAnd,
+    });
+}
+
+test "recovery: mismatched bracket at top level" {
+    try testError(
+        \\const S = struct {
+        \\    arr: 128]?G
+        \\};
+    , &[_]Error{
+        .ExpectedToken,
+    });
+}
+
+test "recovery: invalid global error set access" {
+    try testError(
+        \\test "" {
+        \\    error && foo;
+        \\}
+    , &[_]Error{
+        .ExpectedToken,
+        .ExpectedIdentifier,
+        .InvalidAnd,
+    });
+}
+
+test "recovery: missing semicolon after if, for, while stmt" {
+    try testError(
+        \\test "" {
+        \\    if (foo) bar
+        \\    for (foo) |a| bar
+        \\    while (foo) bar
+        \\    a && b;
+        \\}
+    , &[_]Error{
+        .ExpectedSemiOrElse,
+        .ExpectedSemiOrElse,
+        .ExpectedSemiOrElse,
+        .InvalidAnd,
+    });
+}
+
+test "recovery: invalid comptime" {
+    try testError(
+        \\comptime
+    , &[_]Error{
+        .ExpectedBlockOrField,
+    });
+}
+
+test "zig fmt: if statment" {
+    try testCanonical(
+        \\test "" {
+        \\    if (optional()) |some|
+        \\        bar = some.foo();
+        \\}
+        \\
+    );
+}
+
 test "zig fmt: top-level fields" {
     try testCanonical(
         \\a: did_you_know,
@@ -19,7 +239,9 @@ test "zig fmt: decl between fields" {
         \\    const baz1 = 2;
         \\    b: usize,
         \\};
-    );
+    , &[_]Error{
+        .DeclBetweenFields,
+    });
 }
 
 test "zig fmt: errdefer with payload" {
@@ -119,22 +341,6 @@ test "zig fmt: trailing comma in fn parameter list" {
         \\    a: i32,
         \\    b: i32,
         \\) linksection(".text") callconv(.C) i32 {}
-        \\
-    );
-}
-
-// TODO: Remove nakedcc/stdcallcc once zig 0.6.0 is released. See https://github.com/ziglang/zig/pull/3977
-test "zig fmt: convert extern/nakedcc/stdcallcc into callconv(...)" {
-    try testTransform(
-        \\nakedcc fn foo1() void {}
-        \\stdcallcc fn foo2() void {}
-        \\extern fn foo3() void {}
-        \\extern "mylib" fn foo4() void {}
-    ,
-        \\fn foo1() callconv(.Naked) void {}
-        \\fn foo2() callconv(.Stdcall) void {}
-        \\fn foo3() callconv(.C) void {}
-        \\fn foo4() callconv(.C) void {}
         \\
     );
 }
@@ -252,10 +458,10 @@ test "zig fmt: anon list literal syntax" {
 test "zig fmt: async function" {
     try testCanonical(
         \\pub const Server = struct {
-        \\    handleRequestFn: async fn (*Server, *const std.net.Address, File) void,
+        \\    handleRequestFn: fn (*Server, *const std.net.Address, File) callconv(.Async) void,
         \\};
         \\test "hi" {
-        \\    var ptr = @ptrCast(async fn (i32) void, other);
+        \\    var ptr = @ptrCast(fn (i32) callconv(.Async) void, other);
         \\}
         \\
     );
@@ -447,15 +653,6 @@ test "zig fmt: aligned struct field" {
         \\pub const S = struct {
         \\    f: i32 align(32) = 1,
         \\};
-        \\
-    );
-}
-
-test "zig fmt: preserve space between async fn definitions" {
-    try testCanonical(
-        \\async fn a() void {}
-        \\
-        \\async fn b() void {}
         \\
     );
 }
@@ -1515,7 +1712,7 @@ test "zig fmt: line comments in struct initializer" {
 
 test "zig fmt: first line comment in struct initializer" {
     try testCanonical(
-        \\pub async fn acquire(self: *Self) HeldLock {
+        \\pub fn acquire(self: *Self) HeldLock {
         \\    return HeldLock{
         \\        // guaranteed allocation elision
         \\        .held = self.lock.acquire(),
@@ -2477,8 +2674,7 @@ test "zig fmt: fn type" {
         \\}
         \\
         \\const a: fn (u8) u8 = undefined;
-        \\const b: extern fn (u8) u8 = undefined;
-        \\const c: fn (u8) callconv(.Naked) u8 = undefined;
+        \\const b: fn (u8) callconv(.Naked) u8 = undefined;
         \\const ap: fn (u8) u8 = a;
         \\
     );
@@ -2500,7 +2696,7 @@ test "zig fmt: inline asm" {
 
 test "zig fmt: async functions" {
     try testCanonical(
-        \\async fn simpleAsyncFn() void {
+        \\fn simpleAsyncFn() void {
         \\    const a = async a.b();
         \\    x += 1;
         \\    suspend;
@@ -2854,7 +3050,10 @@ test "zig fmt: extern without container keyword returns error" {
     try testError(
         \\const container = extern {};
         \\
-    );
+    , &[_]Error{
+        .ExpectedExpr,
+        .ExpectedVarDeclOrFn,
+    });
 }
 
 test "zig fmt: integer literals with underscore separators" {
@@ -2940,6 +3139,26 @@ test "zig fmt: noasync to nosuspend" {
     );
 }
 
+test "zig fmt: convert async fn into callconv(.Async)" {
+    try testTransform(
+        \\async fn foo() void {}
+    ,
+        \\fn foo() callconv(.Async) void {}
+        \\
+    );
+}
+
+test "zig fmt: convert extern fn proto into callconv(.C)" {
+    try testTransform(
+        \\extern fn foo0() void {}
+        \\const foo1 = extern fn () void;
+    ,
+        \\extern fn foo0() void {}
+        \\const foo1 = fn () callconv(.C) void;
+        \\
+    );
+}
+
 const std = @import("std");
 const mem = std.mem;
 const warn = std.debug.warn;
@@ -2986,7 +3205,6 @@ fn testParse(source: []const u8, allocator: *mem.Allocator, anything_changed: *b
     anything_changed.* = try std.zig.render(allocator, buffer.outStream(), tree);
     return buffer.toOwnedSlice();
 }
-
 fn testTransform(source: []const u8, expected_source: []const u8) !void {
     const needed_alloc_count = x: {
         // Try it once with unlimited memory, make sure it works
@@ -3034,14 +3252,20 @@ fn testTransform(source: []const u8, expected_source: []const u8) !void {
         }
     }
 }
-
 fn testCanonical(source: []const u8) !void {
     return testTransform(source, source);
 }
 
-fn testError(source: []const u8) !void {
+const Error = @TagType(std.zig.ast.Error);
+
+fn testError(source: []const u8, expected_errors: []const Error) !void {
     const tree = try std.zig.parse(std.testing.allocator, source);
     defer tree.deinit();
 
-    std.testing.expect(tree.errors.len != 0);
+    std.testing.expect(tree.errors.len == expected_errors.len);
+    for (expected_errors) |expected, i| {
+        const err = tree.errors.at(i);
+
+        std.testing.expect(expected == err.*);
+    }
 }

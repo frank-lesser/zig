@@ -13,6 +13,9 @@ pub const Error = error{
 
 /// Returns whether anything changed
 pub fn render(allocator: *mem.Allocator, stream: var, tree: *ast.Tree) (@TypeOf(stream).Error || Error)!bool {
+    // cannot render an invalid tree
+    std.debug.assert(tree.errors.len == 0);
+
     // make a passthrough stream that checks whether something changed
     const MyStream = struct {
         const MyStream = @This();
@@ -1413,30 +1416,13 @@ fn renderExpression(
                 try renderToken(tree, stream, visib_token_index, indent, start_col, Space.Space); // pub
             }
 
-            // Some extra machinery is needed to rewrite the old-style cc
-            // notation to the new callconv one
-            var cc_rewrite_str: ?[*:0]const u8 = null;
             if (fn_proto.extern_export_inline_token) |extern_export_inline_token| {
-                const tok = tree.tokens.at(extern_export_inline_token);
-                if (tok.id != .Keyword_extern or fn_proto.body_node == null) {
-                    try renderToken(tree, stream, extern_export_inline_token, indent, start_col, Space.Space); // extern/export
-                } else {
-                    cc_rewrite_str = ".C";
-                    fn_proto.lib_name = null;
-                }
+                if (!fn_proto.is_extern_prototype)
+                    try renderToken(tree, stream, extern_export_inline_token, indent, start_col, Space.Space); // extern/export/inline
             }
 
             if (fn_proto.lib_name) |lib_name| {
                 try renderExpression(allocator, stream, tree, indent, start_col, lib_name, Space.Space);
-            }
-
-            if (fn_proto.cc_token) |cc_token| {
-                var str = tree.tokenSlicePtr(tree.tokens.at(cc_token));
-                if (mem.eql(u8, str, "stdcallcc")) {
-                    cc_rewrite_str = ".Stdcall";
-                } else if (mem.eql(u8, str, "nakedcc")) {
-                    cc_rewrite_str = ".Naked";
-                } else try renderToken(tree, stream, cc_token, indent, start_col, Space.Space); // stdcallcc
             }
 
             const lparen = if (fn_proto.name_token) |name_token| blk: {
@@ -1461,6 +1447,7 @@ fn renderExpression(
             else switch (fn_proto.return_type) {
                 .Explicit => |node| node.firstToken(),
                 .InferErrorSet => |node| tree.prevToken(node.firstToken()),
+                .Invalid => unreachable,
             });
             assert(tree.tokens.at(rparen).id == .RParen);
 
@@ -1528,20 +1515,21 @@ fn renderExpression(
                 try renderToken(tree, stream, callconv_lparen, indent, start_col, Space.None); // (
                 try renderExpression(allocator, stream, tree, indent, start_col, callconv_expr, Space.None);
                 try renderToken(tree, stream, callconv_rparen, indent, start_col, Space.Space); // )
-            } else if (cc_rewrite_str) |str| {
-                try stream.writeAll("callconv(");
-                try stream.writeAll(mem.spanZ(str));
-                try stream.writeAll(") ");
+            } else if (fn_proto.is_extern_prototype) {
+                try stream.writeAll("callconv(.C) ");
+            } else if (fn_proto.is_async) {
+                try stream.writeAll("callconv(.Async) ");
             }
 
             switch (fn_proto.return_type) {
-                ast.Node.FnProto.ReturnType.Explicit => |node| {
+                .Explicit => |node| {
                     return renderExpression(allocator, stream, tree, indent, start_col, node, space);
                 },
-                ast.Node.FnProto.ReturnType.InferErrorSet => |node| {
+                .InferErrorSet => |node| {
                     try renderToken(tree, stream, tree.prevToken(node.firstToken()), indent, start_col, Space.None); // !
                     return renderExpression(allocator, stream, tree, indent, start_col, node, space);
                 },
+                .Invalid => unreachable,
             }
         },
 
@@ -2162,10 +2150,9 @@ fn renderParamDecl(
         try renderToken(tree, stream, name_token, indent, start_col, Space.None);
         try renderToken(tree, stream, tree.nextToken(name_token), indent, start_col, Space.Space); // :
     }
-    if (param_decl.var_args_token) |var_args_token| {
-        try renderToken(tree, stream, var_args_token, indent, start_col, space);
-    } else {
-        try renderExpression(allocator, stream, tree, indent, start_col, param_decl.type_node, space);
+    switch (param_decl.param_type) {
+        .var_args => |token|  try renderToken(tree, stream, token, indent, start_col, space),
+        .var_type, .type_expr => |node| try renderExpression(allocator, stream, tree, indent, start_col, node, space),
     }
 }
 
@@ -2345,8 +2332,10 @@ fn renderTokenOffset(
     }
 
     while (true) {
-        assert(loc.line != 0);
-        const newline_count = if (loc.line == 1) @as(u8, 1) else @as(u8, 2);
+        // translate-c doesn't generate correct newlines
+        // in generated code (loc.line == 0) so treat that case
+        // as though there was meant to be a newline between the tokens
+        const newline_count = if (loc.line <= 1) @as(u8, 1) else @as(u8, 2);
         try stream.writeByteNTimes('\n', newline_count);
         try stream.writeByteNTimes(' ', indent);
         try stream.writeAll(mem.trimRight(u8, tree.tokenSlicePtr(next_token), " "));

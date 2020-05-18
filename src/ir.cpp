@@ -12760,9 +12760,7 @@ static bool eval_const_expr_implicit_cast(IrAnalyze *ira, IrInst *source_instr,
             const_val->type = new_type;
             break;
         case CastOpIntToFloat:
-            {
-                assert(new_type->id == ZigTypeIdFloat);
-
+            if (new_type->id == ZigTypeIdFloat) {
                 BigFloat bigfloat;
                 bigfloat_init_bigint(&bigfloat, &other_val->data.x_bigint);
                 switch (new_type->data.floating.bit_count) {
@@ -12783,9 +12781,13 @@ static bool eval_const_expr_implicit_cast(IrAnalyze *ira, IrInst *source_instr,
                     default:
                         zig_unreachable();
                 }
-                const_val->special = ConstValSpecialStatic;
-                break;
+            } else if (new_type->id == ZigTypeIdComptimeFloat) {
+                bigfloat_init_bigint(&const_val->data.x_bigfloat, &other_val->data.x_bigint);
+            } else {
+                zig_unreachable();
             }
+            const_val->special = ConstValSpecialStatic;
+            break;
         case CastOpFloatToInt:
             float_init_bigint(&const_val->data.x_bigint, other_val);
             if (new_type->id == ZigTypeIdInt) {
@@ -21624,6 +21626,15 @@ static IrInstGen *ir_analyze_container_member_access_inner(IrAnalyze *ira,
                 if (tld->resolution == TldResolutionResolving)
                     return ir_error_dependency_loop(ira, source_instr);
 
+                if (tld->visib_mod == VisibModPrivate &&
+                    tld->import != get_scope_import(source_instr->scope))
+                {
+                    ErrorMsg *msg = ir_add_error(ira, source_instr,
+                        buf_sprintf("'%s' is private", buf_ptr(field_name)));
+                    add_error_note(ira->codegen, msg, tld->source_node, buf_sprintf("declared here"));
+                    return ira->codegen->invalid_inst_gen;
+                }
+
                 TldFn *tld_fn = (TldFn *)tld;
                 ZigFn *fn_entry = tld_fn->fn_entry;
                 assert(fn_entry != nullptr);
@@ -21697,6 +21708,9 @@ static IrInstGen *ir_analyze_struct_field_ptr(IrAnalyze *ira, IrInst* source_ins
     if (field->is_comptime) {
         IrInstGen *elem = ir_const(ira, source_instr, field_type);
         memoize_field_init_val(ira->codegen, struct_type, field);
+        if(field->init_val != nullptr && type_is_invalid(field->init_val->type)){
+            return ira->codegen->invalid_inst_gen;
+        }
         copy_const_val(ira->codegen, elem->value, field->init_val);
         return ir_get_ref2(ira, source_instr, elem, field_type, true, false);
     }
@@ -25053,6 +25067,9 @@ static Error ir_make_type_info_value(IrAnalyze *ira, IrInst* source_instr, ZigTy
                     inner_fields[3]->type = get_optional_type2(ira->codegen, struct_field->type_entry);
                     if (inner_fields[3]->type == nullptr) return ErrorSemanticAnalyzeFail;
                     memoize_field_init_val(ira->codegen, type_entry, struct_field);
+                    if(struct_field->init_val != nullptr && type_is_invalid(struct_field->init_val->type)){
+                        return ErrorSemanticAnalyzeFail;
+                    }
                     set_optional_payload(inner_fields[3], struct_field->init_val);
 
                     ZigValue *name = create_const_str_lit(ira->codegen, struct_field->name)->data.x_ptr.data.ref.pointee;
@@ -31092,6 +31109,19 @@ static ZigType *ir_resolve_lazy_fn_type(IrAnalyze *ira, AstNode *source_node, La
             ZigType *param_type = ir_resolve_type(ira, param_type_inst);
             if (type_is_invalid(param_type))
                 return nullptr;
+
+            if(!is_valid_param_type(param_type)){
+                if(param_type->id == ZigTypeIdOpaque){
+                    ir_add_error(ira, &param_type_inst->base,
+                        buf_sprintf("parameter of opaque type '%s' not allowed", buf_ptr(&param_type->name)));
+                } else {
+                    ir_add_error(ira, &param_type_inst->base,
+                        buf_sprintf("parameter of type '%s' not allowed", buf_ptr(&param_type->name)));
+                }
+
+                return nullptr;
+            }
+
             switch (type_requires_comptime(ira->codegen, param_type)) {
             case ReqCompTimeYes:
                 if (!calling_convention_allows_zig_types(fn_type_id.cc)) {
