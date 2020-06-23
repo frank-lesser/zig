@@ -47,6 +47,7 @@ pub const Value = extern union {
         comptime_float_type,
         noreturn_type,
         null_type,
+        undefined_type,
         fn_noreturn_no_args_type,
         fn_naked_noreturn_no_args_type,
         fn_ccc_void_no_args_type,
@@ -141,6 +142,7 @@ pub const Value = extern union {
             .comptime_float_type => return out_stream.writeAll("comptime_float"),
             .noreturn_type => return out_stream.writeAll("noreturn"),
             .null_type => return out_stream.writeAll("@TypeOf(null)"),
+            .undefined_type => return out_stream.writeAll("@TypeOf(undefined)"),
             .fn_noreturn_no_args_type => return out_stream.writeAll("fn() noreturn"),
             .fn_naked_noreturn_no_args_type => return out_stream.writeAll("fn() callconv(.Naked) noreturn"),
             .fn_ccc_void_no_args_type => return out_stream.writeAll("fn() callconv(.C) void"),
@@ -225,6 +227,7 @@ pub const Value = extern union {
             .comptime_float_type => Type.initTag(.comptime_float),
             .noreturn_type => Type.initTag(.noreturn),
             .null_type => Type.initTag(.@"null"),
+            .undefined_type => Type.initTag(.@"undefined"),
             .fn_noreturn_no_args_type => Type.initTag(.fn_noreturn_no_args),
             .fn_naked_noreturn_no_args_type => Type.initTag(.fn_naked_noreturn_no_args),
             .fn_ccc_void_no_args_type => Type.initTag(.fn_ccc_void_no_args),
@@ -281,6 +284,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -339,6 +343,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -398,6 +403,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -462,6 +468,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -555,6 +562,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -610,6 +618,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -666,6 +675,11 @@ pub const Value = extern union {
         return orderAgainstZero(lhs).compare(op);
     }
 
+    pub fn eql(a: Value, b: Value) bool {
+        // TODO non numerical comparisons
+        return compare(a, .eq, b);
+    }
+
     pub fn toBool(self: Value) bool {
         return switch (self.tag()) {
             .bool_true => true,
@@ -705,6 +719,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -766,6 +781,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,
@@ -844,6 +860,7 @@ pub const Value = extern union {
             .comptime_float_type,
             .noreturn_type,
             .null_type,
+            .undefined_type,
             .fn_noreturn_no_args_type,
             .fn_naked_noreturn_no_args_type,
             .fn_ccc_void_no_args_type,

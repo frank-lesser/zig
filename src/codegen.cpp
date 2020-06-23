@@ -870,10 +870,12 @@ static LLVMValueRef get_handle_value(CodeGen *g, LLVMValueRef ptr, ZigType *type
     }
 }
 
-static void ir_assert(bool ok, IrInstGen *source_instruction) {
+static void ir_assert_impl(bool ok, IrInstGen *source_instruction, const char *file, unsigned int line) {
     if (ok) return;
-    src_assert(ok, source_instruction->base.source_node);
+    src_assert_impl(ok, source_instruction->base.source_node, file, line);
 }
+
+#define ir_assert(OK, SOURCE_INSTRUCTION) ir_assert_impl((OK), (SOURCE_INSTRUCTION), __FILE__, __LINE__)
 
 static bool ir_want_fast_math(CodeGen *g, IrInstGen *instruction) {
     // TODO memoize
@@ -1041,6 +1043,37 @@ static void gen_assertion_scope(CodeGen *g, PanicMsgId msg_id, Scope *source_sco
 
 static void gen_assertion(CodeGen *g, PanicMsgId msg_id, IrInstGen *source_instruction) {
     return gen_assertion_scope(g, msg_id, source_instruction->base.scope);
+}
+
+static LLVMValueRef gen_wasm_memory_size(CodeGen *g) {
+    if (g->wasm_memory_size)
+        return g->wasm_memory_size;
+
+    // TODO adjust for wasm64 as well
+    // declare i32 @llvm.wasm.memory.size.i32(i32) nounwind readonly
+    LLVMTypeRef param_type = LLVMInt32Type();
+    LLVMTypeRef fn_type = LLVMFunctionType(LLVMInt32Type(), &param_type, 1, false);
+    g->wasm_memory_size = LLVMAddFunction(g->module, "llvm.wasm.memory.size.i32", fn_type);
+    assert(LLVMGetIntrinsicID(g->wasm_memory_size));
+
+    return g->wasm_memory_size;
+}
+
+static LLVMValueRef gen_wasm_memory_grow(CodeGen *g) {
+    if (g->wasm_memory_grow)
+        return g->wasm_memory_grow;
+
+    // TODO adjust for wasm64 as well
+    // declare i32 @llvm.wasm.memory.grow.i32(i32, i32) nounwind
+    LLVMTypeRef param_types[] = {
+        LLVMInt32Type(),
+        LLVMInt32Type(),
+    };
+    LLVMTypeRef fn_type = LLVMFunctionType(LLVMInt32Type(), param_types, 2, false);
+    g->wasm_memory_grow = LLVMAddFunction(g->module, "llvm.wasm.memory.grow.i32", fn_type);
+    assert(LLVMGetIntrinsicID(g->wasm_memory_grow));
+
+    return g->wasm_memory_grow;
 }
 
 static LLVMValueRef get_stacksave_fn_val(CodeGen *g) {
@@ -2057,6 +2090,78 @@ static bool iter_function_params_c_abi(CodeGen *g, ZigType *fn_type, FnWalk *fn_
                     }
                     fn_walk->data.inits.gen_i += 1;
                     break;
+                }
+            }
+            return true;
+        } else if (abi_class == X64CABIClass_SSE) {
+            // For now only handle structs with only floats/doubles in it.
+            if (ty->id != ZigTypeIdStruct) {
+                if (source_node != nullptr) {
+                    give_up_with_c_abi_error(g, source_node);
+                }
+                // otherwise allow codegen code to report a compile error
+                return false;
+            }
+
+            for (uint32_t i = 0; i < ty->data.structure.src_field_count; i += 1) {
+                if (ty->data.structure.fields[i]->type_entry->id != ZigTypeIdFloat) {
+                    if (source_node != nullptr) {
+                        give_up_with_c_abi_error(g, source_node);
+                    }
+                    // otherwise allow codegen code to report a compile error
+                    return false;
+                }
+            }
+
+            // The SystemV ABI says that we have to setup 1 FP register per f64.
+            // So two f32 can be passed in one f64, but 3 f32 have to be passed in 2 FP registers.
+            // To achieve this with LLVM API, we pass multiple f64 parameters to the LLVM function if
+            // the type is bigger than 8 bytes.
+
+            // Example:
+            // extern struct {
+            //      x: f32,
+            //      y: f32,
+            //      z: f32,
+            // };
+            // const ptr = (*f64)*Struct;
+            // Register 1: ptr.*
+            // Register 2: (ptr + 1).*
+
+            // One floating point register per f64 or 2 f32's
+            size_t number_of_fp_regs = (size_t)ceilf((float)ty_size / (float)8);
+
+            switch (fn_walk->id) {
+                case FnWalkIdAttrs: {
+                    fn_walk->data.attrs.gen_i += 1;
+                    break;
+                }
+                case FnWalkIdCall: {
+                    LLVMValueRef f64_ptr_to_struct = LLVMBuildBitCast(g->builder, val, LLVMPointerType(LLVMDoubleType(), 0), "");
+                    for (uint32_t i = 0; i < number_of_fp_regs; i += 1) {
+                        LLVMValueRef index = LLVMConstInt(g->builtin_types.entry_usize->llvm_type, i, false);
+                        LLVMValueRef indices[] = { index };
+                        LLVMValueRef adjusted_ptr_to_struct = LLVMBuildInBoundsGEP(g->builder, f64_ptr_to_struct, indices, 1, "");
+                        LLVMValueRef loaded = LLVMBuildLoad(g->builder, adjusted_ptr_to_struct, "");
+                        fn_walk->data.call.gen_param_values->append(loaded);
+                    }
+                    break;
+                }
+                case FnWalkIdTypes: {
+                    for (uint32_t i = 0; i < number_of_fp_regs; i += 1) {
+                        fn_walk->data.types.gen_param_types->append(get_llvm_type(g, g->builtin_types.entry_f64));
+                        fn_walk->data.types.param_di_types->append(get_llvm_di_type(g, g->builtin_types.entry_f64));
+                    }
+                    break;
+                }
+                case FnWalkIdVars:
+                case FnWalkIdInits: {
+                    // TODO: Handle exporting functions
+                    if (source_node != nullptr) {
+                        give_up_with_c_abi_error(g, source_node);
+                    }
+                    // otherwise allow codegen code to report a compile error
+                    return false;
                 }
             }
             return true;
@@ -3435,7 +3540,7 @@ static LLVMValueRef ir_render_int_to_enum(CodeGen *g, IrExecutableGen *executabl
 
         for (size_t field_i = 0; field_i < field_count; field_i += 1) {
             TypeEnumField *type_enum_field = &wanted_type->data.enumeration.fields[field_i];
-            
+
             Buf *name = type_enum_field->name;
             auto entry = occupied_tag_values.put_unique(type_enum_field->value, name);
             if (entry != nullptr) {
@@ -3549,7 +3654,7 @@ static LLVMValueRef ir_gen_negation(CodeGen *g, IrInstGen *inst, IrInstGen *oper
         } else if (scalar_type->data.integral.is_signed) {
             return LLVMBuildNSWNeg(g->builder, llvm_operand, "");
         } else {
-            return LLVMBuildNUWNeg(g->builder, llvm_operand, "");
+            zig_unreachable();
         }
     } else {
         zig_unreachable();
@@ -3879,7 +3984,7 @@ static LLVMValueRef ir_render_elem_ptr(CodeGen *g, IrExecutableGen *executable, 
             assert(array_type->data.pointer.child_type->id == ZigTypeIdArray);
             array_type = array_type->data.pointer.child_type;
         }
-        
+
         assert(array_type->data.array.len != 0 || array_type->data.array.sentinel != nullptr);
 
         if (safety_check_on) {
@@ -5153,7 +5258,7 @@ static LLVMValueRef get_enum_tag_name_function(CodeGen *g, ZigType *enum_type) {
 
     for (size_t field_i = 0; field_i < field_count; field_i += 1) {
         TypeEnumField *type_enum_field = &enum_type->data.enumeration.fields[field_i];
-        
+
         Buf *name = type_enum_field->name;
         auto entry = occupied_tag_values.put_unique(type_enum_field->value, name);
         if (entry != nullptr) {
@@ -5366,7 +5471,7 @@ static LLVMTypeRef get_atomic_abi_type(CodeGen *g, IrInstGen *instruction) {
         }
         auto bit_count = operand_type->data.integral.bit_count;
         bool is_signed = operand_type->data.integral.is_signed;
-        
+
         ir_assert(bit_count != 0, instruction);
         if (bit_count == 1 || !is_power_of_2(bit_count)) {
             return get_llvm_type(g, get_int_type(g, is_signed, operand_type->abi_size * 8));
@@ -5512,6 +5617,23 @@ static LLVMValueRef ir_render_memcpy(CodeGen *g, IrExecutableGen *executable, Ir
     ZigLLVMBuildMemCpy(g->builder, dest_ptr_casted, get_ptr_align(g, dest_ptr_type),
             src_ptr_casted, get_ptr_align(g, src_ptr_type), len_val, is_volatile);
     return nullptr;
+}
+
+static LLVMValueRef ir_render_wasm_memory_size(CodeGen *g, IrExecutableGen *executable, IrInstGenWasmMemorySize *instruction) {
+    // TODO adjust for wasm64
+    LLVMValueRef param = ir_llvm_value(g, instruction->index);
+    LLVMValueRef val = LLVMBuildCall(g->builder, gen_wasm_memory_size(g), &param, 1, "");
+    return val;
+}
+
+static LLVMValueRef ir_render_wasm_memory_grow(CodeGen *g, IrExecutableGen *executable, IrInstGenWasmMemoryGrow *instruction) {
+    // TODO adjust for wasm64
+    LLVMValueRef params[] = {
+        ir_llvm_value(g, instruction->index),
+        ir_llvm_value(g, instruction->delta),
+    };
+    LLVMValueRef val = LLVMBuildCall(g->builder, gen_wasm_memory_grow(g), params, 2, "");
+    return val;
 }
 
 static LLVMValueRef ir_render_slice(CodeGen *g, IrExecutableGen *executable, IrInstGenSlice *instruction) {
@@ -6724,6 +6846,10 @@ static LLVMValueRef ir_render_instruction(CodeGen *g, IrExecutableGen *executabl
             return ir_render_splat(g, executable, (IrInstGenSplat *) instruction);
         case IrInstGenIdVectorExtractElem:
             return ir_render_vector_extract_elem(g, executable, (IrInstGenVectorExtractElem *) instruction);
+        case IrInstGenIdWasmMemorySize:
+            return ir_render_wasm_memory_size(g, executable, (IrInstGenWasmMemorySize *) instruction);
+        case IrInstGenIdWasmMemoryGrow:
+            return ir_render_wasm_memory_grow(g, executable, (IrInstGenWasmMemoryGrow *) instruction);
     }
     zig_unreachable();
 }
@@ -8586,6 +8712,9 @@ static void define_builtin_fns(CodeGen *g) {
     create_builtin_fn(g, BuiltinFnIdAs, "as", 2);
     create_builtin_fn(g, BuiltinFnIdCall, "call", 3);
     create_builtin_fn(g, BuiltinFnIdBitSizeof, "bitSizeOf", 1);
+    create_builtin_fn(g, BuiltinFnIdWasmMemorySize, "wasmMemorySize", 1);
+    create_builtin_fn(g, BuiltinFnIdWasmMemoryGrow, "wasmMemoryGrow", 2);
+    create_builtin_fn(g, BuiltinFnIdSrc, "src", 0);
 }
 
 static const char *bool_to_str(bool b) {
@@ -9136,7 +9265,7 @@ static void init(CodeGen *g) {
             abi_name = (g->zig_target->arch == ZigLLVM_riscv32) ? "ilp32" : "lp64";
         }
     }
-    
+
     g->target_machine = ZigLLVMCreateTargetMachine(target_ref, buf_ptr(&g->llvm_triple_str),
             target_specific_cpu_args, target_specific_features, opt_level, reloc_mode,
             to_llvm_code_model(g), g->function_sections, float_abi, abi_name);

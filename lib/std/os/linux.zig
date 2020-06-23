@@ -417,7 +417,7 @@ pub fn ftruncate(fd: i32, length: u64) usize {
     }
 }
 
-pub fn pwrite(fd: i32, buf: [*]const u8, count: usize, offset: usize) usize {
+pub fn pwrite(fd: i32, buf: [*]const u8, count: usize, offset: u64) usize {
     if (@hasField(SYS, "pwrite64")) {
         if (require_aligned_register_pair) {
             return syscall6(
@@ -1191,6 +1191,10 @@ pub fn tcgetattr(fd: fd_t, termios_p: *termios) usize {
 
 pub fn tcsetattr(fd: fd_t, optional_action: TCSA, termios_p: *const termios) usize {
     return syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), TCSETS + @enumToInt(optional_action), @ptrToInt(termios_p));
+}
+
+pub fn ioctl(fd: fd_t, request: u32, arg: usize) usize {
+    return syscall3(.ioctl, @bitCast(usize, @as(isize, fd)), request, arg);
 }
 
 test "" {

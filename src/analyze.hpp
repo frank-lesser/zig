@@ -180,6 +180,9 @@ ZigValue *create_const_slice(CodeGen *g, ZigValue *array_val, size_t start, size
 void init_const_null(ZigValue *const_val, ZigType *type);
 ZigValue *create_const_null(CodeGen *g, ZigType *type);
 
+void init_const_fn(ZigValue *const_val, ZigFn *fn);
+ZigValue *create_const_fn(CodeGen *g, ZigFn *fn);
+
 ZigValue **alloc_const_vals_ptrs(CodeGen *g, size_t count);
 ZigValue **realloc_const_vals_ptrs(CodeGen *g, ZigValue **ptr, size_t old_count, size_t new_count);
 
@@ -260,7 +263,7 @@ ZigLLVMDIType *get_llvm_di_type(CodeGen *g, ZigType *type);
 void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_path, bool translate_c,
         FileExt source_kind);
 
-void src_assert(bool ok, AstNode *source_node);
+void src_assert_impl(bool ok, AstNode *source_node, const char *file, unsigned int line);
 bool is_container(ZigType *type_entry);
 ZigValue *analyze_const_value(CodeGen *g, Scope *scope, AstNode *node, ZigType *type_entry,
         Buf *type_name, UndefAllowed undef);
@@ -290,4 +293,7 @@ bool type_has_optional_repr(ZigType *ty);
 bool is_opt_err_set(ZigType *ty);
 bool type_is_numeric(ZigType *ty);
 const char *float_op_to_name(BuiltinFnId op);
+
+#define src_assert(OK, SOURCE_NODE) src_assert_impl((OK), (SOURCE_NODE), __FILE__, __LINE__)
+
 #endif

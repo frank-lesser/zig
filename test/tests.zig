@@ -609,7 +609,7 @@ pub const StackTracesContext = struct {
             const allocator = context.b.allocator;
             const ptr = allocator.create(RunAndCompareStep) catch unreachable;
             ptr.* = RunAndCompareStep{
-                .step = build.Step.init("StackTraceCompareOutputStep", allocator, make),
+                .step = build.Step.init(.Custom, "StackTraceCompareOutputStep", allocator, make),
                 .context = context,
                 .exe = exe,
                 .name = name,
@@ -648,8 +648,9 @@ pub const StackTracesContext = struct {
 
             const stdout = child.stdout.?.inStream().readAllAlloc(b.allocator, max_stdout_size) catch unreachable;
             defer b.allocator.free(stdout);
-            var stderr = child.stderr.?.inStream().readAllAlloc(b.allocator, max_stdout_size) catch unreachable;
-            defer b.allocator.free(stderr);
+            const stderrFull = child.stderr.?.inStream().readAllAlloc(b.allocator, max_stdout_size) catch unreachable;
+            defer b.allocator.free(stderrFull);
+            var stderr = stderrFull;
 
             const term = child.wait() catch |err| {
                 debug.panic("Unable to spawn {}: {}\n", .{ full_exe_path, @errorName(err) });
@@ -808,7 +809,7 @@ pub const CompileErrorContext = struct {
             const allocator = context.b.allocator;
             const ptr = allocator.create(CompileCmpOutputStep) catch unreachable;
             ptr.* = CompileCmpOutputStep{
-                .step = build.Step.init("CompileCmpOutput", allocator, make),
+                .step = build.Step.init(.Custom, "CompileCmpOutput", allocator, make),
                 .context = context,
                 .name = name,
                 .test_index = context.test_index,
@@ -1156,7 +1157,7 @@ pub const GenHContext = struct {
             const allocator = context.b.allocator;
             const ptr = allocator.create(GenHCmpOutputStep) catch unreachable;
             ptr.* = GenHCmpOutputStep{
-                .step = build.Step.init("ParseCCmpOutput", allocator, make),
+                .step = build.Step.init(.Custom, "ParseCCmpOutput", allocator, make),
                 .context = context,
                 .obj = obj,
                 .name = name,

@@ -182,6 +182,7 @@ pub fn OpenFile(sub_path_w: []const u16, options: OpenFileOptions) OpenError!HAN
             .PIPE_BUSY => return error.PipeBusy,
             .OBJECT_PATH_SYNTAX_BAD => unreachable,
             .OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
+            .FILE_IS_A_DIRECTORY => return error.IsDir,
             else => return unexpectedStatus(rc),
         }
     }
@@ -391,6 +392,7 @@ pub fn GetQueuedCompletionStatus(
             .HANDLE_EOF => return GetQueuedCompletionStatusResult.EOF,
             else => |err| {
                 if (std.debug.runtime_safety) {
+                    @setEvalBranchQuota(2500);
                     std.debug.panic("unexpected error: {}\n", .{err});
                 }
             },
@@ -744,6 +746,7 @@ pub const RemoveDirectoryError = error{
     FileNotFound,
     DirNotEmpty,
     Unexpected,
+    NotDir,
 };
 
 pub fn RemoveDirectory(dir_path: []const u8) RemoveDirectoryError!void {
@@ -756,6 +759,7 @@ pub fn RemoveDirectoryW(dir_path_w: [*:0]const u16) RemoveDirectoryError!void {
         switch (kernel32.GetLastError()) {
             .PATH_NOT_FOUND => return error.FileNotFound,
             .DIR_NOT_EMPTY => return error.DirNotEmpty,
+            .DIRECTORY => return error.NotDir,
             else => |err| return unexpectedError(err),
         }
     }
@@ -897,7 +901,13 @@ pub fn WSAStartup(majorVersion: u8, minorVersion: u8) !ws2_32.WSADATA {
     var wsadata: ws2_32.WSADATA = undefined;
     return switch (ws2_32.WSAStartup((@as(WORD, minorVersion) << 8) | majorVersion, &wsadata)) {
         0 => wsadata,
-        else => |err| unexpectedWSAError(@intToEnum(ws2_32.WinsockError, @intCast(u16, err))),
+        else => |err_int| switch (@intToEnum(ws2_32.WinsockError, @intCast(u16, err_int))) {
+            .WSASYSNOTREADY => return error.SystemNotAvailable,
+            .WSAVERNOTSUPPORTED => return error.VersionNotSupported,
+            .WSAEINPROGRESS => return error.BlockingOperationInProgress,
+            .WSAEPROCLIM => return error.SystemResources,
+            else => |err| return unexpectedWSAError(err),
+        },
     };
 }
 
@@ -905,6 +915,9 @@ pub fn WSACleanup() !void {
     return switch (ws2_32.WSACleanup()) {
         0 => {},
         ws2_32.SOCKET_ERROR => switch (ws2_32.WSAGetLastError()) {
+            .WSANOTINITIALISED => return error.NotInitialized,
+            .WSAENETDOWN => return error.NetworkNotAvailable,
+            .WSAEINPROGRESS => return error.BlockingOperationInProgress,
             else => |err| return unexpectedWSAError(err),
         },
         else => unreachable,
@@ -1193,23 +1206,23 @@ pub fn peb() *PEB {
 /// Universal Time (UTC).
 /// This function returns the number of nanoseconds since the canonical epoch,
 /// which is the POSIX one (Jan 01, 1970 AD).
-pub fn fromSysTime(hns: i64) i64 {
-    const adjusted_epoch = hns + std.time.epoch.windows * (std.time.ns_per_s / 100);
+pub fn fromSysTime(hns: i64) i128 {
+    const adjusted_epoch: i128 = hns + std.time.epoch.windows * (std.time.ns_per_s / 100);
     return adjusted_epoch * 100;
 }
 
-pub fn toSysTime(ns: i64) i64 {
+pub fn toSysTime(ns: i128) i64 {
     const hns = @divFloor(ns, 100);
-    return hns - std.time.epoch.windows * (std.time.ns_per_s / 100);
+    return @intCast(i64, hns) - std.time.epoch.windows * (std.time.ns_per_s / 100);
 }
 
-pub fn fileTimeToNanoSeconds(ft: FILETIME) i64 {
-    const hns = @bitCast(i64, (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+pub fn fileTimeToNanoSeconds(ft: FILETIME) i128 {
+    const hns = (@as(i64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
     return fromSysTime(hns);
 }
 
 /// Converts a number of nanoseconds since the POSIX epoch to a Windows FILETIME.
-pub fn nanoSecondsToFileTime(ns: i64) FILETIME {
+pub fn nanoSecondsToFileTime(ns: i128) FILETIME {
     const adjusted = @bitCast(u64, toSysTime(ns));
     return FILETIME{
         .dwHighDateTime = @truncate(u32, adjusted >> 32),

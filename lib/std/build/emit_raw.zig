@@ -92,7 +92,7 @@ const BinaryElfOutput = struct {
             }
         }
 
-        sort.sort(*BinaryElfSegment, self.segments.span(), segmentSortCompare);
+        sort.sort(*BinaryElfSegment, self.segments.span(), {}, segmentSortCompare);
 
         if (self.segments.items.len > 0) {
             const firstSegment = self.segments.items[0];
@@ -117,7 +117,7 @@ const BinaryElfOutput = struct {
             }
         }
 
-        sort.sort(*BinaryElfSection, self.sections.span(), sectionSortCompare);
+        sort.sort(*BinaryElfSection, self.sections.span(), {}, sectionSortCompare);
 
         return self;
     }
@@ -131,7 +131,7 @@ const BinaryElfOutput = struct {
             ((shdr.sh_flags & elf.SHF_ALLOC) == elf.SHF_ALLOC);
     }
 
-    fn segmentSortCompare(left: *BinaryElfSegment, right: *BinaryElfSegment) bool {
+    fn segmentSortCompare(context: void, left: *BinaryElfSegment, right: *BinaryElfSegment) bool {
         if (left.physicalAddress < right.physicalAddress) {
             return true;
         }
@@ -141,7 +141,7 @@ const BinaryElfOutput = struct {
         return false;
     }
 
-    fn sectionSortCompare(left: *BinaryElfSection, right: *BinaryElfSection) bool {
+    fn sectionSortCompare(context: void, left: *BinaryElfSection, right: *BinaryElfSection) bool {
         return left.binaryOffset < right.binaryOffset;
     }
 };
@@ -182,7 +182,7 @@ pub const InstallRawStep = struct {
     pub fn create(builder: *Builder, artifact: *LibExeObjStep, dest_filename: []const u8) *Self {
         const self = builder.allocator.create(Self) catch unreachable;
         self.* = Self{
-            .step = Step.init(builder.fmt("install raw binary {}", .{artifact.step.name}), builder.allocator, make),
+            .step = Step.init(.InstallRaw, builder.fmt("install raw binary {}", .{artifact.step.name}), builder.allocator, make),
             .builder = builder,
             .artifact = artifact,
             .dest_dir = switch (artifact.kind) {
@@ -215,3 +215,7 @@ pub const InstallRawStep = struct {
         try emitRaw(builder.allocator, full_src_path, full_dest_path);
     }
 };
+
+test "" {
+    std.meta.refAllDecls(InstallRawStep);
+}

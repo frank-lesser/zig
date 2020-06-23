@@ -51,6 +51,7 @@ pub const Type = extern union {
             .comptime_float => return .ComptimeFloat,
             .noreturn => return .NoReturn,
             .@"null" => return .Null,
+            .@"undefined" => return .Undefined,
 
             .fn_noreturn_no_args => return .Fn,
             .fn_naked_noreturn_no_args => return .Fn,
@@ -92,13 +93,13 @@ pub const Type = extern union {
         return @fieldParentPtr(T, "base", self.ptr_otherwise);
     }
 
-    pub fn eql(self: Type, other: Type) bool {
-        //std.debug.warn("test {} == {}\n", .{ self, other });
+    pub fn eql(a: Type, b: Type) bool {
+        //std.debug.warn("test {} == {}\n", .{ a, b });
         // As a shortcut, if the small tags / addresses match, we're done.
-        if (self.tag_if_small_enough == other.tag_if_small_enough)
+        if (a.tag_if_small_enough == b.tag_if_small_enough)
             return true;
-        const zig_tag_a = self.zigTypeTag();
-        const zig_tag_b = self.zigTypeTag();
+        const zig_tag_a = a.zigTypeTag();
+        const zig_tag_b = b.zigTypeTag();
         if (zig_tag_a != zig_tag_b)
             return false;
         switch (zig_tag_a) {
@@ -111,24 +112,40 @@ pub const Type = extern union {
             .Undefined => return true,
             .Null => return true,
             .Pointer => {
-                const is_slice_a = isSlice(self);
-                const is_slice_b = isSlice(other);
+                const is_slice_a = isSlice(a);
+                const is_slice_b = isSlice(b);
                 if (is_slice_a != is_slice_b)
                     return false;
                 @panic("TODO implement more pointer Type equality comparison");
             },
             .Int => {
-                if (self.tag() != other.tag()) {
+                if (a.tag() != b.tag()) {
                     // Detect that e.g. u64 != usize, even if the bits match on a particular target.
                     return false;
                 }
                 // The target will not be branched upon, because we handled target-dependent cases above.
-                const info_a = self.intInfo(@as(Target, undefined));
-                const info_b = self.intInfo(@as(Target, undefined));
+                const info_a = a.intInfo(@as(Target, undefined));
+                const info_b = b.intInfo(@as(Target, undefined));
                 return info_a.signed == info_b.signed and info_a.bits == info_b.bits;
             },
+            .Array => {
+                if (a.arrayLen() != b.arrayLen())
+                    return false;
+                if (a.elemType().eql(b.elemType()))
+                    return false;
+                const sentinel_a = a.arraySentinel();
+                const sentinel_b = b.arraySentinel();
+                if (sentinel_a) |sa| {
+                    if (sentinel_b) |sb| {
+                        return sa.eql(sb);
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return sentinel_b == null;
+                }
+            },
             .Float,
-            .Array,
             .Struct,
             .Optional,
             .ErrorUnion,
@@ -185,6 +202,7 @@ pub const Type = extern union {
                 => return out_stream.writeAll(@tagName(t)),
 
                 .@"null" => return out_stream.writeAll("@TypeOf(null)"),
+                .@"undefined" => return out_stream.writeAll("@TypeOf(undefined)"),
 
                 .const_slice_u8 => return out_stream.writeAll("[]const u8"),
                 .fn_noreturn_no_args => return out_stream.writeAll("fn() noreturn"),
@@ -249,6 +267,7 @@ pub const Type = extern union {
             .comptime_float => return Value.initTag(.comptime_float_type),
             .noreturn => return Value.initTag(.noreturn_type),
             .@"null" => return Value.initTag(.null_type),
+            .@"undefined" => return Value.initTag(.undefined_type),
             .fn_noreturn_no_args => return Value.initTag(.fn_noreturn_no_args_type),
             .fn_naked_noreturn_no_args => return Value.initTag(.fn_naked_noreturn_no_args_type),
             .fn_ccc_void_no_args => return Value.initTag(.fn_ccc_void_no_args_type),
@@ -302,6 +321,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             => false,
         };
     }
@@ -362,6 +382,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             => unreachable,
         };
     }
@@ -394,6 +415,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .array_u8_sentinel_0,
             .const_slice_u8,
@@ -438,6 +460,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .array_u8_sentinel_0,
             .single_const_pointer,
@@ -482,6 +505,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .array_u8_sentinel_0,
             .fn_noreturn_no_args,
@@ -527,6 +551,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -570,6 +595,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -614,6 +640,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -646,6 +673,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -691,6 +719,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -765,6 +794,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .single_const_pointer,
             .single_const_pointer_to_comptime_int,
@@ -810,6 +840,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .single_const_pointer,
             .single_const_pointer_to_comptime_int,
@@ -854,6 +885,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .single_const_pointer,
             .single_const_pointer_to_comptime_int,
@@ -898,6 +930,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .single_const_pointer,
             .single_const_pointer_to_comptime_int,
@@ -942,6 +975,7 @@ pub const Type = extern union {
             .comptime_float,
             .noreturn,
             .@"null",
+            .@"undefined",
             .array,
             .single_const_pointer,
             .single_const_pointer_to_comptime_int,
@@ -997,6 +1031,7 @@ pub const Type = extern union {
             .anyerror,
             .noreturn,
             .@"null",
+            .@"undefined",
             .fn_noreturn_no_args,
             .fn_naked_noreturn_no_args,
             .fn_ccc_void_no_args,
@@ -1046,6 +1081,7 @@ pub const Type = extern union {
             .void,
             .noreturn,
             .@"null",
+            .@"undefined",
             => return true,
 
             .int_unsigned => return ty.cast(Payload.IntUnsigned).?.bits == 0,
@@ -1099,6 +1135,7 @@ pub const Type = extern union {
             .void,
             .noreturn,
             .@"null",
+            .@"undefined",
             .int_unsigned,
             .int_signed,
             .array,
@@ -1141,6 +1178,7 @@ pub const Type = extern union {
         comptime_float,
         noreturn,
         @"null",
+        @"undefined",
         fn_noreturn_no_args,
         fn_naked_noreturn_no_args,
         fn_ccc_void_no_args,

@@ -69,6 +69,8 @@ else switch (builtin.os.tag) {
 
 pub usingnamespace @import("os/bits.zig");
 
+pub const socket_t = if (builtin.os.tag == .windows) windows.ws2_32.SOCKET else fd_t;
+
 /// See also `getenv`. Populated by startup code before main().
 /// TODO this is a footgun because the value will be undefined when using `zig build-lib`.
 /// https://github.com/ziglang/zig/issues/4524
@@ -403,7 +405,6 @@ pub fn readv(fd: fd_t, iov: []const iovec) ReadError!usize {
             else => |err| return unexpectedErrno(err),
         }
     }
-
     const iov_count = math.cast(u31, iov.len) catch math.maxInt(u31);
     while (true) {
         // TODO handle the case when iov_len is too large and get rid of this @intCast
@@ -1236,6 +1237,8 @@ pub fn execvpeZ_expandArg0(
     if (mem.indexOfScalar(u8, file_slice, '/') != null) return execveZ(file, child_argv, envp);
 
     const PATH = getenvZ("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
+    // Use of MAX_PATH_BYTES here is valid as the path_buf will be passed
+    // directly to the operating system in execveZ.
     var path_buf: [MAX_PATH_BYTES]u8 = undefined;
     var it = mem.tokenize(PATH, ":");
     var seen_eacces = false;
@@ -1517,15 +1520,17 @@ pub const SymLinkError = error{
 /// If `sym_link_path` exists, it will not be overwritten.
 /// See also `symlinkC` and `symlinkW`.
 pub fn symlink(target_path: []const u8, sym_link_path: []const u8) SymLinkError!void {
+    if (builtin.os.tag == .wasi) {
+        @compileError("symlink is not supported in WASI; use symlinkat instead");
+    }
     if (builtin.os.tag == .windows) {
         const target_path_w = try windows.sliceToPrefixedFileW(target_path);
         const sym_link_path_w = try windows.sliceToPrefixedFileW(sym_link_path);
         return windows.CreateSymbolicLinkW(sym_link_path_w.span().ptr, target_path_w.span().ptr, 0);
-    } else {
-        const target_path_c = try toPosixPath(target_path);
-        const sym_link_path_c = try toPosixPath(sym_link_path);
-        return symlinkZ(&target_path_c, &sym_link_path_c);
     }
+    const target_path_c = try toPosixPath(target_path);
+    const sym_link_path_c = try toPosixPath(sym_link_path);
+    return symlinkZ(&target_path_c, &sym_link_path_c);
 }
 
 pub const symlinkC = @compileError("deprecated: renamed to symlinkZ");
@@ -1558,15 +1563,65 @@ pub fn symlinkZ(target_path: [*:0]const u8, sym_link_path: [*:0]const u8) SymLin
     }
 }
 
+/// Similar to `symlink`, however, creates a symbolic link named `sym_link_path` which contains the string
+/// `target_path` **relative** to `newdirfd` directory handle.
+/// A symbolic link (also known as a soft link) may point to an existing file or to a nonexistent
+/// one; the latter case is known as a dangling link.
+/// If `sym_link_path` exists, it will not be overwritten.
+/// See also `symlinkatWasi`, `symlinkatZ` and `symlinkatW`.
 pub fn symlinkat(target_path: []const u8, newdirfd: fd_t, sym_link_path: []const u8) SymLinkError!void {
+    if (builtin.os.tag == .wasi) {
+        return symlinkatWasi(target_path, newdirfd, sym_link_path);
+    }
+    if (builtin.os.tag == .windows) {
+        const target_path_w = try windows.sliceToPrefixedFileW(target_path);
+        const sym_link_path_w = try windows.sliceToPrefixedFileW(sym_link_path);
+        return symlinkatW(target_path_w.span().ptr, newdirfd, sym_link_path_w.span().ptr);
+    }
     const target_path_c = try toPosixPath(target_path);
     const sym_link_path_c = try toPosixPath(sym_link_path);
-    return symlinkatZ(target_path_c, newdirfd, sym_link_path_c);
+    return symlinkatZ(&target_path_c, newdirfd, &sym_link_path_c);
 }
 
 pub const symlinkatC = @compileError("deprecated: renamed to symlinkatZ");
 
+/// WASI-only. The same as `symlinkat` but targeting WASI.
+/// See also `symlinkat`.
+pub fn symlinkatWasi(target_path: []const u8, newdirfd: fd_t, sym_link_path: []const u8) SymLinkError!void {
+    switch (wasi.path_symlink(target_path.ptr, target_path.len, newdirfd, sym_link_path.ptr, sym_link_path.len)) {
+        wasi.ESUCCESS => {},
+        wasi.EFAULT => unreachable,
+        wasi.EINVAL => unreachable,
+        wasi.EACCES => return error.AccessDenied,
+        wasi.EPERM => return error.AccessDenied,
+        wasi.EDQUOT => return error.DiskQuota,
+        wasi.EEXIST => return error.PathAlreadyExists,
+        wasi.EIO => return error.FileSystem,
+        wasi.ELOOP => return error.SymLinkLoop,
+        wasi.ENAMETOOLONG => return error.NameTooLong,
+        wasi.ENOENT => return error.FileNotFound,
+        wasi.ENOTDIR => return error.NotDir,
+        wasi.ENOMEM => return error.SystemResources,
+        wasi.ENOSPC => return error.NoSpaceLeft,
+        wasi.EROFS => return error.ReadOnlyFileSystem,
+        else => |err| return unexpectedErrno(err),
+    }
+}
+
+/// Windows-only. The same as `symlinkat` except the paths are null-terminated, WTF-16 encoded.
+/// See also `symlinkat`.
+pub fn symlinkatW(target_path: [*:0]const u16, newdirfd: fd_t, sym_link_path: [*:0]const u16) SymlinkError!void {
+    @compileError("TODO implement on Windows");
+}
+
+/// The same as `symlinkat` except the parameters are null-terminated pointers.
+/// See also `symlinkat`.
 pub fn symlinkatZ(target_path: [*:0]const u8, newdirfd: fd_t, sym_link_path: [*:0]const u8) SymLinkError!void {
+    if (builtin.os.tag == .windows) {
+        const target_path_w = try windows.cStrToPrefixedFileW(target_path);
+        const sym_link_path_w = try windows.cStrToPrefixedFileW(sym_link_path);
+        return symlinkatW(target_path_w.span().ptr, newdirfd, sym_link_path.span().ptr);
+    }
     switch (errno(system.symlinkat(target_path, newdirfd, sym_link_path))) {
         0 => return,
         EFAULT => unreachable,
@@ -1731,7 +1786,7 @@ pub fn unlinkatW(dirfd: fd_t, sub_path_w: [*:0]const u16, flags: u32) UnlinkatEr
 
     const want_rmdir_behavior = (flags & AT_REMOVEDIR) != 0;
     const create_options_flags = if (want_rmdir_behavior)
-        @as(w.ULONG, w.FILE_DELETE_ON_CLOSE)
+        @as(w.ULONG, w.FILE_DELETE_ON_CLOSE | w.FILE_DIRECTORY_FILE)
     else
         @as(w.ULONG, w.FILE_DELETE_ON_CLOSE | w.FILE_NON_DIRECTORY_FILE);
 
@@ -1784,6 +1839,7 @@ pub fn unlinkatW(dirfd: fd_t, sub_path_w: [*:0]const u16, flags: u32) UnlinkatEr
         .OBJECT_NAME_NOT_FOUND => return error.FileNotFound,
         .INVALID_PARAMETER => unreachable,
         .FILE_IS_A_DIRECTORY => return error.IsDir,
+        .NOT_A_DIRECTORY => return error.NotDir,
         else => return w.unexpectedStatus(rc),
     }
 }
@@ -2287,12 +2343,54 @@ pub fn readlinkZ(file_path: [*:0]const u8, out_buffer: []u8) ReadLinkError![]u8 
     }
 }
 
+/// Similar to `readlink` except reads value of a symbolink link **relative** to `dirfd` directory handle.
+/// The return value is a slice of `out_buffer` from index 0.
+/// See also `readlinkatWasi`, `realinkatZ` and `realinkatW`.
+pub fn readlinkat(dirfd: fd_t, file_path: []const u8, out_buffer: []u8) ReadLinkError![]u8 {
+    if (builtin.os.tag == .wasi) {
+        return readlinkatWasi(dirfd, file_path, out_buffer);
+    }
+    if (builtin.os.tag == .windows) {
+        const file_path_w = try windows.cStrToPrefixedFileW(file_path);
+        return readlinkatW(dirfd, file_path.span().ptr, out_buffer);
+    }
+    const file_path_c = try toPosixPath(file_path);
+    return readlinkatZ(dirfd, &file_path_c, out_buffer);
+}
+
 pub const readlinkatC = @compileError("deprecated: renamed to readlinkatZ");
 
+/// WASI-only. Same as `readlinkat` but targets WASI.
+/// See also `readlinkat`.
+pub fn readlinkatWasi(dirfd: fd_t, file_path: []const u8, out_buffer: []u8) ReadLinkError![]u8 {
+    var bufused: usize = undefined;
+    switch (wasi.path_readlink(dirfd, file_path.ptr, file_path.len, out_buffer.ptr, out_buffer.len, &bufused)) {
+        wasi.ESUCCESS => return out_buffer[0..bufused],
+        wasi.EACCES => return error.AccessDenied,
+        wasi.EFAULT => unreachable,
+        wasi.EINVAL => unreachable,
+        wasi.EIO => return error.FileSystem,
+        wasi.ELOOP => return error.SymLinkLoop,
+        wasi.ENAMETOOLONG => return error.NameTooLong,
+        wasi.ENOENT => return error.FileNotFound,
+        wasi.ENOMEM => return error.SystemResources,
+        wasi.ENOTDIR => return error.NotDir,
+        else => |err| return unexpectedErrno(err),
+    }
+}
+
+/// Windows-only. Same as `readlinkat` except `file_path` is null-terminated, WTF16 encoded.
+/// See also `readlinkat`.
+pub fn readlinkatW(dirfd: fd_t, file_path: [*:0]const u16, out_buffer: []u8) ReadLinkError![]u8 {
+    @compileError("TODO implement on Windows");
+}
+
+/// Same as `readlinkat` except `file_path` is null-terminated.
+/// See also `readlinkat`.
 pub fn readlinkatZ(dirfd: fd_t, file_path: [*:0]const u8, out_buffer: []u8) ReadLinkError![]u8 {
     if (builtin.os.tag == .windows) {
         const file_path_w = try windows.cStrToPrefixedFileW(file_path);
-        @compileError("TODO implement readlink for Windows");
+        return readlinkatW(dirfd, file_path_w.span().ptr, out_buffer);
     }
     const rc = system.readlinkat(dirfd, file_path, out_buffer.ptr, out_buffer.len);
     switch (errno(rc)) {
@@ -2387,8 +2485,15 @@ pub fn isatty(handle: fd_t) bool {
         return true;
     }
     if (builtin.os.tag == .linux) {
-        var wsz: linux.winsize = undefined;
-        return linux.syscall3(.ioctl, @bitCast(usize, @as(isize, handle)), linux.TIOCGWINSZ, @ptrToInt(&wsz)) == 0;
+        while (true) {
+            var wsz: linux.winsize = undefined;
+            const fd = @bitCast(usize, @as(isize, handle));
+            switch (linux.syscall3(.ioctl, fd, linux.TIOCGWINSZ, @ptrToInt(&wsz))) {
+                0 => return true,
+                EINTR => continue,
+                else => return false,
+            }
+        }
     }
     unreachable;
 }
@@ -2443,7 +2548,32 @@ pub const SocketError = error{
     SocketTypeNotSupported,
 } || UnexpectedError;
 
-pub fn socket(domain: u32, socket_type: u32, protocol: u32) SocketError!fd_t {
+pub fn socket(domain: u32, socket_type: u32, protocol: u32) SocketError!socket_t {
+    if (builtin.os.tag == .windows) {
+        // NOTE: windows translates the SOCK_NONBLOCK/SOCK_CLOEXEC flags into windows-analagous operations
+        const filtered_sock_type = socket_type & ~@as(u32, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        const flags: u32 = if ((socket_type & SOCK_CLOEXEC) != 0) windows.ws2_32.WSA_FLAG_NO_HANDLE_INHERIT else 0;
+        const rc = windows.ws2_32.WSASocketW(@intCast(c_int, domain), @intCast(c_int, filtered_sock_type), @intCast(c_int, protocol), null, 0, flags);
+        if (rc == windows.ws2_32.INVALID_SOCKET) switch (windows.ws2_32.WSAGetLastError()) {
+            .WSAEMFILE => return error.ProcessFdQuotaExceeded,
+            .WSAENOBUFS => return error.SystemResources,
+            .WSAEAFNOSUPPORT => return error.AddressFamilyNotSupported,
+            .WSAEPROTONOSUPPORT => return error.ProtocolNotSupported,
+            else => |err| return windows.unexpectedWSAError(err),
+        };
+        errdefer windows.closesocket(rc) catch unreachable;
+        if ((socket_type & SOCK_NONBLOCK) != 0) {
+            var mode: c_ulong = 1; // nonblocking
+            if (windows.ws2_32.SOCKET_ERROR == windows.ws2_32.ioctlsocket(rc, windows.ws2_32.FIONBIO, &mode)) {
+                switch (windows.ws2_32.WSAGetLastError()) {
+                    // have not identified any error codes that should be handled yet
+                    else => unreachable,
+                }
+            }
+        }
+        return rc;
+    }
+
     const have_sock_flags = comptime !std.Target.current.isDarwin();
     const filtered_sock_type = if (!have_sock_flags)
         socket_type & ~@as(u32, SOCK_NONBLOCK | SOCK_CLOEXEC)
@@ -2818,7 +2948,30 @@ pub const ConnectError = error{
 } || UnexpectedError;
 
 /// Initiate a connection on a socket.
-pub fn connect(sockfd: fd_t, sock_addr: *const sockaddr, len: socklen_t) ConnectError!void {
+pub fn connect(sockfd: socket_t, sock_addr: *const sockaddr, len: socklen_t) ConnectError!void {
+    if (builtin.os.tag == .windows) {
+        const rc = windows.ws2_32.connect(sockfd, sock_addr, len);
+        if (rc == 0) return;
+        switch (windows.ws2_32.WSAGetLastError()) {
+            .WSAEADDRINUSE => return error.AddressInUse,
+            .WSAEADDRNOTAVAIL => return error.AddressNotAvailable,
+            .WSAECONNREFUSED => return error.ConnectionRefused,
+            .WSAETIMEDOUT => return error.ConnectionTimedOut,
+            .WSAEHOSTUNREACH // TODO: should we return NetworkUnreachable in this case as well?
+                , .WSAENETUNREACH => return error.NetworkUnreachable,
+            .WSAEFAULT => unreachable,
+            .WSAEINVAL => unreachable,
+            .WSAEISCONN => unreachable,
+            .WSAENOTSOCK => unreachable,
+            .WSAEWOULDBLOCK => unreachable,
+            .WSAEACCES => unreachable,
+            .WSAENOBUFS => return error.SystemResources,
+            .WSAEAFNOSUPPORT => return error.AddressFamilyNotSupported,
+            else => |err| return windows.unexpectedWSAError(err),
+        }
+        return;
+    }
+
     while (true) {
         switch (errno(system.connect(sockfd, sock_addr, len))) {
             0 => return,
@@ -3880,6 +4033,8 @@ pub fn dl_iterate_phdr(
 
 pub const ClockGetTimeError = error{UnsupportedClock} || UnexpectedError;
 
+/// TODO: change this to return the timespec as a return value
+/// TODO: look into making clk_id an enum
 pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
     if (std.Target.current.os.tag == .wasi) {
         var ts: timestamp_t = undefined;
@@ -3894,6 +4049,23 @@ pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
             else => |err| return unexpectedErrno(err),
         }
         return;
+    }
+    if (std.Target.current.os.tag == .windows) {
+        if (clk_id == CLOCK_REALTIME) {
+            var ft: windows.FILETIME = undefined;
+            windows.kernel32.GetSystemTimeAsFileTime(&ft);
+            // FileTime has a granularity of 100 nanoseconds and uses the NTFS/Windows epoch.
+            const ft64 = (@as(u64, ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+            const ft_per_s = std.time.ns_per_s / 100;
+            tp.* = .{
+                .tv_sec = @intCast(i64, ft64 / ft_per_s) + std.time.epoch.windows,
+                .tv_nsec = @intCast(c_long, ft64 % ft_per_s) * 100,
+            };
+            return;
+        } else {
+            // TODO POSIX implementation of CLOCK_MONOTONIC on Windows.
+            return error.UnsupportedClock;
+        }
     }
 
     switch (errno(system.clock_gettime(clk_id, tp))) {
@@ -4810,12 +4982,15 @@ pub fn getrusage(who: i32) rusage {
 pub const TermiosGetError = error{NotATerminal} || UnexpectedError;
 
 pub fn tcgetattr(handle: fd_t) TermiosGetError!termios {
-    var term: termios = undefined;
-    switch (errno(system.tcgetattr(handle, &term))) {
-        0 => return term,
-        EBADF => unreachable,
-        ENOTTY => return error.NotATerminal,
-        else => |err| return unexpectedErrno(err),
+    while (true) {
+        var term: termios = undefined;
+        switch (errno(system.tcgetattr(handle, &term))) {
+            0 => return term,
+            EINTR => continue,
+            EBADF => unreachable,
+            ENOTTY => return error.NotATerminal,
+            else => |err| return unexpectedErrno(err),
+        }
     }
 }
 
@@ -4830,6 +5005,28 @@ pub fn tcsetattr(handle: fd_t, optional_action: TCSA, termios_p: termios) Termio
             EINVAL => unreachable,
             ENOTTY => return error.NotATerminal,
             EIO => return error.ProcessOrphaned,
+            else => |err| return unexpectedErrno(err),
+        }
+    }
+}
+
+const IoCtl_SIOCGIFINDEX_Error = error{
+    FileSystem,
+    InterfaceNotFound,
+} || UnexpectedError;
+
+pub fn ioctl_SIOCGIFINDEX(fd: fd_t, ifr: *ifreq) IoCtl_SIOCGIFINDEX_Error!void {
+    while (true) {
+        switch (errno(system.ioctl(fd, SIOCGIFINDEX, @ptrToInt(ifr)))) {
+            0 => return,
+            EINVAL => unreachable, // Bad parameters.
+            ENOTTY => unreachable,
+            ENXIO => unreachable,
+            EBADF => unreachable, // Always a race condition.
+            EFAULT => unreachable, // Bad pointer parameter.
+            EINTR => continue,
+            EIO => return error.FileSystem,
+            ENODEV => return error.InterfaceNotFound,
             else => |err| return unexpectedErrno(err),
         }
     }

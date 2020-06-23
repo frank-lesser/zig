@@ -1288,7 +1288,7 @@ pub const Value = union(enum) {
         var held = std.debug.getStderrMutex().acquire();
         defer held.release();
 
-        const stderr = std.debug.getStderrStream();
+        const stderr = io.getStdErr().writer();
         std.json.stringify(self, std.json.StringifyOptions{ .whitespace = null }, stderr) catch return;
     }
 };
@@ -1535,7 +1535,7 @@ fn parseInternal(comptime T: type, token: Token, tokens: *TokenStream, options: 
             const allocator = options.allocator orelse return error.AllocatorRequired;
             switch (ptrInfo.size) {
                 .One => {
-                    const r: T = allocator.create(ptrInfo.child);
+                    const r: T = try allocator.create(ptrInfo.child);
                     r.* = try parseInternal(ptrInfo.child, token, tokens, options);
                     return r;
                 },
@@ -1629,7 +1629,7 @@ pub fn parseFree(comptime T: type, value: T, options: ParseOptions) void {
             switch (ptrInfo.size) {
                 .One => {
                     parseFree(ptrInfo.child, value.*, options);
-                    allocator.destroy(v);
+                    allocator.destroy(value);
                 },
                 .Slice => {
                     for (value) |v| {
@@ -2575,6 +2575,10 @@ pub fn stringify(
             else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
         },
         .Array => return stringify(&value, options, out_stream),
+        .Vector => |info| {
+            const array: [info.len]info.child = value;
+            return stringify(&array, options, out_stream);
+        },
         else => @compileError("Unable to stringify type '" ++ @typeName(T) ++ "'"),
     }
     unreachable;
@@ -2761,4 +2765,8 @@ test "stringify struct with custom stringifier" {
             try out_stream.writeByte(']');
         }
     }{ .foo = 42 }, StringifyOptions{});
+}
+
+test "stringify vector" {
+    try teststringify("[1,1]", @splat(2, @as(u32, 1)), StringifyOptions{});
 }

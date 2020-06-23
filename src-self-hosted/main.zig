@@ -407,7 +407,21 @@ fn buildOutputType(
             std.debug.warn("-fno-emit-bin not supported yet", .{});
             process.exit(1);
         },
-        .yes_default_path => try std.fmt.allocPrint(arena, "{}{}", .{ root_name, target_info.target.exeFileExt() }),
+        .yes_default_path => switch (output_mode) {
+            .Exe => try std.fmt.allocPrint(arena, "{}{}", .{ root_name, target_info.target.exeFileExt() }),
+            .Lib => blk: {
+                const suffix = switch (link_mode orelse .Static) {
+                    .Static => target_info.target.staticLibSuffix(),
+                    .Dynamic => target_info.target.dynamicLibSuffix(),
+                };
+                break :blk try std.fmt.allocPrint(arena, "{}{}{}", .{
+                    target_info.target.libPrefix(),
+                    root_name,
+                    suffix,
+                });
+            },
+            .Obj => try std.fmt.allocPrint(arena, "{}{}", .{ root_name, target_info.target.oFileExt() }),
+        },
         .yes => |p| p,
     };
 
@@ -532,8 +546,9 @@ const Fmt = struct {
     any_error: bool,
     color: Color,
     gpa: *Allocator,
+    out_buffer: std.ArrayList(u8),
 
-    const SeenMap = std.BufSet;
+    const SeenMap = std.AutoHashMap(fs.File.INode, void);
 };
 
 pub fn cmdFmt(gpa: *Allocator, args: []const []const u8) !void {
@@ -600,8 +615,7 @@ pub fn cmdFmt(gpa: *Allocator, args: []const []const u8) !void {
         };
         defer tree.deinit();
 
-        var error_it = tree.errors.iterator(0);
-        while (error_it.next()) |parse_error| {
+        for (tree.errors) |parse_error| {
             try printErrMsgToFile(gpa, parse_error, tree, "<stdin>", stderr_file, color);
         }
         if (tree.errors.len != 0) {
@@ -628,10 +642,20 @@ pub fn cmdFmt(gpa: *Allocator, args: []const []const u8) !void {
         .seen = Fmt.SeenMap.init(gpa),
         .any_error = false,
         .color = color,
+        .out_buffer = std.ArrayList(u8).init(gpa),
     };
+    defer fmt.seen.deinit();
+    defer fmt.out_buffer.deinit();
 
     for (input_files.span()) |file_path| {
-        try fmtPath(&fmt, file_path, check_flag);
+        // Get the real path here to avoid Windows failing on relative file paths with . or .. in them.
+        const real_path = fs.realpathAlloc(gpa, file_path) catch |err| {
+            std.debug.warn("unable to open '{}': {}\n", .{ file_path, err });
+            process.exit(1);
+        };
+        defer gpa.free(real_path);
+
+        try fmtPath(&fmt, file_path, check_flag, fs.cwd(), real_path);
     }
     if (fmt.any_error) {
         process.exit(1);
@@ -657,52 +681,85 @@ const FmtError = error{
     ReadOnlyFileSystem,
     LinkQuotaExceeded,
     FileBusy,
+    EndOfStream,
 } || fs.File.OpenError;
 
-fn fmtPath(fmt: *Fmt, file_path: []const u8, check_mode: bool) FmtError!void {
-    // get the real path here to avoid Windows failing on relative file paths with . or .. in them
-    var real_path = fs.realpathAlloc(fmt.gpa, file_path) catch |err| {
-        std.debug.warn("unable to open '{}': {}\n", .{ file_path, err });
-        fmt.any_error = true;
-        return;
-    };
-    defer fmt.gpa.free(real_path);
-
-    if (fmt.seen.exists(real_path)) return;
-    try fmt.seen.put(real_path);
-
-    const source_code = fs.cwd().readFileAlloc(fmt.gpa, real_path, max_src_size) catch |err| switch (err) {
-        error.IsDir, error.AccessDenied => {
-            var dir = try fs.cwd().openDir(file_path, .{ .iterate = true });
-            defer dir.close();
-
-            var dir_it = dir.iterate();
-
-            while (try dir_it.next()) |entry| {
-                if (entry.kind == .Directory or mem.endsWith(u8, entry.name, ".zig")) {
-                    const full_path = try fs.path.join(fmt.gpa, &[_][]const u8{ file_path, entry.name });
-                    try fmtPath(fmt, full_path, check_mode);
-                }
-            }
-            return;
-        },
+fn fmtPath(fmt: *Fmt, file_path: []const u8, check_mode: bool, dir: fs.Dir, sub_path: []const u8) FmtError!void {
+    fmtPathFile(fmt, file_path, check_mode, dir, sub_path) catch |err| switch (err) {
+        error.IsDir, error.AccessDenied => return fmtPathDir(fmt, file_path, check_mode, dir, sub_path),
         else => {
-            std.debug.warn("unable to open '{}': {}\n", .{ file_path, err });
+            std.debug.warn("unable to format '{}': {}\n", .{ file_path, err });
             fmt.any_error = true;
             return;
         },
     };
+}
+
+fn fmtPathDir(
+    fmt: *Fmt,
+    file_path: []const u8,
+    check_mode: bool,
+    parent_dir: fs.Dir,
+    parent_sub_path: []const u8,
+) FmtError!void {
+    var dir = try parent_dir.openDir(parent_sub_path, .{ .iterate = true });
+    defer dir.close();
+
+    const stat = try dir.stat();
+    if (try fmt.seen.put(stat.inode, {})) |_| return;
+
+    var dir_it = dir.iterate();
+    while (try dir_it.next()) |entry| {
+        const is_dir = entry.kind == .Directory;
+        if (is_dir or mem.endsWith(u8, entry.name, ".zig")) {
+            const full_path = try fs.path.join(fmt.gpa, &[_][]const u8{ file_path, entry.name });
+            defer fmt.gpa.free(full_path);
+
+            if (is_dir) {
+                try fmtPathDir(fmt, full_path, check_mode, dir, entry.name);
+            } else {
+                fmtPathFile(fmt, full_path, check_mode, dir, entry.name) catch |err| {
+                    std.debug.warn("unable to format '{}': {}\n", .{ full_path, err });
+                    fmt.any_error = true;
+                    return;
+                };
+            }
+        }
+    }
+}
+
+fn fmtPathFile(
+    fmt: *Fmt,
+    file_path: []const u8,
+    check_mode: bool,
+    dir: fs.Dir,
+    sub_path: []const u8,
+) FmtError!void {
+    const source_file = try dir.openFile(sub_path, .{});
+    var file_closed = false;
+    errdefer if (!file_closed) source_file.close();
+
+    const stat = try source_file.stat();
+
+    if (stat.kind == .Directory)
+        return error.IsDir;
+
+    const source_code = source_file.readAllAlloc(fmt.gpa, stat.size, max_src_size) catch |err| switch (err) {
+        error.ConnectionResetByPeer => unreachable,
+        error.ConnectionTimedOut => unreachable,
+        else => |e| return e,
+    };
+    source_file.close();
+    file_closed = true;
     defer fmt.gpa.free(source_code);
 
-    const tree = std.zig.parse(fmt.gpa, source_code) catch |err| {
-        std.debug.warn("error parsing file '{}': {}\n", .{ file_path, err });
-        fmt.any_error = true;
-        return;
-    };
+    // Add to set after no longer possible to get error.IsDir.
+    if (try fmt.seen.put(stat.inode, {})) |_| return;
+
+    const tree = try std.zig.parse(fmt.gpa, source_code);
     defer tree.deinit();
 
-    var error_it = tree.errors.iterator(0);
-    while (error_it.next()) |parse_error| {
+    for (tree.errors) |parse_error| {
         try printErrMsgToFile(fmt.gpa, parse_error, tree, file_path, std.io.getStdErr(), fmt.color);
     }
     if (tree.errors.len != 0) {
@@ -717,20 +774,25 @@ fn fmtPath(fmt: *Fmt, file_path: []const u8, check_mode: bool) FmtError!void {
             fmt.any_error = true;
         }
     } else {
-        const baf = try io.BufferedAtomicFile.create(fmt.gpa, fs.cwd(), real_path, .{});
-        defer baf.destroy();
+        // As a heuristic, we make enough capacity for the same as the input source.
+        try fmt.out_buffer.ensureCapacity(source_code.len);
+        fmt.out_buffer.items.len = 0;
+        const anything_changed = try std.zig.render(fmt.gpa, fmt.out_buffer.writer(), tree);
+        if (!anything_changed)
+            return; // Good thing we didn't waste any file system access on this.
 
-        const anything_changed = try std.zig.render(fmt.gpa, baf.stream(), tree);
-        if (anything_changed) {
-            std.debug.warn("{}\n", .{file_path});
-            try baf.finish();
-        }
+        var af = try dir.atomicFile(sub_path, .{ .mode = stat.mode });
+        defer af.deinit();
+
+        try af.file.writeAll(fmt.out_buffer.items);
+        try af.finish();
+        std.debug.warn("{}\n", .{file_path});
     }
 }
 
 fn printErrMsgToFile(
     gpa: *mem.Allocator,
-    parse_error: *const ast.Error,
+    parse_error: ast.Error,
     tree: *ast.Tree,
     path: []const u8,
     file: fs.File,
@@ -745,15 +807,15 @@ fn printErrMsgToFile(
     const span_first = lok_token;
     const span_last = lok_token;
 
-    const first_token = tree.tokens.at(span_first);
-    const last_token = tree.tokens.at(span_last);
-    const start_loc = tree.tokenLocationPtr(0, first_token);
-    const end_loc = tree.tokenLocationPtr(first_token.end, last_token);
+    const first_token = tree.token_locs[span_first];
+    const last_token = tree.token_locs[span_last];
+    const start_loc = tree.tokenLocationLoc(0, first_token);
+    const end_loc = tree.tokenLocationLoc(first_token.end, last_token);
 
     var text_buf = std.ArrayList(u8).init(gpa);
     defer text_buf.deinit();
     const out_stream = text_buf.outStream();
-    try parse_error.render(&tree.tokens, out_stream);
+    try parse_error.render(tree.token_ids, out_stream);
     const text = text_buf.span();
 
     const stream = file.outStream();
