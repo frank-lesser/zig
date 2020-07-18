@@ -1535,9 +1535,11 @@ static LLVMValueRef gen_widen_or_shorten(CodeGen *g, bool want_runtime_safety, Z
         zig_unreachable();
     }
 
-    if (actual_type->id == ZigTypeIdInt &&
-        !wanted_type->data.integral.is_signed && actual_type->data.integral.is_signed &&
-        want_runtime_safety)
+    if (actual_type->id == ZigTypeIdInt && want_runtime_safety && (
+        // negative to unsigned
+        (!wanted_type->data.integral.is_signed && actual_type->data.integral.is_signed) ||
+        // unsigned would become negative
+        (wanted_type->data.integral.is_signed && !actual_type->data.integral.is_signed && actual_bits == wanted_bits)))
     {
         LLVMValueRef zero = LLVMConstNull(get_llvm_type(g, actual_type));
         LLVMValueRef ok_bit = LLVMBuildICmp(g->builder, LLVMIntSGE, expr_val, zero, "");
@@ -1547,7 +1549,7 @@ static LLVMValueRef gen_widen_or_shorten(CodeGen *g, bool want_runtime_safety, Z
         LLVMBuildCondBr(g->builder, ok_bit, ok_block, fail_block);
 
         LLVMPositionBuilderAtEnd(g->builder, fail_block);
-        gen_safety_crash(g, PanicMsgIdCastNegativeToUnsigned);
+        gen_safety_crash(g, actual_type->data.integral.is_signed ? PanicMsgIdCastNegativeToUnsigned : PanicMsgIdCastTruncatedData);
 
         LLVMPositionBuilderAtEnd(g->builder, ok_block);
     }
@@ -5583,8 +5585,12 @@ static LLVMValueRef ir_render_memset(CodeGen *g, IrExecutableGen *executable, Ir
 
     bool val_is_undef = value_is_all_undef(g, instruction->byte->value);
     LLVMValueRef fill_char;
-    if (val_is_undef && ir_want_runtime_safety_scope(g, instruction->base.base.scope)) {
-        fill_char = LLVMConstInt(LLVMInt8Type(), 0xaa, false);
+    if (val_is_undef) {
+        if (ir_want_runtime_safety_scope(g, instruction->base.base.scope)) {
+            fill_char = LLVMConstInt(LLVMInt8Type(), 0xaa, false);
+        } else {
+            return nullptr;
+        }
     } else {
         fill_char = ir_llvm_value(g, instruction->byte);
     }
@@ -7473,6 +7479,12 @@ static LLVMValueRef gen_const_val(CodeGen *g, ZigValue *const_val, const char *n
                             continue;
                         }
                         ZigValue *field_val = const_val->data.x_struct.fields[i];
+                        if (field_val == nullptr) {
+                            add_node_error(g, type_struct_field->decl_node,
+                                    buf_sprintf("compiler bug: generating const value for struct field '%s'",
+                                        buf_ptr(type_struct_field->name)));
+                            codegen_report_errors_and_exit(g);
+                        }
                         ZigType *field_type = field_val->type;
                         assert(field_type != nullptr);
                         if ((err = ensure_const_val_repr(nullptr, g, nullptr, field_val, field_type))) {
@@ -8436,8 +8448,8 @@ static void define_builtin_types(CodeGen *g) {
     }
     {
         ZigType *entry = new_type_table_entry(ZigTypeIdOpaque);
-        buf_init_from_str(&entry->name, "(var)");
-        g->builtin_types.entry_var = entry;
+        buf_init_from_str(&entry->name, "(anytype)");
+        g->builtin_types.entry_anytype = entry;
     }
 
     for (size_t i = 0; i < array_length(c_int_type_infos); i += 1) {
@@ -9465,8 +9477,14 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
         const char *libcxx_include_path = buf_ptr(buf_sprintf("%s" OS_SEP "libcxx" OS_SEP "include",
                 buf_ptr(g->zig_lib_dir)));
 
+        const char *libcxxabi_include_path = buf_ptr(buf_sprintf("%s" OS_SEP "libcxxabi" OS_SEP "include",
+                buf_ptr(g->zig_lib_dir)));
+
         args.append("-isystem");
         args.append(libcxx_include_path);
+
+        args.append("-isystem");
+        args.append(libcxxabi_include_path);
 
         if (target_abi_is_musl(g->zig_target->abi)) {
             args.append("-D_LIBCPP_HAS_MUSL_LIBC");

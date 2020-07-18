@@ -251,14 +251,13 @@ fn testStruct() void {
 }
 
 const TestStruct = packed struct {
-    const Self = @This();
-
     fieldA: usize,
     fieldB: void,
     fieldC: *Self,
     fieldD: u32 = 4,
 
     pub fn foo(self: *const Self) void {}
+    const Self = @This();
 };
 
 test "type info: function type info" {
@@ -281,7 +280,7 @@ fn testFunction() void {
     expect(bound_fn_info.BoundFn.args[0].arg_type.? == *const TestStruct);
 }
 
-extern fn foo(a: usize, b: bool, args: ...) usize;
+extern fn foo(a: usize, b: bool, ...) usize;
 
 test "typeInfo with comptime parameter in struct fn def" {
     const S = struct {
@@ -386,7 +385,7 @@ test "@typeInfo does not force declarations into existence" {
 }
 
 test "defaut value for a var-typed field" {
-    const S = struct { x: var };
+    const S = struct { x: anytype };
     expect(@typeInfo(S).Struct.fields[0].default_value == null);
 }
 
@@ -401,4 +400,33 @@ test "type info for async frames" {
         },
         else => unreachable,
     }
+}
+
+test "type info: value is correctly copied" {
+    comptime {
+        var ptrInfo = @typeInfo([]u32);
+        ptrInfo.Pointer.size = .One;
+        expect(@typeInfo([]u32).Pointer.size == .Slice);
+    }
+}
+
+test "Declarations are returned in declaration order" {
+    const S = struct {
+        const a = 1;
+        const b = 2;
+        const c = 3;
+        const d = 4;
+        const e = 5;
+    };
+    const d = @typeInfo(S).Struct.decls;
+    expect(std.mem.eql(u8, d[0].name, "a"));
+    expect(std.mem.eql(u8, d[1].name, "b"));
+    expect(std.mem.eql(u8, d[2].name, "c"));
+    expect(std.mem.eql(u8, d[3].name, "d"));
+    expect(std.mem.eql(u8, d[4].name, "e"));
+}
+
+test "Struct.is_tuple" {
+    expect(@typeInfo(@TypeOf(.{0})).Struct.is_tuple);
+    expect(!@typeInfo(@TypeOf(.{ .a = 0 })).Struct.is_tuple);
 }
