@@ -10,9 +10,7 @@ const Module = @import("Module.zig");
 const link = @import("link.zig");
 const Package = @import("Package.zig");
 const zir = @import("zir.zig");
-
-// TODO Improve async I/O enough that we feel comfortable doing this.
-//pub const io_mode = .evented;
+const build_options = @import("build_options");
 
 pub const max_src_size = 2 * 1024 * 1024 * 1024; // 2 GiB
 
@@ -47,18 +45,16 @@ pub fn log(
     if (@enumToInt(level) > @enumToInt(std.log.level))
         return;
 
-    const scope_prefix = "(" ++ switch (scope) {
-        // Uncomment to hide logs
-        //.compiler,
-        .module,
-        .liveness,
-        .link,
-        => return,
+    const scope_name = @tagName(scope);
+    const ok = comptime for (build_options.log_scopes) |log_scope| {
+        if (mem.eql(u8, log_scope, scope_name))
+            break true;
+    } else false;
 
-        else => @tagName(scope),
-    } ++ "): ";
+    if (!ok)
+        return;
 
-    const prefix = "[" ++ @tagName(level) ++ "] " ++ scope_prefix;
+    const prefix = "[" ++ @tagName(level) ++ "] " ++ "(" ++ @tagName(scope) ++ "): ";
 
     // Print the message to stderr, silently ignoring any errors
     std.debug.print(prefix ++ format, args);
@@ -94,6 +90,8 @@ pub fn main() !void {
         return @import("print_targets.zig").cmdTargets(arena, cmd_args, stdout, info.target);
     } else if (mem.eql(u8, cmd, "version")) {
         // Need to set up the build script to give the version as a comptime value.
+        // TODO when you solve this, also take a look at link.zig, there is a placeholder
+        // that says "TODO version here".
         std.debug.print("TODO version command not implemented yet\n", .{});
         return error.Unimplemented;
     } else if (mem.eql(u8, cmd, "zen")) {
@@ -338,39 +336,39 @@ fn buildOutputType(
                 } else if (mem.startsWith(u8, arg, "-l")) {
                     try system_libs.append(arg[2..]);
                 } else {
-                    std.debug.print("unrecognized parameter: '{}'", .{arg});
+                    std.debug.print("unrecognized parameter: '{}'\n", .{arg});
                     process.exit(1);
                 }
             } else if (mem.endsWith(u8, arg, ".s") or mem.endsWith(u8, arg, ".S")) {
-                std.debug.print("assembly files not supported yet", .{});
+                std.debug.print("assembly files not supported yet\n", .{});
                 process.exit(1);
             } else if (mem.endsWith(u8, arg, ".o") or
                 mem.endsWith(u8, arg, ".obj") or
                 mem.endsWith(u8, arg, ".a") or
                 mem.endsWith(u8, arg, ".lib"))
             {
-                std.debug.print("object files and static libraries not supported yet", .{});
+                std.debug.print("object files and static libraries not supported yet\n", .{});
                 process.exit(1);
             } else if (mem.endsWith(u8, arg, ".c") or
                 mem.endsWith(u8, arg, ".cpp"))
             {
-                std.debug.print("compilation of C and C++ source code requires LLVM extensions which are not implemented yet", .{});
+                std.debug.print("compilation of C and C++ source code requires LLVM extensions which are not implemented yet\n", .{});
                 process.exit(1);
             } else if (mem.endsWith(u8, arg, ".so") or
                 mem.endsWith(u8, arg, ".dylib") or
                 mem.endsWith(u8, arg, ".dll"))
             {
-                std.debug.print("linking against dynamic libraries not yet supported", .{});
+                std.debug.print("linking against dynamic libraries not yet supported\n", .{});
                 process.exit(1);
             } else if (mem.endsWith(u8, arg, ".zig") or mem.endsWith(u8, arg, ".zir")) {
                 if (root_src_file) |other| {
-                    std.debug.print("found another zig file '{}' after root source file '{}'", .{ arg, other });
+                    std.debug.print("found another zig file '{}' after root source file '{}'\n", .{ arg, other });
                     process.exit(1);
                 } else {
                     root_src_file = arg;
                 }
             } else {
-                std.debug.print("unrecognized file extension of parameter '{}'", .{arg});
+                std.debug.print("unrecognized file extension of parameter '{}'\n", .{arg});
             }
         }
     }
@@ -387,7 +385,7 @@ fn buildOutputType(
     };
 
     if (system_libs.items.len != 0) {
-        std.debug.print("linking against system libraries not yet supported", .{});
+        std.debug.print("linking against system libraries not yet supported\n", .{});
         process.exit(1);
     }
 
@@ -492,6 +490,7 @@ fn buildOutputType(
     defer root_pkg.destroy();
 
     var module = try Module.init(gpa, .{
+        .root_name = root_name,
         .target = target_info.target,
         .output_mode = output_mode,
         .root_pkg = root_pkg,

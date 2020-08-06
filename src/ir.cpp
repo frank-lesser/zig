@@ -20603,17 +20603,25 @@ static IrInstGen *ir_analyze_fn_call(IrAnalyze *ira, IrInst* source_instr,
                 return ira->codegen->invalid_inst_gen;
             }
 
+            ZigType *expected_return_type = result_loc->value->type->data.pointer.child_type;
+
             IrInstGen *dummy_value = ir_const(ira, source_instr, return_type);
             dummy_value->value->special = ConstValSpecialRuntime;
             IrInstGen *dummy_result = ir_implicit_cast2(ira, source_instr,
-                    dummy_value, result_loc->value->type->data.pointer.child_type);
-            if (type_is_invalid(dummy_result->value->type))
+                    dummy_value, expected_return_type);
+            if (type_is_invalid(dummy_result->value->type)) {
+                if ((return_type->id == ZigTypeIdErrorUnion || return_type->id == ZigTypeIdErrorSet) &&
+                    expected_return_type->id != ZigTypeIdErrorUnion && expected_return_type->id != ZigTypeIdErrorSet)
+                {
+                    add_error_note(ira->codegen, ira->new_irb.exec->first_err_trace_msg,
+                        ira->explicit_return_type_source_node, buf_create_from_str("function cannot return an error"));
+                }
                 return ira->codegen->invalid_inst_gen;
-            ZigType *res_child_type = result_loc->value->type->data.pointer.child_type;
-            if (res_child_type == ira->codegen->builtin_types.entry_anytype) {
-                res_child_type = return_type;
             }
-            if (!handle_is_ptr(ira->codegen, res_child_type)) {
+            if (expected_return_type == ira->codegen->builtin_types.entry_anytype) {
+                expected_return_type = return_type;
+            }
+            if (!handle_is_ptr(ira->codegen, expected_return_type)) {
                 ir_reset_result(call_result_loc);
                 result_loc = nullptr;
             }
@@ -29090,6 +29098,19 @@ static IrInstGen *ir_align_cast(IrAnalyze *ira, IrInstGen *target, uint32_t alig
     ZigType *result_type;
     uint32_t old_align_bytes;
 
+    ZigType *actual_ptr = target_type;
+    if (actual_ptr->id == ZigTypeIdOptional) {
+        actual_ptr = actual_ptr->data.maybe.child_type;
+    } else if (is_slice(actual_ptr)) {
+        actual_ptr = actual_ptr->data.structure.fields[slice_ptr_index]->type_entry;
+    }
+
+    if (safety_check_on && !type_has_bits(ira->codegen, actual_ptr)) {
+        ir_add_error(ira, &target->base,
+            buf_sprintf("cannot adjust alignment of zero sized type '%s'", buf_ptr(&target_type->name)));
+        return ira->codegen->invalid_inst_gen;
+    }
+
     if (target_type->id == ZigTypeIdPointer) {
         result_type = adjust_ptr_align(ira->codegen, target_type, align_bytes);
         if ((err = resolve_ptr_align(ira, target_type, &old_align_bytes)))
@@ -30907,6 +30928,13 @@ static IrInstGen *ir_analyze_instruction_end_expr(IrAnalyze *ira, IrInstSrcEndEx
             IrInstGen *store_ptr = ir_analyze_store_ptr(ira, &instruction->base.base, result_loc, value,
                     instruction->result_loc->allow_write_through_const);
             if (type_is_invalid(store_ptr->value->type)) {
+                if (instruction->result_loc->id == ResultLocIdReturn &&
+                    (value->value->type->id == ZigTypeIdErrorUnion || value->value->type->id == ZigTypeIdErrorSet) &&
+                    ira->explicit_return_type->id != ZigTypeIdErrorUnion && ira->explicit_return_type->id != ZigTypeIdErrorSet)
+                {
+                    add_error_note(ira->codegen, ira->new_irb.exec->first_err_trace_msg,
+                        ira->explicit_return_type_source_node, buf_create_from_str("function cannot return an error"));
+                }
                 return ira->codegen->invalid_inst_gen;
             }
         }
