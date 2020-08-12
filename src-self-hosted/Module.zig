@@ -177,14 +177,14 @@ pub const Decl = struct {
 
     /// Represents the position of the code in the output file.
     /// This is populated regardless of semantic analysis and code generation.
-    link: link.File.Elf.TextBlock = link.File.Elf.TextBlock.empty,
+    link: link.File.LinkBlock,
 
     /// Represents the function in the linked output file, if the `Decl` is a function.
     /// This is stored here and not in `Fn` because `Decl` survives across updates but
     /// `Fn` does not.
     /// TODO Look into making `Fn` a longer lived structure and moving this field there
     /// to save on memory usage.
-    fn_link: link.File.Elf.SrcFn = link.File.Elf.SrcFn.empty,
+    fn_link: link.File.LinkFn,
 
     contents_hash: std.zig.SrcHash,
 
@@ -949,10 +949,8 @@ pub fn update(self: *Module) !void {
         try self.deleteDecl(decl);
     }
 
-    if (self.totalErrorCount() == 0) {
-        // This is needed before reading the error flags.
-        try self.bin_file.flush();
-    }
+    // This is needed before reading the error flags.
+    try self.bin_file.flush();
 
     self.link_error_flags = self.bin_file.errorFlags();
 
@@ -1303,14 +1301,16 @@ fn astGenAndAnalyzeDecl(self: *Module, decl: *Decl) !bool {
                 for (fn_proto.params()) |param, i| {
                     const name_token = param.name_token.?;
                     const src = tree.token_locs[name_token].start;
-                    const param_name = tree.tokenSlice(name_token);
-                    const arg = try gen_scope_arena.allocator.create(zir.Inst.NoOp);
+                    const param_name = tree.tokenSlice(name_token); // TODO: call identifierTokenString
+                    const arg = try gen_scope_arena.allocator.create(zir.Inst.Arg);
                     arg.* = .{
                         .base = .{
                             .tag = .arg,
                             .src = src,
                         },
-                        .positionals = .{},
+                        .positionals = .{
+                            .name = param_name,
+                        },
                         .kw_args = .{},
                     };
                     gen_scope.instructions.items[i] = &arg.base;
@@ -1538,10 +1538,13 @@ fn analyzeRootSrcFile(self: *Module, root_scope: *Scope.File) !void {
                     if (!srcHashEql(decl.contents_hash, contents_hash)) {
                         try self.markOutdatedDecl(decl);
                         decl.contents_hash = contents_hash;
-                    } else if (decl.fn_link.len != 0) {
-                        // TODO Look into detecting when this would be unnecessary by storing enough state
-                        // in `Decl` to notice that the line number did not change.
-                        self.work_queue.writeItemAssumeCapacity(.{ .update_line_number = decl });
+                    } else switch (self.bin_file.tag) {
+                        .elf => if (decl.fn_link.elf.len != 0) {
+                            // TODO Look into detecting when this would be unnecessary by storing enough state
+                            // in `Decl` to notice that the line number did not change.
+                            self.work_queue.writeItemAssumeCapacity(.{ .update_line_number = decl });
+                        },
+                        .c => {},
                     }
                 }
             } else {
@@ -1745,7 +1748,14 @@ fn allocateNewDecl(
         .analysis = .unreferenced,
         .deletion_flag = false,
         .contents_hash = contents_hash,
-        .link = link.File.Elf.TextBlock.empty,
+        .link = switch (self.bin_file.tag) {
+            .elf => .{ .elf = link.File.Elf.TextBlock.empty },
+            .c => .{ .c = {} },
+        },
+        .fn_link = switch (self.bin_file.tag) {
+            .elf => .{ .elf = link.File.Elf.SrcFn.empty },
+            .c => .{ .c = {} },
+        },
         .generation = 0,
     };
     return new_decl;
@@ -1921,6 +1931,20 @@ pub fn addBinOp(
         },
         .lhs = lhs,
         .rhs = rhs,
+    };
+    try block.instructions.append(self.gpa, &inst.base);
+    return &inst.base;
+}
+
+pub fn addArg(self: *Module, block: *Scope.Block, src: usize, ty: Type, name: [*:0]const u8) !*Inst {
+    const inst = try block.arena.create(Inst.Arg);
+    inst.* = .{
+        .base = .{
+            .tag = .arg,
+            .ty = ty,
+            .src = src,
+        },
+        .name = name,
     };
     try block.instructions.append(self.gpa, &inst.base);
     return &inst.base;
@@ -2527,7 +2551,7 @@ pub fn coerce(self: *Module, scope: *Scope, dest_type: Type, inst: *Inst) !*Inst
         }
     }
 
-    return self.fail(scope, inst.src, "TODO implement type coercion from {} to {}", .{ inst.ty, dest_type });
+    return self.fail(scope, inst.src, "expected {}, found {}", .{ dest_type, inst.ty });
 }
 
 pub fn storePtr(self: *Module, scope: *Scope, src: usize, ptr: *Inst, uncasted_value: *Inst) !*Inst {
