@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("std.zig");
 const builtin = @import("builtin");
 const debug = std.debug;
@@ -322,7 +327,7 @@ fn parseFormValue(allocator: *mem.Allocator, in_stream: anytype, form_id: u64, e
         FORM_block1 => parseFormValueBlock(allocator, in_stream, endian, 1),
         FORM_block2 => parseFormValueBlock(allocator, in_stream, endian, 2),
         FORM_block4 => parseFormValueBlock(allocator, in_stream, endian, 4),
-        FORM_block => x: {
+        FORM_block => {
             const block_len = try nosuspend leb.readULEB128(usize, in_stream);
             return parseFormValueBlockLen(allocator, in_stream, block_len);
         },

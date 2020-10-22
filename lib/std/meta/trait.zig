@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const builtin = std.builtin;
 const mem = std.mem;
@@ -269,19 +274,21 @@ pub fn isIndexable(comptime T: type) bool {
         }
         return true;
     }
-    return comptime is(.Array)(T) or is(.Vector)(T);
+    return comptime is(.Array)(T) or is(.Vector)(T) or isTuple(T);
 }
 
 test "std.meta.trait.isIndexable" {
     const array = [_]u8{0} ** 10;
     const slice = @as([]const u8, &array);
     const vector: meta.Vector(2, u32) = [_]u32{0} ** 2;
+    const tuple = .{ 1, 2, 3 };
 
     testing.expect(isIndexable(@TypeOf(array)));
     testing.expect(isIndexable(@TypeOf(&array)));
     testing.expect(isIndexable(@TypeOf(slice)));
     testing.expect(!isIndexable(meta.Child(@TypeOf(slice))));
     testing.expect(isIndexable(@TypeOf(vector)));
+    testing.expect(isIndexable(@TypeOf(tuple)));
 }
 
 pub fn isNumber(comptime T: type) bool {

@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -364,9 +369,10 @@ const Parser = struct {
         const name_node = try p.expectNode(parseStringLiteralSingle, .{
             .ExpectedStringLiteral = .{ .token = p.tok_i },
         });
-        const block_node = try p.expectNode(parseBlock, .{
-            .ExpectedLBrace = .{ .token = p.tok_i },
-        });
+        const block_node = (try p.parseBlock(null)) orelse {
+            try p.errors.append(p.gpa, .{ .ExpectedLBrace = .{ .token = p.tok_i } });
+            return error.ParseError;
+        };
 
         const test_node = try p.arena.allocator.create(Node.TestDecl);
         test_node.* = .{
@@ -540,12 +546,14 @@ const Parser = struct {
                 if (p.eatToken(.Semicolon)) |_| {
                     break :blk null;
                 }
-                break :blk try p.expectNodeRecoverable(parseBlock, .{
+                const body_block = (try p.parseBlock(null)) orelse {
                     // Since parseBlock only return error.ParseError on
                     // a missing '}' we can assume this function was
                     // supposed to end here.
-                    .ExpectedSemiOrLBrace = .{ .token = p.tok_i },
-                });
+                    try p.errors.append(p.gpa, .{ .ExpectedSemiOrLBrace = .{ .token = p.tok_i } });
+                    break :blk null;
+                };
+                break :blk body_block;
             },
             .as_type => null,
         };
@@ -823,10 +831,7 @@ const Parser = struct {
         var colon: TokenIndex = undefined;
         const label_token = p.parseBlockLabel(&colon);
 
-        if (try p.parseBlock()) |node| {
-            node.cast(Node.Block).?.label = label_token;
-            return node;
-        }
+        if (try p.parseBlock(label_token)) |node| return node;
 
         if (try p.parseLoopStatement()) |node| {
             if (node.cast(Node.For)) |for_node| {
@@ -1003,14 +1008,13 @@ const Parser = struct {
     fn parseBlockExpr(p: *Parser) Error!?*Node {
         var colon: TokenIndex = undefined;
         const label_token = p.parseBlockLabel(&colon);
-        const block_node = (try p.parseBlock()) orelse {
+        const block_node = (try p.parseBlock(label_token)) orelse {
             if (label_token) |label| {
                 p.putBackToken(label + 1); // ":"
                 p.putBackToken(label); // IDENTIFIER
             }
             return null;
         };
-        block_node.cast(Node.Block).?.label = label_token;
         return block_node;
     }
 
@@ -1177,7 +1181,7 @@ const Parser = struct {
             p.putBackToken(token); // IDENTIFIER
         }
 
-        if (try p.parseBlock()) |node| return node;
+        if (try p.parseBlock(null)) |node| return node;
         if (try p.parseCurlySuffixExpr()) |node| return node;
 
         return null;
@@ -1189,7 +1193,7 @@ const Parser = struct {
     }
 
     /// Block <- LBRACE Statement* RBRACE
-    fn parseBlock(p: *Parser) !?*Node {
+    fn parseBlock(p: *Parser, label_token: ?TokenIndex) !?*Node {
         const lbrace = p.eatToken(.LBrace) orelse return null;
 
         var statements = std.ArrayList(*Node).init(p.gpa);
@@ -1211,16 +1215,26 @@ const Parser = struct {
 
         const statements_len = @intCast(NodeIndex, statements.items.len);
 
-        const block_node = try Node.Block.alloc(&p.arena.allocator, statements_len);
-        block_node.* = .{
-            .label = null,
-            .lbrace = lbrace,
-            .statements_len = statements_len,
-            .rbrace = rbrace,
-        };
-        std.mem.copy(*Node, block_node.statements(), statements.items);
-
-        return &block_node.base;
+        if (label_token) |label| {
+            const block_node = try Node.LabeledBlock.alloc(&p.arena.allocator, statements_len);
+            block_node.* = .{
+                .label = label,
+                .lbrace = lbrace,
+                .statements_len = statements_len,
+                .rbrace = rbrace,
+            };
+            std.mem.copy(*Node, block_node.statements(), statements.items);
+            return &block_node.base;
+        } else {
+            const block_node = try Node.Block.alloc(&p.arena.allocator, statements_len);
+            block_node.* = .{
+                .lbrace = lbrace,
+                .statements_len = statements_len,
+                .rbrace = rbrace,
+            };
+            std.mem.copy(*Node, block_node.statements(), statements.items);
+            return &block_node.base;
+        }
     }
 
     /// LoopExpr <- KEYWORD_inline? (ForExpr / WhileExpr)
@@ -1658,11 +1672,8 @@ const Parser = struct {
         var colon: TokenIndex = undefined;
         const label = p.parseBlockLabel(&colon);
 
-        if (label) |token| {
-            if (try p.parseBlock()) |node| {
-                node.cast(Node.Block).?.label = token;
-                return node;
-            }
+        if (label) |label_token| {
+            if (try p.parseBlock(label_token)) |node| return node;
         }
 
         if (try p.parseLoopTypeExpr()) |node| {
@@ -2885,11 +2896,12 @@ const Parser = struct {
     ///     <- KEYWORD_struct
     ///      / KEYWORD_enum (LPAREN Expr RPAREN)?
     ///      / KEYWORD_union (LPAREN (KEYWORD_enum (LPAREN Expr RPAREN)? / Expr) RPAREN)?
+    ///      / KEYWORD_opaque
     fn parseContainerDeclType(p: *Parser) !?ContainerDeclType {
         const kind_token = p.nextToken();
 
         const init_arg_expr = switch (p.token_ids[kind_token]) {
-            .Keyword_struct => Node.ContainerDecl.InitArg{ .None = {} },
+            .Keyword_struct, .Keyword_opaque => Node.ContainerDecl.InitArg{ .None = {} },
             .Keyword_enum => blk: {
                 if (p.eatToken(.LParen) != null) {
                     const expr = try p.expectNode(parseExpr, .{
@@ -3440,6 +3452,7 @@ const Parser = struct {
         }
     }
 
+    /// TODO Delete this function. I don't like the inversion of control.
     fn expectNode(
         p: *Parser,
         parseFn: NodeParseFn,
@@ -3449,6 +3462,7 @@ const Parser = struct {
         return (try p.expectNodeRecoverable(parseFn, err)) orelse return error.ParseError;
     }
 
+    /// TODO Delete this function. I don't like the inversion of control.
     fn expectNodeRecoverable(
         p: *Parser,
         parseFn: NodeParseFn,

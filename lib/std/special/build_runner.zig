@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const root = @import("@build");
 const std = @import("std");
 const builtin = @import("builtin");
@@ -77,6 +82,15 @@ pub fn main() !void {
                     return usageAndErr(builder, false, stderr_stream);
                 };
                 builder.addSearchPrefix(search_prefix);
+            } else if (mem.eql(u8, arg, "--color")) {
+                const next_arg = nextArg(args, &arg_idx) orelse {
+                    warn("expected [auto|on|off] after --color", .{});
+                    return usageAndErr(builder, false, stderr_stream);
+                };
+                builder.color = std.meta.stringToEnum(@TypeOf(builder.color), next_arg) orelse {
+                    warn("expected [auto|on|off] after --color, found '{}'", .{next_arg});
+                    return usageAndErr(builder, false, stderr_stream);
+                };
             } else if (mem.eql(u8, arg, "--override-lib-dir")) {
                 builder.override_lib_dir = nextArg(args, &arg_idx) orelse {
                     warn("Expected argument after --override-lib-dir\n\n", .{});
@@ -128,7 +142,7 @@ pub fn main() !void {
 }
 
 fn runBuild(builder: *Builder) anyerror!void {
-    switch (@typeInfo(@TypeOf(root.build).ReturnType)) {
+    switch (@typeInfo(@typeInfo(@TypeOf(root.build)).Fn.return_type.?)) {
         .Void => root.build(builder),
         .ErrorUnion => try root.build(builder),
         else => @compileError("expected return type of build to be 'void' or '!void'"),
@@ -156,16 +170,17 @@ fn usage(builder: *Builder, already_ran_build: bool, out_stream: anytype) !void 
             try fmt.allocPrint(allocator, "{} (default)", .{top_level_step.step.name})
         else
             top_level_step.step.name;
-        try out_stream.print("  {s:22} {}\n", .{ name, top_level_step.description });
+        try out_stream.print("  {s:<27} {}\n", .{ name, top_level_step.description });
     }
 
     try out_stream.writeAll(
         \\
         \\General Options:
-        \\  --help                 Print this help and exit
-        \\  --verbose              Print commands before executing them
-        \\  --prefix [path]        Override default install prefix
-        \\  --search-prefix [path] Add a path to look for binaries, libraries, headers
+        \\  --help                      Print this help and exit
+        \\  --verbose                   Print commands before executing them
+        \\  --prefix [path]             Override default install prefix
+        \\  --search-prefix [path]      Add a path to look for binaries, libraries, headers
+        \\  --color [auto|off|on]       Enable or disable colored error messages
         \\
         \\Project-Specific Options:
         \\
@@ -180,7 +195,7 @@ fn usage(builder: *Builder, already_ran_build: bool, out_stream: anytype) !void 
                 Builder.typeIdName(option.type_id),
             });
             defer allocator.free(name);
-            try out_stream.print("{s:24} {}\n", .{ name, option.description });
+            try out_stream.print("{s:<29} {}\n", .{ name, option.description });
         }
     }
 

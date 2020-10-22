@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("std.zig");
 const root = @import("root");
 const debug = std.debug;
@@ -484,7 +489,7 @@ pub const HeapAllocator = switch (builtin.os.tag) {
                 const full_len = os.windows.kernel32.HeapSize(heap_handle, 0, ptr);
                 assert(full_len != std.math.maxInt(usize));
                 assert(full_len >= amt);
-                break :init mem.alignBackwardAnyAlign(full_len - (aligned_addr - root_addr), len_align);
+                break :init mem.alignBackwardAnyAlign(full_len - (aligned_addr - root_addr) - @sizeOf(usize), len_align);
             };
             const buf = @intToPtr([*]u8, aligned_addr)[0..return_len];
             getRecordPtr(buf).* = root_addr;
@@ -910,6 +915,17 @@ pub fn testAllocator(base_allocator: *mem.Allocator) !void {
     testing.expect(slice.len == 10);
 
     allocator.free(slice);
+
+    const zero_bit_ptr = try allocator.create(u0);
+    zero_bit_ptr.* = 0;
+    allocator.destroy(zero_bit_ptr);
+
+    const oversize = try allocator.allocAdvanced(u32, null, 5, .at_least);
+    testing.expect(oversize.len >= 5);
+    for (oversize) |*item| {
+        item.* = 0xDEADBEEF;
+    }
+    allocator.free(oversize);
 }
 
 pub fn testAllocatorAligned(base_allocator: *mem.Allocator, comptime alignment: u29) !void {
@@ -947,7 +963,7 @@ pub fn testAllocatorLargeAlignment(base_allocator: *mem.Allocator) mem.Allocator
     //  very near usize?
     if (mem.page_size << 2 > maxInt(usize)) return;
 
-    const USizeShift = std.meta.Int(false, std.math.log2(usize.bit_count));
+    const USizeShift = std.meta.Int(.unsigned, std.math.log2(std.meta.bitCount(usize)));
     const large_align = @as(u29, mem.page_size << 2);
 
     var align_mask: usize = undefined;

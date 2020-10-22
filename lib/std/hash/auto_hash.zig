@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -108,7 +113,7 @@ pub fn hash(hasher: anytype, key: anytype, comptime strat: HashStrategy) void {
         .Array => hashArray(hasher, key, strat),
 
         .Vector => |info| {
-            if (info.child.bit_count % 8 == 0) {
+            if (std.meta.bitCount(info.child) % 8 == 0) {
                 // If there's no unused bits in the child type, we can just hash
                 // this as an array of bytes.
                 hasher.update(mem.asBytes(&key));
@@ -129,14 +134,13 @@ pub fn hash(hasher: anytype, key: anytype, comptime strat: HashStrategy) void {
             }
         },
 
-        .Union => |info| blk: {
+        .Union => |info| {
             if (info.tag_type) |tag_type| {
                 const tag = meta.activeTag(key);
                 const s = hash(hasher, tag, strat);
                 inline for (info.fields) |field| {
-                    const enum_field = field.enum_field.?;
-                    if (enum_field.value == @enumToInt(tag)) {
-                        hash(hasher, @field(key, enum_field.name), strat);
+                    if (@field(tag_type, field.name) == tag) {
+                        hash(hasher, @field(key, field.name), strat);
                         // TODO use a labelled break when it does not crash the compiler. cf #2908
                         // break :blk;
                         return;

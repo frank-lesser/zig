@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 // FIFO of fixed size items
 // Usually used for e.g. byte buffers
 
@@ -181,7 +186,9 @@ pub fn LinearFifo(
             } else {
                 var head = self.head + count;
                 if (powers_of_two) {
-                    head &= self.buf.len - 1;
+                    // Note it is safe to do a wrapping subtract as
+                    // bitwise & with all 1s is a noop
+                    head &= self.buf.len -% 1;
                 } else {
                     head %= self.buf.len;
                 }
@@ -369,6 +376,14 @@ pub fn LinearFifo(
             return self.buf[index];
         }
     };
+}
+
+test "LinearFifo(u8, .Dynamic) discard(0) from empty buffer should not error on overflow" {
+    var fifo = LinearFifo(u8, .Dynamic).init(testing.allocator);
+    defer fifo.deinit();
+
+    // If overflow is not explicitly allowed this will crash in debug / safe mode
+    fifo.discard(0);
 }
 
 test "LinearFifo(u8, .Dynamic)" {

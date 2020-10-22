@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 // Translated from BLAKE3 reference implementation.
 // Source: https://github.com/BLAKE3-team/BLAKE3
 
@@ -119,11 +124,11 @@ fn compress(
     return state;
 }
 
-fn first_8_words(words: [16]u32) [8]u32 {
+fn first8Words(words: [16]u32) [8]u32 {
     return @ptrCast(*const [8]u32, &words).*;
 }
 
-fn words_from_little_endian_bytes(words: []u32, bytes: []const u8) void {
+fn wordsFromLittleEndianBytes(words: []u32, bytes: []const u8) void {
     var byte_slice = bytes;
     for (words) |*word| {
         word.* = mem.readIntSliceLittle(u32, byte_slice);
@@ -141,8 +146,8 @@ const Output = struct {
     counter: u64,
     flags: u8,
 
-    fn chaining_value(self: *const Output) [8]u32 {
-        return first_8_words(compress(
+    fn chainingValue(self: *const Output) [8]u32 {
+        return first8Words(compress(
             self.input_chaining_value,
             self.block_words,
             self.block_len,
@@ -151,7 +156,7 @@ const Output = struct {
         ));
     }
 
-    fn root_output_bytes(self: *const Output, output: []u8) void {
+    fn rootOutputBytes(self: *const Output, output: []u8) void {
         var out_block_it = ChunkIterator.init(output, 2 * OUT_LEN);
         var output_block_counter: usize = 0;
         while (out_block_it.next()) |out_block| {
@@ -195,7 +200,7 @@ const ChunkState = struct {
         return BLOCK_LEN * @as(usize, self.blocks_compressed) + @as(usize, self.block_len);
     }
 
-    fn fill_block_buf(self: *ChunkState, input: []const u8) []const u8 {
+    fn fillBlockBuf(self: *ChunkState, input: []const u8) []const u8 {
         const want = BLOCK_LEN - self.block_len;
         const take = math.min(want, input.len);
         mem.copy(u8, self.block[self.block_len..][0..take], input[0..take]);
@@ -203,7 +208,7 @@ const ChunkState = struct {
         return input[take..];
     }
 
-    fn start_flag(self: *const ChunkState) u8 {
+    fn startFlag(self: *const ChunkState) u8 {
         return if (self.blocks_compressed == 0) CHUNK_START else 0;
     }
 
@@ -214,13 +219,13 @@ const ChunkState = struct {
             // input is coming, so this compression is not CHUNK_END.
             if (self.block_len == BLOCK_LEN) {
                 var block_words: [16]u32 = undefined;
-                words_from_little_endian_bytes(block_words[0..], self.block[0..]);
-                self.chaining_value = first_8_words(compress(
+                wordsFromLittleEndianBytes(block_words[0..], self.block[0..]);
+                self.chaining_value = first8Words(compress(
                     self.chaining_value,
                     block_words,
                     BLOCK_LEN,
                     self.chunk_counter,
-                    self.flags | self.start_flag(),
+                    self.flags | self.startFlag(),
                 ));
                 self.blocks_compressed += 1;
                 self.block = [_]u8{0} ** BLOCK_LEN;
@@ -228,24 +233,24 @@ const ChunkState = struct {
             }
 
             // Copy input bytes into the block buffer.
-            input = self.fill_block_buf(input);
+            input = self.fillBlockBuf(input);
         }
     }
 
     fn output(self: *const ChunkState) Output {
         var block_words: [16]u32 = undefined;
-        words_from_little_endian_bytes(block_words[0..], self.block[0..]);
+        wordsFromLittleEndianBytes(block_words[0..], self.block[0..]);
         return Output{
             .input_chaining_value = self.chaining_value,
             .block_words = block_words,
             .block_len = self.block_len,
             .counter = self.chunk_counter,
-            .flags = self.flags | self.start_flag() | CHUNK_END,
+            .flags = self.flags | self.startFlag() | CHUNK_END,
         };
     }
 };
 
-fn parent_output(
+fn parentOutput(
     left_child_cv: [8]u32,
     right_child_cv: [8]u32,
     key: [8]u32,
@@ -263,25 +268,29 @@ fn parent_output(
     };
 }
 
-fn parent_cv(
+fn parentCv(
     left_child_cv: [8]u32,
     right_child_cv: [8]u32,
     key: [8]u32,
     flags: u8,
 ) [8]u32 {
-    return parent_output(left_child_cv, right_child_cv, key, flags).chaining_value();
+    return parentOutput(left_child_cv, right_child_cv, key, flags).chainingValue();
 }
 
 /// An incremental hasher that can accept any number of writes.
 pub const Blake3 = struct {
+    pub const Options = struct { key: ?[digest_length]u8 = null };
+    pub const KdfOptions = struct {};
+
     chunk_state: ChunkState,
     key: [8]u32,
     cv_stack: [54][8]u32 = undefined, // Space for 54 subtree chaining values:
     cv_stack_len: u8 = 0, // 2^54 * CHUNK_LEN = 2^64
     flags: u8,
 
-    pub const digest_length = OUT_LEN;
     pub const block_length = BLOCK_LEN;
+    pub const digest_length = OUT_LEN;
+    pub const key_length = KEY_LEN;
 
     fn init_internal(key: [8]u32, flags: u8) Blake3 {
         return Blake3{
@@ -291,54 +300,47 @@ pub const Blake3 = struct {
         };
     }
 
-    /// Construct a new `Blake3` for the regular hash function.
-    pub fn init() Blake3 {
-        return Blake3.init_internal(IV, 0);
-    }
-
-    /// Construct a new `Blake3` for the keyed hash function.
-    pub fn init_keyed(key: [KEY_LEN]u8) Blake3 {
-        var key_words: [8]u32 = undefined;
-        words_from_little_endian_bytes(key_words[0..], key[0..]);
-        return Blake3.init_internal(key_words, KEYED_HASH);
+    /// Construct a new `Blake3` for the hash function, with an optional key
+    pub fn init(options: Options) Blake3 {
+        if (options.key) |key| {
+            var key_words: [8]u32 = undefined;
+            wordsFromLittleEndianBytes(key_words[0..], key[0..]);
+            return Blake3.init_internal(key_words, KEYED_HASH);
+        } else {
+            return Blake3.init_internal(IV, 0);
+        }
     }
 
     /// Construct a new `Blake3` for the key derivation function. The context
     /// string should be hardcoded, globally unique, and application-specific.
-    pub fn init_derive_key(context: []const u8) Blake3 {
+    pub fn initKdf(context: []const u8, options: KdfOptions) Blake3 {
         var context_hasher = Blake3.init_internal(IV, DERIVE_KEY_CONTEXT);
         context_hasher.update(context);
         var context_key: [KEY_LEN]u8 = undefined;
         context_hasher.final(context_key[0..]);
         var context_key_words: [8]u32 = undefined;
-        words_from_little_endian_bytes(context_key_words[0..], context_key[0..]);
+        wordsFromLittleEndianBytes(context_key_words[0..], context_key[0..]);
         return Blake3.init_internal(context_key_words, DERIVE_KEY_MATERIAL);
     }
 
-    pub fn hash(in: []const u8, out: []u8) void {
-        var hasher = Blake3.init();
+    pub fn hash(in: []const u8, out: []u8, options: Options) void {
+        var hasher = Blake3.init(options);
         hasher.update(in);
         hasher.final(out);
     }
 
-    /// Reset the `Blake3` to its initial state.
-    pub fn reset(self: *Blake3) void {
-        self.chunk_state = ChunkState.init(self.key, 0, self.flags);
-        self.cv_stack_len = 0;
-    }
-
-    fn push_cv(self: *Blake3, cv: [8]u32) void {
+    fn pushCv(self: *Blake3, cv: [8]u32) void {
         self.cv_stack[self.cv_stack_len] = cv;
         self.cv_stack_len += 1;
     }
 
-    fn pop_cv(self: *Blake3) [8]u32 {
+    fn popCv(self: *Blake3) [8]u32 {
         self.cv_stack_len -= 1;
         return self.cv_stack[self.cv_stack_len];
     }
 
     // Section 5.1.2 of the BLAKE3 spec explains this algorithm in more detail.
-    fn add_chunk_chaining_value(self: *Blake3, first_cv: [8]u32, total_chunks: u64) void {
+    fn addChunkChainingValue(self: *Blake3, first_cv: [8]u32, total_chunks: u64) void {
         // This chunk might complete some subtrees. For each completed subtree,
         // its left child will be the current top entry in the CV stack, and
         // its right child will be the current value of `new_cv`. Pop each left
@@ -349,10 +351,10 @@ pub const Blake3 = struct {
         var new_cv = first_cv;
         var chunk_counter = total_chunks;
         while (chunk_counter & 1 == 0) {
-            new_cv = parent_cv(self.pop_cv(), new_cv, self.key, self.flags);
+            new_cv = parentCv(self.popCv(), new_cv, self.key, self.flags);
             chunk_counter >>= 1;
         }
-        self.push_cv(new_cv);
+        self.pushCv(new_cv);
     }
 
     /// Add input to the hash state. This can be called any number of times.
@@ -362,9 +364,9 @@ pub const Blake3 = struct {
             // If the current chunk is complete, finalize it and reset the
             // chunk state. More input is coming, so this chunk is not ROOT.
             if (self.chunk_state.len() == CHUNK_LEN) {
-                const chunk_cv = self.chunk_state.output().chaining_value();
+                const chunk_cv = self.chunk_state.output().chainingValue();
                 const total_chunks = self.chunk_state.chunk_counter + 1;
-                self.add_chunk_chaining_value(chunk_cv, total_chunks);
+                self.addChunkChainingValue(chunk_cv, total_chunks);
                 self.chunk_state = ChunkState.init(self.key, total_chunks, self.flags);
             }
 
@@ -385,14 +387,14 @@ pub const Blake3 = struct {
         var parent_nodes_remaining: usize = self.cv_stack_len;
         while (parent_nodes_remaining > 0) {
             parent_nodes_remaining -= 1;
-            output = parent_output(
+            output = parentOutput(
                 self.cv_stack[parent_nodes_remaining],
-                output.chaining_value(),
+                output.chainingValue(),
                 self.key,
                 self.flags,
             );
         }
-        output.root_output_bytes(out_slice);
+        output.rootOutputBytes(out_slice);
     }
 };
 
@@ -560,7 +562,10 @@ const reference_test = ReferenceTest{
     },
 };
 
-fn test_blake3(hasher: *Blake3, input_len: usize, expected_hex: [262]u8) void {
+fn testBlake3(hasher: *Blake3, input_len: usize, expected_hex: [262]u8) void {
+    // Save initial state
+    const initial_state = hasher.*;
+
     // Setup input pattern
     var input_pattern: [251]u8 = undefined;
     for (input_pattern) |*e, i| e.* = @truncate(u8, i);
@@ -576,22 +581,24 @@ fn test_blake3(hasher: *Blake3, input_len: usize, expected_hex: [262]u8) void {
     // Read final hash value
     var actual_bytes: [expected_hex.len / 2]u8 = undefined;
     hasher.final(actual_bytes[0..]);
-    hasher.reset();
 
     // Compare to expected value
     var expected_bytes: [expected_hex.len / 2]u8 = undefined;
     fmt.hexToBytes(expected_bytes[0..], expected_hex[0..]) catch unreachable;
     testing.expectEqual(actual_bytes, expected_bytes);
+
+    // Restore initial state
+    hasher.* = initial_state;
 }
 
 test "BLAKE3 reference test cases" {
-    var hash = &Blake3.init();
-    var keyed_hash = &Blake3.init_keyed(reference_test.key.*);
-    var derive_key = &Blake3.init_derive_key(reference_test.context_string);
+    var hash = &Blake3.init(.{});
+    var keyed_hash = &Blake3.init(.{ .key = reference_test.key.* });
+    var derive_key = &Blake3.initKdf(reference_test.context_string, .{});
 
     for (reference_test.cases) |t| {
-        test_blake3(hash, t.input_len, t.hash.*);
-        test_blake3(keyed_hash, t.input_len, t.keyed_hash.*);
-        test_blake3(derive_key, t.input_len, t.derive_key.*);
+        testBlake3(hash, t.input_len, t.hash.*);
+        testBlake3(keyed_hash, t.input_len, t.keyed_hash.*);
+        testBlake3(derive_key, t.input_len, t.derive_key.*);
     }
 }

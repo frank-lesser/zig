@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("std.zig");
 const builtin = std.builtin;
 const math = std.math;
@@ -649,7 +654,8 @@ pub fn openSelfDebugInfo(allocator: *mem.Allocator) anyerror!DebugInfo {
             .freebsd,
             .netbsd,
             .dragonfly,
-            .macosx,
+            .openbsd,
+            .macos,
             .windows,
             => return DebugInfo.init(allocator),
             else => @compileError("openSelfDebugInfo unsupported for this platform"),
@@ -1315,7 +1321,7 @@ const SymbolInfo = struct {
 };
 
 pub const ModuleDebugInfo = switch (builtin.os.tag) {
-    .macosx, .ios, .watchos, .tvos => struct {
+    .macos, .ios, .watchos, .tvos => struct {
         base_address: usize,
         mapped_memory: []const u8,
         symbols: []const MachoSymbol,
@@ -1635,7 +1641,7 @@ pub const ModuleDebugInfo = switch (builtin.os.tag) {
             };
         }
     },
-    .linux, .netbsd, .freebsd, .dragonfly => struct {
+    .linux, .netbsd, .freebsd, .dragonfly, .openbsd => struct {
         base_address: usize,
         dwarf: DW.DwarfInfo,
         mapped_memory: []const u8,

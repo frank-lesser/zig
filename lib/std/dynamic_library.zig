@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const builtin = @import("builtin");
 
 const std = @import("std.zig");
@@ -14,7 +19,7 @@ const max = std.math.max;
 pub const DynLib = switch (builtin.os.tag) {
     .linux => if (builtin.link_libc) DlDynlib else ElfDynLib,
     .windows => WindowsDynLib,
-    .macosx, .tvos, .watchos, .ios, .freebsd => DlDynlib,
+    .macos, .tvos, .watchos, .ios, .freebsd, .openbsd => DlDynlib,
     else => void,
 };
 
@@ -397,9 +402,9 @@ pub const DlDynlib = struct {
 
 test "dynamic_library" {
     const libname = switch (builtin.os.tag) {
-        .linux, .freebsd => "invalid_so.so",
+        .linux, .freebsd, .openbsd => "invalid_so.so",
         .windows => "invalid_dll.dll",
-        .macosx, .tvos, .watchos, .ios => "invalid_dylib.dylib",
+        .macos, .tvos, .watchos, .ios => "invalid_dylib.dylib",
         else => return error.SkipZigTest,
     };
 

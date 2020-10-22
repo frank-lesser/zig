@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 usingnamespace @import("bits.zig");
 
 pub extern "kernel32" fn AddVectoredExceptionHandler(First: c_ulong, Handler: ?VECTORED_EXCEPTION_HANDLER) callconv(.Stdcall) ?*c_void;
@@ -79,6 +84,7 @@ pub extern "kernel32" fn FormatMessageW(dwFlags: DWORD, lpSource: ?LPVOID, dwMes
 pub extern "kernel32" fn FreeEnvironmentStringsW(penv: [*:0]u16) callconv(.Stdcall) BOOL;
 
 pub extern "kernel32" fn GetCommandLineA() callconv(.Stdcall) LPSTR;
+pub extern "kernel32" fn GetCommandLineW() callconv(.Stdcall) LPWSTR;
 
 pub extern "kernel32" fn GetConsoleMode(in_hConsoleHandle: HANDLE, out_lpMode: *DWORD) callconv(.Stdcall) BOOL;
 
@@ -105,8 +111,6 @@ pub extern "kernel32" fn GetFileSizeEx(hFile: HANDLE, lpFileSize: *LARGE_INTEGER
 pub extern "kernel32" fn GetFileAttributesW(lpFileName: [*]const WCHAR) callconv(.Stdcall) DWORD;
 
 pub extern "kernel32" fn GetModuleFileNameW(hModule: ?HMODULE, lpFilename: [*]u16, nSize: DWORD) callconv(.Stdcall) DWORD;
-
-pub extern "kernel32" fn GetModuleHandleA(lpModuleName: ?LPCSTR) callconv(.Stdcall) ?HMODULE;
 
 pub extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const WCHAR) callconv(.Stdcall) ?HMODULE;
 
@@ -282,3 +286,5 @@ pub extern "kernel32" fn K32GetWsChangesEx(hProcess: HANDLE, lpWatchInfoEx: PPSA
 pub extern "kernel32" fn K32InitializeProcessForWsWatch(hProcess: HANDLE) callconv(.Stdcall) BOOL;
 pub extern "kernel32" fn K32QueryWorkingSet(hProcess: HANDLE, pv: PVOID, cb: DWORD) callconv(.Stdcall) BOOL;
 pub extern "kernel32" fn K32QueryWorkingSetEx(hProcess: HANDLE, pv: PVOID, cb: DWORD) callconv(.Stdcall) BOOL;
+
+pub extern "kernel32" fn FlushFileBuffers(hFile: HANDLE) callconv(.Stdcall) BOOL;

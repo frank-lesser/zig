@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 pub usingnamespace @import("builtin");
 
 /// Deprecated: use `std.Target`.
@@ -95,6 +100,16 @@ pub const AtomicOrder = enum {
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
+pub const ReduceOp = enum {
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+};
+
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
 pub const AtomicRmwOp = enum {
     Xchg,
     Add,
@@ -136,7 +151,6 @@ pub const Mode = enum {
 pub const CallingConvention = enum {
     Unspecified,
     C,
-    Cold,
     Naked,
     Async,
     Interrupt,
@@ -184,7 +198,7 @@ pub const TypeInfo = union(enum) {
     Union: Union,
     Fn: Fn,
     BoundFn: Fn,
-    Opaque: void,
+    Opaque: Opaque,
     Frame: Frame,
     AnyFrame: AnyFrame,
     Vector: Vector,
@@ -254,9 +268,10 @@ pub const TypeInfo = union(enum) {
     /// therefore must be kept in sync with the compiler implementation.
     pub const StructField = struct {
         name: []const u8,
-        offset: ?comptime_int,
         field_type: type,
         default_value: anytype,
+        is_comptime: bool,
+        alignment: comptime_int,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -285,8 +300,6 @@ pub const TypeInfo = union(enum) {
     /// therefore must be kept in sync with the compiler implementation.
     pub const Error = struct {
         name: []const u8,
-        /// This field is ignored when using @Type().
-        value: comptime_int,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -314,8 +327,8 @@ pub const TypeInfo = union(enum) {
     /// therefore must be kept in sync with the compiler implementation.
     pub const UnionField = struct {
         name: []const u8,
-        enum_field: ?EnumField,
         field_type: type,
+        alignment: comptime_int,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -339,10 +352,17 @@ pub const TypeInfo = union(enum) {
     /// therefore must be kept in sync with the compiler implementation.
     pub const Fn = struct {
         calling_convention: CallingConvention,
+        alignment: comptime_int,
         is_generic: bool,
         is_var_args: bool,
         return_type: ?type,
         args: []const FnArg,
+    };
+
+    /// This data structure is used by the Zig language code generation and
+    /// therefore must be kept in sync with the compiler implementation.
+    pub const Opaque = struct {
+        decls: []const Declaration,
     };
 
     /// This data structure is used by the Zig language code generation and

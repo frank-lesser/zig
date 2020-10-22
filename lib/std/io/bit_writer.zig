@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const builtin = std.builtin;
 const io = std.io;
@@ -47,7 +52,7 @@ pub fn BitWriter(endian: builtin.Endian, comptime WriterType: type) type {
                 assert(u_bit_count >= bits);
                 break :bc if (u_bit_count <= u8_bit_count) u8_bit_count else u_bit_count;
             };
-            const Buf = std.meta.Int(false, buf_bit_count);
+            const Buf = std.meta.Int(.unsigned, buf_bit_count);
             const BufShift = math.Log2Int(Buf);
 
             const buf_value = @intCast(Buf, value);

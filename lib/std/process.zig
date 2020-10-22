@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("std.zig");
 const builtin = std.builtin;
 const os = std.os;
@@ -573,14 +578,14 @@ fn testWindowsCmdLine(input_cmd_line: [*]const u8, expected_args: []const []cons
 }
 
 pub const UserInfo = struct {
-    uid: u32,
-    gid: u32,
+    uid: os.uid_t,
+    gid: os.gid_t,
 };
 
 /// POSIX function which gets a uid from username.
 pub fn getUserInfo(name: []const u8) !UserInfo {
     return switch (builtin.os.tag) {
-        .linux, .macosx, .watchos, .tvos, .ios, .freebsd, .netbsd => posixGetUserInfo(name),
+        .linux, .macos, .watchos, .tvos, .ios, .freebsd, .netbsd, .openbsd => posixGetUserInfo(name),
         else => @compileError("Unsupported OS"),
     };
 }
@@ -588,8 +593,10 @@ pub fn getUserInfo(name: []const u8) !UserInfo {
 /// TODO this reads /etc/passwd. But sometimes the user/id mapping is in something else
 /// like NIS, AD, etc. See `man nss` or look at an strace for `id myuser`.
 pub fn posixGetUserInfo(name: []const u8) !UserInfo {
-    var reader = try io.Reader.open("/etc/passwd", null);
-    defer reader.close();
+    const file = try std.fs.openFileAbsolute("/etc/passwd", .{});
+    defer file.close();
+
+    const reader = file.reader();
 
     const State = enum {
         Start,
@@ -602,8 +609,8 @@ pub fn posixGetUserInfo(name: []const u8) !UserInfo {
     var buf: [std.mem.page_size]u8 = undefined;
     var name_index: usize = 0;
     var state = State.Start;
-    var uid: u32 = 0;
-    var gid: u32 = 0;
+    var uid: os.uid_t = 0;
+    var gid: os.gid_t = 0;
 
     while (true) {
         const amt_read = try reader.read(buf[0..]);
@@ -645,8 +652,8 @@ pub fn posixGetUserInfo(name: []const u8) !UserInfo {
                             '0'...'9' => byte - '0',
                             else => return error.CorruptPasswordFile,
                         };
-                        if (@mulWithOverflow(u32, uid, 10, *uid)) return error.CorruptPasswordFile;
-                        if (@addWithOverflow(u32, uid, digit, *uid)) return error.CorruptPasswordFile;
+                        if (@mulWithOverflow(u32, uid, 10, &uid)) return error.CorruptPasswordFile;
+                        if (@addWithOverflow(u32, uid, digit, &uid)) return error.CorruptPasswordFile;
                     },
                 },
                 .ReadGroupId => switch (byte) {
@@ -661,8 +668,8 @@ pub fn posixGetUserInfo(name: []const u8) !UserInfo {
                             '0'...'9' => byte - '0',
                             else => return error.CorruptPasswordFile,
                         };
-                        if (@mulWithOverflow(u32, gid, 10, *gid)) return error.CorruptPasswordFile;
-                        if (@addWithOverflow(u32, gid, digit, *gid)) return error.CorruptPasswordFile;
+                        if (@mulWithOverflow(u32, gid, 10, &gid)) return error.CorruptPasswordFile;
+                        if (@addWithOverflow(u32, gid, digit, &gid)) return error.CorruptPasswordFile;
                     },
                 },
             }
@@ -681,7 +688,7 @@ pub fn getBaseAddress() usize {
             const phdr = os.system.getauxval(std.elf.AT_PHDR);
             return phdr - @sizeOf(std.elf.Ehdr);
         },
-        .macosx, .freebsd, .netbsd => {
+        .macos, .freebsd, .netbsd => {
             return @ptrToInt(&std.c._mh_execute_header);
         },
         .windows => return @ptrToInt(os.windows.kernel32.GetModuleHandleW(null)),
@@ -705,6 +712,7 @@ pub fn getSelfExeSharedLibPaths(allocator: *Allocator) error{OutOfMemory}![][:0]
         .freebsd,
         .netbsd,
         .dragonfly,
+        .openbsd,
         => {
             var paths = List.init(allocator);
             errdefer {
@@ -726,7 +734,7 @@ pub fn getSelfExeSharedLibPaths(allocator: *Allocator) error{OutOfMemory}![][:0]
             }.callback);
             return paths.toOwnedSlice();
         },
-        .macosx, .ios, .watchos, .tvos => {
+        .macos, .ios, .watchos, .tvos => {
             var paths = List.init(allocator);
             errdefer {
                 const slice = paths.toOwnedSlice();
