@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -24,6 +24,30 @@ const AtomicOrder = builtin.AtomicOrder;
 const tmpDir = std.testing.tmpDir;
 const Dir = std.fs.Dir;
 const ArenaAllocator = std.heap.ArenaAllocator;
+
+test "chdir smoke test" {
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
+    // Get current working directory path
+    var old_cwd_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
+    const old_cwd = try os.getcwd(old_cwd_buf[0..]);
+
+    {
+        // Firstly, changing to itself should have no effect
+        try os.chdir(old_cwd);
+        var new_cwd_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
+        const new_cwd = try os.getcwd(new_cwd_buf[0..]);
+        expect(mem.eql(u8, old_cwd, new_cwd));
+    }
+    {
+        // Next, change current working directory to one level above
+        const parent = fs.path.dirname(old_cwd) orelse unreachable; // old_cwd should be absolute
+        try os.chdir(parent);
+        var new_cwd_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
+        const new_cwd = try os.getcwd(new_cwd_buf[0..]);
+        expect(mem.eql(u8, parent, new_cwd));
+    }
+}
 
 test "open smoke test" {
     if (builtin.os.tag == .wasi) return error.SkipZigTest;
@@ -165,9 +189,82 @@ fn testReadlink(target_path: []const u8, symlink_path: []const u8) !void {
     expect(mem.eql(u8, target_path, given));
 }
 
+test "link with relative paths" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var cwd = fs.cwd();
+
+    cwd.deleteFile("example.txt") catch {};
+    cwd.deleteFile("new.txt") catch {};
+
+    try cwd.writeFile("example.txt", "example");
+    try os.link("example.txt", "new.txt", 0);
+
+    const efd = try cwd.openFile("example.txt", .{});
+    defer efd.close();
+
+    const nfd = try cwd.openFile("new.txt", .{});
+    defer nfd.close();
+
+    {
+        const estat = try os.fstat(efd.handle);
+        const nstat = try os.fstat(nfd.handle);
+
+        testing.expectEqual(estat.ino, nstat.ino);
+        testing.expectEqual(@as(usize, 2), nstat.nlink);
+    }
+
+    try os.unlink("new.txt");
+
+    {
+        const estat = try os.fstat(efd.handle);
+        testing.expectEqual(@as(usize, 1), estat.nlink);
+    }
+
+    try cwd.deleteFile("example.txt");
+}
+
+test "linkat with different directories" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var cwd = fs.cwd();
+    var tmp = tmpDir(.{});
+
+    cwd.deleteFile("example.txt") catch {};
+    tmp.dir.deleteFile("new.txt") catch {};
+
+    try cwd.writeFile("example.txt", "example");
+    try os.linkat(cwd.fd, "example.txt", tmp.dir.fd, "new.txt", 0);
+
+    const efd = try cwd.openFile("example.txt", .{});
+    defer efd.close();
+
+    const nfd = try tmp.dir.openFile("new.txt", .{});
+
+    {
+        defer nfd.close();
+        const estat = try os.fstat(efd.handle);
+        const nstat = try os.fstat(nfd.handle);
+
+        testing.expectEqual(estat.ino, nstat.ino);
+        testing.expectEqual(@as(usize, 2), nstat.nlink);
+    }
+
+    try os.unlinkat(tmp.dir.fd, "new.txt", 0);
+
+    {
+        const estat = try os.fstat(efd.handle);
+        testing.expectEqual(@as(usize, 1), estat.nlink);
+    }
+
+    try cwd.deleteFile("example.txt");
+}
+
 test "fstatat" {
     // enable when `fstat` and `fstatat` are implemented on Windows
     if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.os.tag == .freebsd and builtin.mode == .ReleaseFast) {
+        // https://github.com/ziglang/zig/issues/8538
+        return error.SkipZigTest;
+    }
 
     var tmp = tmpDir(.{});
     defer tmp.cleanup();
@@ -224,7 +321,7 @@ test "std.Thread.getCurrentId" {
     if (builtin.single_threaded) return error.SkipZigTest;
 
     var thread_current_id: Thread.Id = undefined;
-    const thread = try Thread.spawn(&thread_current_id, testThreadIdFn);
+    const thread = try Thread.spawn(testThreadIdFn, &thread_current_id);
     const thread_id = thread.handle();
     thread.wait();
     if (Thread.use_pthreads) {
@@ -243,10 +340,10 @@ test "spawn threads" {
 
     var shared_ctx: i32 = 1;
 
-    const thread1 = try Thread.spawn({}, start1);
-    const thread2 = try Thread.spawn(&shared_ctx, start2);
-    const thread3 = try Thread.spawn(&shared_ctx, start2);
-    const thread4 = try Thread.spawn(&shared_ctx, start2);
+    const thread1 = try Thread.spawn(start1, {});
+    const thread2 = try Thread.spawn(start2, &shared_ctx);
+    const thread3 = try Thread.spawn(start2, &shared_ctx);
+    const thread4 = try Thread.spawn(start2, &shared_ctx);
 
     thread1.wait();
     thread2.wait();
@@ -274,8 +371,8 @@ test "cpu count" {
 
 test "thread local storage" {
     if (builtin.single_threaded) return error.SkipZigTest;
-    const thread1 = try Thread.spawn({}, testTls);
-    const thread2 = try Thread.spawn({}, testTls);
+    const thread1 = try Thread.spawn(testTls, {});
+    const thread2 = try Thread.spawn(testTls, {});
     testTls({});
     thread1.wait();
     thread2.wait();
@@ -451,7 +548,7 @@ test "mmap" {
         const file = try tmp.dir.createFile(test_out_file, .{});
         defer file.close();
 
-        const stream = file.outStream();
+        const stream = file.writer();
 
         var i: u32 = 0;
         while (i < alloc_size / @sizeOf(u32)) : (i += 1) {
@@ -475,7 +572,7 @@ test "mmap" {
         defer os.munmap(data);
 
         var mem_stream = io.fixedBufferStream(data);
-        const stream = mem_stream.inStream();
+        const stream = mem_stream.reader();
 
         var i: u32 = 0;
         while (i < alloc_size / @sizeOf(u32)) : (i += 1) {
@@ -499,7 +596,7 @@ test "mmap" {
         defer os.munmap(data);
 
         var mem_stream = io.fixedBufferStream(data);
-        const stream = mem_stream.inStream();
+        const stream = mem_stream.reader();
 
         var i: u32 = alloc_size / 2 / @sizeOf(u32);
         while (i < alloc_size / @sizeOf(u32)) : (i += 1) {
@@ -593,11 +690,70 @@ test "fsync" {
 }
 
 test "getrlimit and setrlimit" {
-    // TODO enable for other systems when implemented
-    if(builtin.os.tag != .linux){
+    if (!@hasDecl(os, "rlimit")) {
         return error.SkipZigTest;
     }
 
-    const cpuLimit = try os.getrlimit(.CPU);
-    try os.setrlimit(.CPU, cpuLimit);
+    inline for (std.meta.fields(os.rlimit_resource)) |field| {
+        const resource = @intToEnum(os.rlimit_resource, field.value);
+        const limit = try os.getrlimit(resource);
+        try os.setrlimit(resource, limit);
+    }
+}
+
+test "shutdown socket" {
+    if (builtin.os.tag == .wasi)
+        return error.SkipZigTest;
+    if (builtin.os.tag == .windows) {
+        _ = try std.os.windows.WSAStartup(2, 2);
+    }
+    defer {
+        if (builtin.os.tag == .windows) {
+            std.os.windows.WSACleanup() catch unreachable;
+        }
+    }
+    const sock = try os.socket(os.AF_INET, os.SOCK_STREAM, 0);
+    os.shutdown(sock, .both) catch |err| switch (err) {
+        error.SocketNotConnected => {},
+        else => |e| return e,
+    };
+    os.closeSocket(sock);
+}
+
+var signal_test_failed = true;
+
+test "sigaction" {
+    if (builtin.os.tag == .wasi or builtin.os.tag == .windows)
+        return error.SkipZigTest;
+
+    // https://github.com/ziglang/zig/issues/7427
+    if (builtin.os.tag == .linux and builtin.arch == .i386)
+        return error.SkipZigTest;
+
+    const S = struct {
+        fn handler(sig: i32, info: *const os.siginfo_t, ctx_ptr: ?*const c_void) callconv(.C) void {
+            // Check that we received the correct signal.
+            if (sig == os.SIGUSR1 and sig == info.signo)
+                signal_test_failed = false;
+        }
+    };
+
+    var sa = os.Sigaction{
+        .handler = .{ .sigaction = S.handler },
+        .mask = os.empty_sigset,
+        .flags = os.SA_SIGINFO | os.SA_RESETHAND,
+    };
+    var old_sa: os.Sigaction = undefined;
+    // Install the new signal handler.
+    os.sigaction(os.SIGUSR1, &sa, null);
+    // Check that we can read it back correctly.
+    os.sigaction(os.SIGUSR1, null, &old_sa);
+    testing.expectEqual(S.handler, old_sa.handler.sigaction.?);
+    testing.expect((old_sa.flags & os.SA_SIGINFO) != 0);
+    // Invoke the handler.
+    try os.raise(os.SIGUSR1);
+    testing.expect(signal_test_failed == false);
+    // Check if the handler has been correctly reset to SIG_DFL
+    os.sigaction(os.SIGUSR1, null, &old_sa);
+    testing.expectEqual(os.SIG_DFL, old_sa.handler.sigaction);
 }

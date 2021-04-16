@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -9,7 +9,27 @@ const linux = std.os.linux;
 const mem = std.mem;
 const elf = std.elf;
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const fs = std.fs;
+
+test "fallocate" {
+    const path = "test_fallocate";
+    const file = try fs.cwd().createFile(path, .{ .truncate = true, .mode = 0o666 });
+    defer file.close();
+    defer fs.cwd().deleteFile(path) catch {};
+
+    expect((try file.stat()).size == 0);
+
+    const len: u64 = 65536;
+    switch (linux.getErrno(linux.fallocate(file.handle, 0, 0, len))) {
+        0 => {},
+        linux.ENOSYS => return error.SkipZigTest,
+        linux.EOPNOTSUPP => return error.SkipZigTest,
+        else => |errno| std.debug.panic("unhandled errno: {}", .{errno}),
+    }
+
+    expect((try file.stat()).size == len);
+}
 
 test "getpid" {
     expect(linux.getpid() != 0);
@@ -67,7 +87,7 @@ test "statx" {
         else => unreachable,
     }
 
-    var stat_buf: linux.Stat = undefined;
+    var stat_buf: linux.kernel_stat = undefined;
     switch (linux.getErrno(linux.fstatat(file.handle, "", &stat_buf, linux.AT_EMPTY_PATH))) {
         0 => {},
         else => unreachable,
@@ -79,4 +99,12 @@ test "statx" {
     expect(@bitCast(u64, @as(i64, stat_buf.size)) == statx_buf.size);
     expect(@bitCast(u64, @as(i64, stat_buf.blksize)) == statx_buf.blksize);
     expect(@bitCast(u64, @as(i64, stat_buf.blocks)) == statx_buf.blocks);
+}
+
+test "user and group ids" {
+    if (builtin.link_libc) return error.SkipZigTest;
+    expectEqual(linux.getauxval(elf.AT_UID), linux.getuid());
+    expectEqual(linux.getauxval(elf.AT_GID), linux.getgid());
+    expectEqual(linux.getauxval(elf.AT_EUID), linux.geteuid());
+    expectEqual(linux.getauxval(elf.AT_EGID), linux.getegid());
 }

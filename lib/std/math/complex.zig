@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -138,8 +138,8 @@ test "complex.div" {
     const b = Complex(f32).new(2, 7);
     const c = a.div(b);
 
-    testing.expect(math.approxEq(f32, c.re, @as(f32, 31) / 53, epsilon) and
-        math.approxEq(f32, c.im, @as(f32, -29) / 53, epsilon));
+    testing.expect(math.approxEqAbs(f32, c.re, @as(f32, 31) / 53, epsilon) and
+        math.approxEqAbs(f32, c.im, @as(f32, -29) / 53, epsilon));
 }
 
 test "complex.conjugate" {
@@ -153,15 +153,15 @@ test "complex.reciprocal" {
     const a = Complex(f32).new(5, 3);
     const c = a.reciprocal();
 
-    testing.expect(math.approxEq(f32, c.re, @as(f32, 5) / 34, epsilon) and
-        math.approxEq(f32, c.im, @as(f32, -3) / 34, epsilon));
+    testing.expect(math.approxEqAbs(f32, c.re, @as(f32, 5) / 34, epsilon) and
+        math.approxEqAbs(f32, c.im, @as(f32, -3) / 34, epsilon));
 }
 
 test "complex.magnitude" {
     const a = Complex(f32).new(5, 3);
     const c = a.magnitude();
 
-    testing.expect(math.approxEq(f32, c, 5.83095, epsilon));
+    testing.expect(math.approxEqAbs(f32, c, 5.83095, epsilon));
 }
 
 test "complex.cmath" {

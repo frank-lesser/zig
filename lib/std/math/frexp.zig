@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -127,10 +127,10 @@ test "math.frexp32" {
     var r: frexp32_result = undefined;
 
     r = frexp32(1.3);
-    expect(math.approxEq(f32, r.significand, 0.65, epsilon) and r.exponent == 1);
+    expect(math.approxEqAbs(f32, r.significand, 0.65, epsilon) and r.exponent == 1);
 
     r = frexp32(78.0234);
-    expect(math.approxEq(f32, r.significand, 0.609558, epsilon) and r.exponent == 7);
+    expect(math.approxEqAbs(f32, r.significand, 0.609558, epsilon) and r.exponent == 7);
 }
 
 test "math.frexp64" {
@@ -138,10 +138,10 @@ test "math.frexp64" {
     var r: frexp64_result = undefined;
 
     r = frexp64(1.3);
-    expect(math.approxEq(f64, r.significand, 0.65, epsilon) and r.exponent == 1);
+    expect(math.approxEqAbs(f64, r.significand, 0.65, epsilon) and r.exponent == 1);
 
     r = frexp64(78.0234);
-    expect(math.approxEq(f64, r.significand, 0.609558, epsilon) and r.exponent == 7);
+    expect(math.approxEqAbs(f64, r.significand, 0.609558, epsilon) and r.exponent == 7);
 }
 
 test "math.frexp32.special" {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -230,6 +230,20 @@ pub fn isSpace(c: u8) bool {
     return inTable(c, tIndex.Space);
 }
 
+/// All the values for which isSpace() returns true. This may be used with
+/// e.g. std.mem.trim() to trim whiteSpace.
+pub const spaces = [_]u8{ ' ', '\t', '\n', '\r', control_code.VT, control_code.FF };
+
+test "spaces" {
+    const testing = std.testing;
+    for (spaces) |space| testing.expect(isSpace(space));
+
+    var i: u8 = 0;
+    while (isASCII(i)) : (i += 1) {
+        if (isSpace(i)) testing.expect(std.mem.indexOfScalar(u8, &spaces, i) != null);
+    }
+}
+
 pub fn isUpper(c: u8) bool {
     return inTable(c, tIndex.Upper);
 }
@@ -321,6 +335,24 @@ test "eqlIgnoreCase" {
     std.testing.expect(!eqlIgnoreCase("hElLo!", "helro!"));
 }
 
+pub fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    return if (needle.len > haystack.len) false else eqlIgnoreCase(haystack[0..needle.len], needle);
+}
+
+test "ascii.startsWithIgnoreCase" {
+    std.testing.expect(startsWithIgnoreCase("boB", "Bo"));
+    std.testing.expect(!startsWithIgnoreCase("Needle in hAyStAcK", "haystack"));
+}
+
+pub fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    return if (needle.len > haystack.len) false else eqlIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+}
+
+test "ascii.endsWithIgnoreCase" {
+    std.testing.expect(endsWithIgnoreCase("Needle in HaYsTaCk", "haystack"));
+    std.testing.expect(!endsWithIgnoreCase("BoB", "Bo"));
+}
+
 /// Finds `substr` in `container`, ignoring case, starting at `start_index`.
 /// TODO boyer-moore algorithm
 pub fn indexOfIgnoreCasePos(container: []const u8, start_index: usize, substr: []const u8) ?usize {
@@ -346,4 +378,24 @@ test "indexOfIgnoreCase" {
     std.testing.expect(indexOfIgnoreCase("foo", "fool") == null);
 
     std.testing.expect(indexOfIgnoreCase("FOO foo", "fOo").? == 0);
+}
+
+/// Compares two slices of numbers lexicographically. O(n).
+pub fn orderIgnoreCase(lhs: []const u8, rhs: []const u8) std.math.Order {
+    const n = std.math.min(lhs.len, rhs.len);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        switch (std.math.order(toLower(lhs[i]), toLower(rhs[i]))) {
+            .eq => continue,
+            .lt => return .lt,
+            .gt => return .gt,
+        }
+    }
+    return std.math.order(lhs.len, rhs.len);
+}
+
+/// Returns true if lhs < rhs, false otherwise
+/// TODO rename "IgnoreCase" to "Insensitive" in this entire file.
+pub fn lessThanIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
+    return orderIgnoreCase(lhs, rhs) == .lt;
 }

@@ -73,11 +73,11 @@ enum Os {
     OsOpenBSD,
     OsSolaris,
     OsWindows,
+    OsZOS,
     OsHaiku,
     OsMinix,
     OsRTEMS,
     OsNaCl,       // Native Client
-    OsCNK,        // BG/P Compute-Node Kernel
     OsAIX,
     OsCUDA,       // NVIDIA CUDA
     OsNVCL,       // NVIDIA OpenCL
@@ -177,6 +177,8 @@ struct ZigStage1 {
     enum ErrColor err_color;
 
     bool pic;
+    bool pie;
+    bool lto;
     bool link_libc;
     bool link_libcpp;
     bool strip;
@@ -184,8 +186,10 @@ struct ZigStage1 {
     bool dll_export_fns;
     bool link_mode_dynamic;
     bool valgrind_enabled;
+    bool tsan_enabled;
     bool function_sections;
     bool enable_stack_probing;
+    bool red_zone;
     bool enable_time_report;
     bool enable_stack_report;
     bool test_is_evented;

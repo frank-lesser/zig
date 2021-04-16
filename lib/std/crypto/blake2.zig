@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -33,6 +33,7 @@ fn roundParam(a: usize, b: usize, c: usize, d: usize, x: usize, y: usize) RoundP
 // Blake2s
 
 pub const Blake2s128 = Blake2s(128);
+pub const Blake2s160 = Blake2s(160);
 pub const Blake2s224 = Blake2s(224);
 pub const Blake2s256 = Blake2s(256);
 
@@ -44,7 +45,7 @@ pub fn Blake2s(comptime out_bits: usize) type {
         pub const key_length_min = 0;
         pub const key_length_max = 32;
         pub const key_length = 32; // recommended key length
-        pub const Options = struct { key: ?[]const u8 = null, salt: ?[8]u8 = null, context: ?[8]u8 = null };
+        pub const Options = struct { key: ?[]const u8 = null, salt: ?[8]u8 = null, context: ?[8]u8 = null, expected_out_bits: usize = out_bits };
 
         const iv = [8]u32{
             0x6A09E667,
@@ -77,14 +78,14 @@ pub fn Blake2s(comptime out_bits: usize) type {
         buf_len: u8,
 
         pub fn init(options: Options) Self {
-            debug.assert(8 <= out_bits and out_bits <= 256);
+            comptime debug.assert(8 <= out_bits and out_bits <= 256);
 
             var d: Self = undefined;
             mem.copy(u32, d.h[0..], iv[0..]);
 
             const key_len = if (options.key) |key| key.len else 0;
             // default parameters
-            d.h[0] ^= 0x01010000 ^ @truncate(u32, key_len << 8) ^ @intCast(u32, out_bits >> 3);
+            d.h[0] ^= 0x01010000 ^ @truncate(u32, key_len << 8) ^ @intCast(u32, options.expected_out_bits >> 3);
             d.t = 0;
             d.buf_len = 0;
 
@@ -125,7 +126,7 @@ pub fn Blake2s(comptime out_bits: usize) type {
             // Full middle blocks.
             while (off + 64 < b.len) : (off += 64) {
                 d.t += 64;
-                d.round(b[off .. off + 64], false);
+                d.round(b[off..][0..64], false);
             }
 
             // Copy any remainder for next pass.
@@ -137,17 +138,11 @@ pub fn Blake2s(comptime out_bits: usize) type {
             mem.set(u8, d.buf[d.buf_len..], 0);
             d.t += d.buf_len;
             d.round(d.buf[0..], true);
-
-            const rr = d.h[0 .. digest_length / 4];
-
-            for (rr) |s, j| {
-                mem.writeIntSliceLittle(u32, out[4 * j ..], s);
-            }
+            for (d.h) |*x| x.* = mem.nativeToLittle(u32, x.*);
+            mem.copy(u8, out[0..], @ptrCast(*[digest_length]u8, &d.h));
         }
 
-        fn round(d: *Self, b: []const u8, last: bool) void {
-            debug.assert(b.len == 64);
-
+        fn round(d: *Self, b: *const [64]u8, last: bool) void {
             var m: [16]u32 = undefined;
             var v: [16]u32 = undefined;
 
@@ -195,6 +190,89 @@ pub fn Blake2s(comptime out_bits: usize) type {
             }
         }
     };
+}
+
+test "blake2s160 single" {
+    const h1 = "354c9c33f735962418bdacb9479873429c34916f";
+    htest.assertEqualHash(Blake2s160, h1, "");
+
+    const h2 = "5ae3b99be29b01834c3b508521ede60438f8de17";
+    htest.assertEqualHash(Blake2s160, h2, "abc");
+
+    const h3 = "5a604fec9713c369e84b0ed68daed7d7504ef240";
+    htest.assertEqualHash(Blake2s160, h3, "The quick brown fox jumps over the lazy dog");
+
+    const h4 = "b60c4dc60e2681e58fbc24e77f07e02c69e72ed0";
+    htest.assertEqualHash(Blake2s160, h4, "a" ** 32 ++ "b" ** 32);
+}
+
+test "blake2s160 streaming" {
+    var h = Blake2s160.init(.{});
+    var out: [20]u8 = undefined;
+
+    const h1 = "354c9c33f735962418bdacb9479873429c34916f";
+
+    h.final(out[0..]);
+    htest.assertEqual(h1, out[0..]);
+
+    const h2 = "5ae3b99be29b01834c3b508521ede60438f8de17";
+
+    h = Blake2s160.init(.{});
+    h.update("abc");
+    h.final(out[0..]);
+    htest.assertEqual(h2, out[0..]);
+
+    h = Blake2s160.init(.{});
+    h.update("a");
+    h.update("b");
+    h.update("c");
+    h.final(out[0..]);
+    htest.assertEqual(h2, out[0..]);
+
+    const h3 = "b60c4dc60e2681e58fbc24e77f07e02c69e72ed0";
+
+    h = Blake2s160.init(.{});
+    h.update("a" ** 32);
+    h.update("b" ** 32);
+    h.final(out[0..]);
+    htest.assertEqual(h3, out[0..]);
+
+    h = Blake2s160.init(.{});
+    h.update("a" ** 32 ++ "b" ** 32);
+    h.final(out[0..]);
+    htest.assertEqual(h3, out[0..]);
+
+    const h4 = "4667fd60791a7fe41f939bca646b4529e296bd68";
+
+    h = Blake2s160.init(.{ .context = [_]u8{0x69} ** 8, .salt = [_]u8{0x42} ** 8 });
+    h.update("a" ** 32);
+    h.update("b" ** 32);
+    h.final(out[0..]);
+    htest.assertEqual(h4, out[0..]);
+
+    h = Blake2s160.init(.{ .context = [_]u8{0x69} ** 8, .salt = [_]u8{0x42} ** 8 });
+    h.update("a" ** 32 ++ "b" ** 32);
+    h.final(out[0..]);
+    htest.assertEqual(h4, out[0..]);
+}
+
+test "comptime blake2s160" {
+    //comptime
+    {
+        @setEvalBranchQuota(10000);
+        var block = [_]u8{0} ** Blake2s160.block_length;
+        var out: [Blake2s160.digest_length]u8 = undefined;
+
+        const h1 = "2c56ad9d0b2c8b474aafa93ab307db2f0940105f";
+
+        htest.assertEqualHash(Blake2s160, h1, block[0..]);
+
+        var h = Blake2s160.init(.{});
+        h.update(&block);
+        h.final(out[0..]);
+
+        htest.assertEqual(h1, out[0..]);
+    }
 }
 
 test "blake2s224 single" {
@@ -263,7 +341,7 @@ test "blake2s224 streaming" {
 
 test "comptime blake2s224" {
     comptime {
-        @setEvalBranchQuota(6000);
+        @setEvalBranchQuota(10000);
         var block = [_]u8{0} ** Blake2s224.block_length;
         var out: [Blake2s224.digest_length]u8 = undefined;
 
@@ -355,7 +433,7 @@ test "blake2s256 keyed" {
 
 test "comptime blake2s256" {
     comptime {
-        @setEvalBranchQuota(6000);
+        @setEvalBranchQuota(10000);
         var block = [_]u8{0} ** Blake2s256.block_length;
         var out: [Blake2s256.digest_length]u8 = undefined;
 
@@ -375,6 +453,7 @@ test "comptime blake2s256" {
 // Blake2b
 
 pub const Blake2b128 = Blake2b(128);
+pub const Blake2b160 = Blake2b(160);
 pub const Blake2b256 = Blake2b(256);
 pub const Blake2b384 = Blake2b(384);
 pub const Blake2b512 = Blake2b(512);
@@ -387,7 +466,7 @@ pub fn Blake2b(comptime out_bits: usize) type {
         pub const key_length_min = 0;
         pub const key_length_max = 64;
         pub const key_length = 32; // recommended key length
-        pub const Options = struct { key: ?[]const u8 = null, salt: ?[16]u8 = null, context: ?[16]u8 = null };
+        pub const Options = struct { key: ?[]const u8 = null, salt: ?[16]u8 = null, context: ?[16]u8 = null, expected_out_bits: usize = out_bits };
 
         const iv = [8]u64{
             0x6a09e667f3bcc908,
@@ -422,14 +501,14 @@ pub fn Blake2b(comptime out_bits: usize) type {
         buf_len: u8,
 
         pub fn init(options: Options) Self {
-            debug.assert(8 <= out_bits and out_bits <= 512);
+            comptime debug.assert(8 <= out_bits and out_bits <= 512);
 
             var d: Self = undefined;
             mem.copy(u64, d.h[0..], iv[0..]);
 
             const key_len = if (options.key) |key| key.len else 0;
             // default parameters
-            d.h[0] ^= 0x01010000 ^ (key_len << 8) ^ (out_bits >> 3);
+            d.h[0] ^= 0x01010000 ^ (key_len << 8) ^ (options.expected_out_bits >> 3);
             d.t = 0;
             d.buf_len = 0;
 
@@ -470,7 +549,7 @@ pub fn Blake2b(comptime out_bits: usize) type {
             // Full middle blocks.
             while (off + 128 < b.len) : (off += 128) {
                 d.t += 128;
-                d.round(b[off .. off + 128], false);
+                d.round(b[off..][0..128], false);
             }
 
             // Copy any remainder for next pass.
@@ -482,17 +561,11 @@ pub fn Blake2b(comptime out_bits: usize) type {
             mem.set(u8, d.buf[d.buf_len..], 0);
             d.t += d.buf_len;
             d.round(d.buf[0..], true);
-
-            const rr = d.h[0 .. digest_length / 8];
-
-            for (rr) |s, j| {
-                mem.writeIntSliceLittle(u64, out[8 * j ..], s);
-            }
+            for (d.h) |*x| x.* = mem.nativeToLittle(u64, x.*);
+            mem.copy(u8, out[0..], @ptrCast(*[digest_length]u8, &d.h));
         }
 
-        fn round(d: *Self, b: []const u8, last: bool) void {
-            debug.assert(b.len == 128);
-
+        fn round(d: *Self, b: *const [128]u8, last: bool) void {
             var m: [16]u64 = undefined;
             var v: [16]u64 = undefined;
 
@@ -540,6 +613,95 @@ pub fn Blake2b(comptime out_bits: usize) type {
             }
         }
     };
+}
+
+test "blake2b160 single" {
+    const h1 = "3345524abf6bbe1809449224b5972c41790b6cf2";
+    htest.assertEqualHash(Blake2b160, h1, "");
+
+    const h2 = "384264f676f39536840523f284921cdc68b6846b";
+    htest.assertEqualHash(Blake2b160, h2, "abc");
+
+    const h3 = "3c523ed102ab45a37d54f5610d5a983162fde84f";
+    htest.assertEqualHash(Blake2b160, h3, "The quick brown fox jumps over the lazy dog");
+
+    const h4 = "43758f5de1740f651f1ae39de92260fe8bd5a11f";
+    htest.assertEqualHash(Blake2b160, h4, "a" ** 64 ++ "b" ** 64);
+}
+
+test "blake2b160 streaming" {
+    var h = Blake2b160.init(.{});
+    var out: [20]u8 = undefined;
+
+    const h1 = "3345524abf6bbe1809449224b5972c41790b6cf2";
+
+    h.final(out[0..]);
+    htest.assertEqual(h1, out[0..]);
+
+    const h2 = "384264f676f39536840523f284921cdc68b6846b";
+
+    h = Blake2b160.init(.{});
+    h.update("abc");
+    h.final(out[0..]);
+    htest.assertEqual(h2, out[0..]);
+
+    h = Blake2b160.init(.{});
+    h.update("a");
+    h.update("b");
+    h.update("c");
+    h.final(out[0..]);
+    htest.assertEqual(h2, out[0..]);
+
+    const h3 = "43758f5de1740f651f1ae39de92260fe8bd5a11f";
+
+    h = Blake2b160.init(.{});
+    h.update("a" ** 64 ++ "b" ** 64);
+    h.final(out[0..]);
+    htest.assertEqual(h3, out[0..]);
+
+    h = Blake2b160.init(.{});
+    h.update("a" ** 64);
+    h.update("b" ** 64);
+    h.final(out[0..]);
+    htest.assertEqual(h3, out[0..]);
+
+    h = Blake2b160.init(.{});
+    h.update("a" ** 64);
+    h.update("b" ** 64);
+    h.final(out[0..]);
+    htest.assertEqual(h3, out[0..]);
+
+    const h4 = "72328f8a8200663752fc302d372b5dd9b49dd8dc";
+
+    h = Blake2b160.init(.{ .context = [_]u8{0x69} ** 16, .salt = [_]u8{0x42} ** 16 });
+    h.update("a" ** 64);
+    h.update("b" ** 64);
+    h.final(out[0..]);
+    htest.assertEqual(h4, out[0..]);
+
+    h = Blake2b160.init(.{ .context = [_]u8{0x69} ** 16, .salt = [_]u8{0x42} ** 16 });
+    h.update("a" ** 64);
+    h.update("b" ** 64);
+    h.final(out[0..]);
+    htest.assertEqual(h4, out[0..]);
+}
+
+test "comptime blake2b160" {
+    comptime {
+        @setEvalBranchQuota(10000);
+        var block = [_]u8{0} ** Blake2b160.block_length;
+        var out: [Blake2b160.digest_length]u8 = undefined;
+
+        const h1 = "8d26f158f564e3293b42f5e3d34263cb173aa9c9";
+
+        htest.assertEqualHash(Blake2b160, h1, block[0..]);
+
+        var h = Blake2b160.init(.{});
+        h.update(&block);
+        h.final(out[0..]);
+
+        htest.assertEqual(h1, out[0..]);
+    }
 }
 
 test "blake2b384 single" {
@@ -615,7 +777,7 @@ test "blake2b384 streaming" {
 
 test "comptime blake2b384" {
     comptime {
-        @setEvalBranchQuota(7000);
+        @setEvalBranchQuota(10000);
         var block = [_]u8{0} ** Blake2b384.block_length;
         var out: [Blake2b384.digest_length]u8 = undefined;
 
@@ -707,7 +869,7 @@ test "blake2b512 keyed" {
 
 test "comptime blake2b512" {
     comptime {
-        @setEvalBranchQuota(8000);
+        @setEvalBranchQuota(10000);
         var block = [_]u8{0} ** Blake2b512.block_length;
         var out: [Blake2b512.digest_length]u8 = undefined;
 

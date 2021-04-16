@@ -2,6 +2,223 @@ const tests = @import("tests.zig");
 const std = @import("std");
 
 pub fn addCases(cases: *tests.CompileErrorContext) void {
+    cases.add("lazy pointer with undefined element type",
+        \\export fn foo() void {
+        \\    comptime var T: type = undefined;
+        \\    const S = struct { x: *T };
+        \\    const I = @typeInfo(S);
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:3:28: error: use of undefined value here causes undefined behavior",
+    });
+
+    cases.add("pointer arithmetic on pointer-to-array",
+        \\export fn foo() void {
+        \\    var x: [10]u8 = undefined;
+        \\    var y = &x;
+        \\    var z = y + 1;
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:4:17: error: integer value 1 cannot be coerced to type '*[10]u8'",
+    });
+
+    cases.add("pointer attributes checked when coercing pointer to anon literal",
+        \\comptime {
+        \\    const c: [][]const u8 = &.{"hello", "world" };
+        \\}
+        \\comptime {
+        \\    const c: *[2][]const u8 = &.{"hello", "world" };
+        \\}
+        \\const S = struct {a: u8 = 1, b: u32 = 2};
+        \\comptime {
+        \\    const c: *S = &.{};
+        \\}
+    , &[_][]const u8{
+        "mp.zig:2:31: error: expected type '[][]const u8', found '*const struct:2:31'",
+        "mp.zig:5:33: error: expected type '*[2][]const u8', found '*const struct:5:33'",
+        "mp.zig:9:21: error: expected type '*S', found '*const struct:9:21'",
+    });
+
+    cases.add("@Type() union payload is undefined",
+        \\const Foo = @Type(@import("std").builtin.TypeInfo{
+        \\    .Struct = undefined,
+        \\});
+        \\comptime { _ = Foo; }
+    , &[_][]const u8{
+        "tmp.zig:1:50: error: use of undefined value here causes undefined behavior",
+    });
+
+    cases.add("wrong initializer for union payload of type 'type'",
+        \\const U = union(enum) {
+        \\    A: type,
+        \\};
+        \\const S = struct {
+        \\    u: U,
+        \\};
+        \\export fn entry() void {
+        \\    comptime var v: S = undefined;
+        \\    v.u.A = U{ .A = i32 };
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:9:8: error: use of undefined value here causes undefined behavior",
+    });
+
+    cases.add("union with too small explicit signed tag type",
+        \\const U = union(enum(i2)) {
+        \\    A: u8,
+        \\    B: u8,
+        \\    C: u8,
+        \\    D: u8,
+        \\};
+        \\export fn entry() void {
+        \\    _ = U{ .D = 1 };
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:1:22: error: specified integer tag type cannot represent every field",
+        "tmp.zig:1:22: note: type i2 cannot fit values in range 0...3",
+    });
+
+    cases.add("union with too small explicit unsigned tag type",
+        \\const U = union(enum(u2)) {
+        \\    A: u8,
+        \\    B: u8,
+        \\    C: u8,
+        \\    D: u8,
+        \\    E: u8,
+        \\};
+        \\export fn entry() void {
+        \\    _ = U{ .E = 1 };
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:1:22: error: specified integer tag type cannot represent every field",
+        "tmp.zig:1:22: note: type u2 cannot fit values in range 0...4",
+    });
+
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.Interrupt) on unsupported platform",
+            \\export fn entry() callconv(.Interrupt) void {}
+        , &[_][]const u8{
+            "tmp.zig:1:28: error: callconv 'Interrupt' is only available on x86, x86_64, AVR, and MSP430, not aarch64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .aarch64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.Signal) on unsupported platform",
+            \\export fn entry() callconv(.Signal) void {}
+        , &[_][]const u8{
+            "tmp.zig:1:28: error: callconv 'Signal' is only available on AVR, not x86_64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.Stdcall, .Fastcall, .Thiscall) on unsupported platform",
+            \\const F1 = fn () callconv(.Stdcall) void;
+            \\const F2 = fn () callconv(.Fastcall) void;
+            \\const F3 = fn () callconv(.Thiscall) void;
+            \\export fn entry1() void { var a: F1 = undefined; }
+            \\export fn entry2() void { var a: F2 = undefined; }
+            \\export fn entry3() void { var a: F3 = undefined; }
+        , &[_][]const u8{
+            "tmp.zig:1:27: error: callconv 'Stdcall' is only available on x86, not x86_64",
+            "tmp.zig:2:27: error: callconv 'Fastcall' is only available on x86, not x86_64",
+            "tmp.zig:3:27: error: callconv 'Thiscall' is only available on x86, not x86_64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.Stdcall, .Fastcall, .Thiscall) on unsupported platform",
+            \\export fn entry1() callconv(.Stdcall) void {}
+            \\export fn entry2() callconv(.Fastcall) void {}
+            \\export fn entry3() callconv(.Thiscall) void {}
+        , &[_][]const u8{
+            "tmp.zig:1:29: error: callconv 'Stdcall' is only available on x86, not x86_64",
+            "tmp.zig:2:29: error: callconv 'Fastcall' is only available on x86, not x86_64",
+            "tmp.zig:3:29: error: callconv 'Thiscall' is only available on x86, not x86_64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.Vectorcall) on unsupported platform",
+            \\export fn entry() callconv(.Vectorcall) void {}
+        , &[_][]const u8{
+            "tmp.zig:1:28: error: callconv 'Vectorcall' is only available on x86 and AArch64, not x86_64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+
+    cases.addCase(x: {
+        var tc = cases.create("callconv(.APCS, .AAPCS, .AAPCSVFP) on unsupported platform",
+            \\export fn entry1() callconv(.APCS) void {}
+            \\export fn entry2() callconv(.AAPCS) void {}
+            \\export fn entry3() callconv(.AAPCSVFP) void {}
+        , &[_][]const u8{
+            "tmp.zig:1:29: error: callconv 'APCS' is only available on ARM, not x86_64",
+            "tmp.zig:2:29: error: callconv 'AAPCS' is only available on ARM, not x86_64",
+            "tmp.zig:3:29: error: callconv 'AAPCSVFP' is only available on ARM, not x86_64",
+        });
+        tc.target = std.zig.CrossTarget{
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+            .abi = .none,
+        };
+        break :x tc;
+    });
+
+    cases.add("unreachable executed at comptime",
+        \\fn foo(comptime x: i32) i32 {
+        \\    comptime {
+        \\        if (x >= 0) return -x;
+        \\        unreachable;
+        \\    }
+        \\}
+        \\export fn entry() void {
+        \\    _ = foo(-42);
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:4:9: error: reached unreachable code",
+        "tmp.zig:8:12: note: called from here",
+    });
+
+    cases.add("@Type with TypeInfo.Int",
+        \\const builtin = @import("builtin");
+        \\export fn entry() void {
+        \\    _ = @Type(builtin.TypeInfo.Int {
+        \\        .signedness = .signed,
+        \\        .bits = 8,
+        \\    });
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:3:36: error: expected type 'std.builtin.TypeInfo', found 'std.builtin.Int'",
+    });
+
     cases.add("indexing a undefined slice at comptime",
         \\comptime {
         \\    var slice: []u8 = undefined;
@@ -106,7 +323,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    e: E,
         \\};
         \\export fn entry() void {
-        \\    if (@TagType(E) != u8) @compileError("did not infer u8 tag type");
+        \\    if (@typeInfo(E).Enum.tag_type != u8) @compileError("did not infer u8 tag type");
         \\    const s: S = undefined;
         \\}
     , &[_][]const u8{
@@ -810,9 +1027,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\}
         \\fn foo() void {}
     , &[_][]const u8{
-        "tmp.zig:3:21: error: async call in nosuspend scope",
         "tmp.zig:4:9: error: suspend in nosuspend scope",
-        "tmp.zig:5:9: error: resume in nosuspend scope",
     });
 
     cases.add("atomicrmw with bool op not .Xchg",
@@ -1431,7 +1646,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    @call(.{ .modifier = .compile_time }, baz, .{});
         \\}
         \\fn foo() void {}
-        \\inline fn bar() void {}
+        \\fn bar() callconv(.Inline) void {}
         \\fn baz1() void {}
         \\fn baz2() void {}
     , &[_][]const u8{
@@ -1757,17 +1972,6 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         "tmp.zig:4:15: error: unable to evaluate constant expression",
     });
 
-    cases.add("@Type with TypeInfo.Int",
-        \\const builtin = @import("builtin");
-        \\export fn entry() void {
-        \\    _ = @Type(builtin.TypeInfo.Int {
-        \\        .is_signed = true,
-        \\        .bits = 8,
-        \\    });
-        \\}
-    , &[_][]const u8{
-        "tmp.zig:3:36: error: expected type 'std.builtin.TypeInfo', found 'std.builtin.Int'",
-    });
     cases.add("wrong type for argument tuple to @asyncCall",
         \\export fn entry1() void {
         \\    var frame: @Frame(foo) = undefined;
@@ -2197,8 +2401,13 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\export fn entry() void {
         \\    const x = [_]u8;
         \\}
+        \\export fn entry2() void {
+        \\    const S = struct { a: *const [_]u8 };
+        \\    var a = .{ S{} };
+        \\}
     , &[_][]const u8{
         "tmp.zig:2:15: error: inferred array size invalid here",
+        "tmp.zig:5:34: error: inferred array size invalid here",
     });
 
     cases.add("initializing array with struct syntax",
@@ -2517,7 +2726,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\const InvalidToken = struct {};
         \\const ExpectedVarDeclOrFn = struct {};
     , &[_][]const u8{
-        "tmp.zig:4:9: error: expected type '@TagType(Error)', found 'type'",
+        "tmp.zig:4:9: error: expected type '@typeInfo(Error).Union.tag_type.?', found 'type'",
     });
 
     cases.addTest("binary OR operator on error sets",
@@ -2944,7 +3153,6 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         "tmp.zig:4:18: error: expected type 'fn(i32) void', found 'fn(bool) void",
         "tmp.zig:4:18: note: parameter 0: 'bool' cannot cast into 'i32'",
     });
-
     cases.add("cast negative value to unsigned integer",
         \\comptime {
         \\    const value: i32 = -1;
@@ -2955,7 +3163,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    const unsigned: u32 = value;
         \\}
     , &[_][]const u8{
-        "tmp.zig:3:36: error: cannot cast negative value -1 to unsigned integer type 'u32'",
+        "tmp.zig:3:22: error: attempt to cast negative value to unsigned integer",
         "tmp.zig:7:27: error: cannot cast negative value -1 to unsigned integer type 'u32'",
     });
 
@@ -2977,7 +3185,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    var unsigned: u64 = signed;
         \\}
     , &[_][]const u8{
-        "tmp.zig:3:31: error: integer value 300 cannot be coerced to type 'u8'",
+        "tmp.zig:3:18: error: cast from 'u16' to 'u8' truncates bits",
         "tmp.zig:7:22: error: integer value 300 cannot be coerced to type 'u8'",
         "tmp.zig:11:20: error: expected type 'u8', found 'u16'",
         "tmp.zig:11:20: note: unsigned 8-bit int cannot represent all possible unsigned 16-bit values",
@@ -3734,7 +3942,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\export fn entry() void {
         \\    var a = b;
         \\}
-        \\inline fn b() void { }
+        \\fn b() callconv(.Inline) void { }
     , &[_][]const u8{
         "tmp.zig:2:5: error: functions marked inline must be stored in const or comptime var",
         "tmp.zig:4:1: note: declared here",
@@ -5245,7 +5453,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\
         \\export fn entry() usize { return @sizeOf(@TypeOf(test1)); }
     , &[_][]const u8{
-        "tmp.zig:3:16: error: unable to evaluate constant expression",
+        "tmp.zig:3:16: error: runtime value cannot be passed to comptime arg",
     });
 
     cases.add("assign null to non-optional pointer",
@@ -6209,7 +6417,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    if (!ok) unreachable;
         \\}
     , &[_][]const u8{
-        "tmp.zig:10:14: error: unable to evaluate constant expression",
+        "tmp.zig:10:14: error: reached unreachable code",
         "tmp.zig:6:20: note: referenced here",
     });
 
@@ -6572,11 +6780,11 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
     //    \\export fn foo() void {
     //    \\    bar();
     //    \\}
-    //    \\inline fn bar() void {
+    //    \\fn bar() callconv(.Inline) void {
     //    \\    baz();
     //    \\    quux();
     //    \\}
-    //    \\inline fn baz() void {
+    //    \\fn baz() callconv(.Inline) void {
     //    \\    bar();
     //    \\    quux();
     //    \\}
@@ -6589,7 +6797,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
     //    \\export fn foo() void {
     //    \\    quux(@ptrToInt(bar));
     //    \\}
-    //    \\inline fn bar() void { }
+    //    \\fn bar() callconv(.Inline) void { }
     //    \\extern fn quux(usize) void;
     //, &[_][]const u8{
     //    "tmp.zig:4:1: error: unable to inline function",
@@ -6921,7 +7129,9 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         "tmp.zig:2:4: error: variable of type '*const comptime_int' must be const or comptime",
         "tmp.zig:5:4: error: variable of type '(undefined)' must be const or comptime",
         "tmp.zig:8:4: error: variable of type 'comptime_int' must be const or comptime",
+        "tmp.zig:8:4: note: to modify this variable at runtime, it must be given an explicit fixed-size number type",
         "tmp.zig:11:4: error: variable of type 'comptime_float' must be const or comptime",
+        "tmp.zig:11:4: note: to modify this variable at runtime, it must be given an explicit fixed-size number type",
         "tmp.zig:14:4: error: variable of type '(null)' must be const or comptime",
         "tmp.zig:17:4: error: variable of type 'Opaque' not allowed",
         "tmp.zig:20:4: error: variable of type 'type' must be const or comptime",
@@ -6995,7 +7205,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\export fn entry() void {
         \\    foo();
         \\}
-        \\inline fn foo() void {
+        \\fn foo() callconv(.Inline) void {
         \\    @setAlignStack(16);
         \\}
     , &[_][]const u8{
@@ -7250,24 +7460,12 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         "tmp.zig:4:5: note: declared here",
     });
 
-    cases.add("@TagType when union has no attached enum",
-        \\const Foo = union {
-        \\    A: i32,
-        \\};
-        \\export fn entry() void {
-        \\    const x = @TagType(Foo);
-        \\}
-    , &[_][]const u8{
-        "tmp.zig:5:24: error: union 'Foo' has no tag",
-        "tmp.zig:1:13: note: consider 'union(enum)' here",
-    });
-
     cases.add("non-integer tag type to automatic union enum",
         \\const Foo = union(enum(f32)) {
         \\    A: i32,
         \\};
         \\export fn entry() void {
-        \\    const x = @TagType(Foo);
+        \\    const x = @typeInfo(Foo).Union.tag_type.?;
         \\}
     , &[_][]const u8{
         "tmp.zig:1:24: error: expected integer tag type, found 'f32'",
@@ -7278,7 +7476,7 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\    A: i32,
         \\};
         \\export fn entry() void {
-        \\    const x = @TagType(Foo);
+        \\    const x = @typeInfo(Foo).Union.tag_type.?;
         \\}
     , &[_][]const u8{
         "tmp.zig:1:19: error: expected enum tag type, found 'u32'",
@@ -7769,6 +7967,20 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         "tmp.zig:7:37: note: referenced here",
     });
 
+    // issue #7810
+    cases.add("comptime slice-len increment beyond bounds",
+        \\export fn foo_slice_len_increment_beyond_bounds() void {
+        \\    comptime {
+        \\        var buf_storage: [8]u8 = undefined;
+        \\        var buf: []const u8 = buf_storage[0..];
+        \\        buf.len += 1;
+        \\        buf[8] = 42;
+        \\    }
+        \\}
+    , &[_][]const u8{
+        ":6:12: error: out of bounds slice",
+    });
+
     cases.add("comptime slice-sentinel is out of bounds (unterminated)",
         \\export fn foo_array() void {
         \\    comptime {
@@ -8195,5 +8407,13 @@ pub fn addCases(cases: *tests.CompileErrorContext) void {
         \\}
     , &[_][]const u8{
         "tmp.zig:4:9: error: expected type '*c_void', found '?*c_void'",
+    });
+
+    cases.add("Issue #6823: don't allow .* to be followed by **",
+        \\fn foo() void {
+        \\    var sequence = "repeat".*** 10;
+        \\}
+    , &[_][]const u8{
+        "tmp.zig:2:30: error: `.*` can't be followed by `*`. Are you missing a space?",
     });
 }

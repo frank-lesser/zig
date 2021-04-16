@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -95,22 +95,82 @@ test "parse and render IPv4 addresses" {
 }
 
 test "resolve DNS" {
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
     if (std.builtin.os.tag == .windows) {
         _ = try std.os.windows.WSAStartup(2, 2);
     }
-    if (builtin.os.tag == .wasi) {
-        // DNS resolution not implemented on Windows yet.
-        return error.SkipZigTest;
+    defer {
+        if (std.builtin.os.tag == .windows) {
+            std.os.windows.WSACleanup() catch unreachable;
+        }
     }
 
-    const address_list = net.getAddressList(testing.allocator, "example.com", 80) catch |err| switch (err) {
+    // Resolve localhost, this should not fail.
+    {
+        const localhost_v4 = try net.Address.parseIp("127.0.0.1", 80);
+        const localhost_v6 = try net.Address.parseIp("::2", 80);
+
+        const result = try net.getAddressList(testing.allocator, "localhost", 80);
+        defer result.deinit();
+        for (result.addrs) |addr| {
+            if (addr.eql(localhost_v4) or addr.eql(localhost_v6)) break;
+        } else @panic("unexpected address for localhost");
+    }
+
+    {
         // The tests are required to work even when there is no Internet connection,
         // so some of these errors we must accept and skip the test.
-        error.UnknownHostName => return error.SkipZigTest,
-        error.TemporaryNameServerFailure => return error.SkipZigTest,
-        else => return err,
+        const result = net.getAddressList(testing.allocator, "example.com", 80) catch |err| switch (err) {
+            error.UnknownHostName => return error.SkipZigTest,
+            error.TemporaryNameServerFailure => return error.SkipZigTest,
+            else => return err,
+        };
+        result.deinit();
+    }
+}
+
+test "listen on a port, send bytes, receive bytes" {
+    if (builtin.single_threaded) return error.SkipZigTest;
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
+    if (std.builtin.os.tag == .windows) {
+        _ = try std.os.windows.WSAStartup(2, 2);
+    }
+    defer {
+        if (std.builtin.os.tag == .windows) {
+            std.os.windows.WSACleanup() catch unreachable;
+        }
+    }
+
+    // Try only the IPv4 variant as some CI builders have no IPv6 localhost
+    // configured.
+    const localhost = try net.Address.parseIp("127.0.0.1", 0);
+
+    var server = net.StreamServer.init(.{});
+    defer server.deinit();
+
+    try server.listen(localhost);
+
+    const S = struct {
+        fn clientFn(server_address: net.Address) !void {
+            const socket = try net.tcpConnectToAddress(server_address);
+            defer socket.close();
+
+            _ = try socket.writer().writeAll("Hello world!");
+        }
     };
-    address_list.deinit();
+
+    const t = try std.Thread.spawn(S.clientFn, server.listen_address);
+    defer t.wait();
+
+    var client = try server.accept();
+    defer client.stream.close();
+    var buf: [16]u8 = undefined;
+    const n = try client.stream.reader().read(&buf);
+
+    testing.expectEqual(@as(usize, 12), n);
+    testing.expectEqualSlices(u8, "Hello world!", buf[0..n]);
 }
 
 test "listen on a port, send bytes, receive bytes" {
@@ -190,6 +250,49 @@ fn testServer(server: *net.StreamServer) anyerror!void {
 
     var client = try server.accept();
 
-    const stream = client.file.outStream();
+    const stream = client.stream.writer();
     try stream.print("hello from server\n", .{});
+}
+
+test "listen on a unix socket, send bytes, receive bytes" {
+    if (builtin.single_threaded) return error.SkipZigTest;
+    if (!net.has_unix_sockets) return error.SkipZigTest;
+
+    if (std.builtin.os.tag == .windows) {
+        _ = try std.os.windows.WSAStartup(2, 2);
+    }
+    defer {
+        if (std.builtin.os.tag == .windows) {
+            std.os.windows.WSACleanup() catch unreachable;
+        }
+    }
+
+    var server = net.StreamServer.init(.{});
+    defer server.deinit();
+
+    const socket_path = "socket.unix";
+
+    var socket_addr = try net.Address.initUnix(socket_path);
+    defer std.fs.cwd().deleteFile(socket_path) catch {};
+    try server.listen(socket_addr);
+
+    const S = struct {
+        fn clientFn(_: void) !void {
+            const socket = try net.connectUnixSocket(socket_path);
+            defer socket.close();
+
+            _ = try socket.writer().writeAll("Hello world!");
+        }
+    };
+
+    const t = try std.Thread.spawn(S.clientFn, {});
+    defer t.wait();
+
+    var client = try server.accept();
+    defer client.stream.close();
+    var buf: [16]u8 = undefined;
+    const n = try client.stream.reader().read(&buf);
+
+    testing.expectEqual(@as(usize, 12), n);
+    testing.expectEqualSlices(u8, "Hello world!", buf[0..n]);
 }

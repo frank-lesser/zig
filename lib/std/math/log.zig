@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -31,9 +31,11 @@ pub fn log(comptime T: type, base: T, x: T) T {
         .ComptimeInt => {
             return @as(comptime_int, math.floor(math.ln(@as(f64, x)) / math.ln(float_base)));
         },
-        .Int => {
-            // TODO implement integer log without using float math
-            return @floatToInt(T, math.floor(math.ln(@intToFloat(f64, x)) / math.ln(float_base)));
+
+        // TODO implement integer log without using float math
+        .Int => |IntType| switch (IntType.signedness) {
+            .signed => return @compileError("log not implemented for signed integers"),
+            .unsigned => return @floatToInt(T, math.floor(math.ln(@intToFloat(f64, x)) / math.ln(float_base))),
         },
 
         .Float => {
@@ -53,7 +55,7 @@ pub fn log(comptime T: type, base: T, x: T) T {
 test "math.log integer" {
     expect(log(u8, 2, 0x1) == 0);
     expect(log(u8, 2, 0x2) == 1);
-    expect(log(i16, 2, 0x72) == 6);
+    expect(log(u16, 2, 0x72) == 6);
     expect(log(u32, 2, 0xFFFFFF) == 23);
     expect(log(u64, 2, 0x7FF0123456789ABC) == 62);
 }
@@ -61,9 +63,9 @@ test "math.log integer" {
 test "math.log float" {
     const epsilon = 0.000001;
 
-    expect(math.approxEq(f32, log(f32, 6, 0.23947), -0.797723, epsilon));
-    expect(math.approxEq(f32, log(f32, 89, 0.23947), -0.318432, epsilon));
-    expect(math.approxEq(f64, log(f64, 123897, 12389216414), 1.981724596, epsilon));
+    expect(math.approxEqAbs(f32, log(f32, 6, 0.23947), -0.797723, epsilon));
+    expect(math.approxEqAbs(f32, log(f32, 89, 0.23947), -0.318432, epsilon));
+    expect(math.approxEqAbs(f64, log(f64, 123897, 12389216414), 1.981724596, epsilon));
 }
 
 test "math.log float_special" {

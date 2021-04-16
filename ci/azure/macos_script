@@ -3,11 +3,11 @@
 set -x
 set -e
 
-brew install s3cmd
+brew update && brew install s3cmd
 
 ZIGDIR="$(pwd)"
 ARCH="x86_64"
-CACHE_BASENAME="zig+llvm+lld+clang-$ARCH-macos-gnu-0.6.0+1c9ef63a"
+CACHE_BASENAME="zig+llvm+lld+clang-$ARCH-macos-gnu-0.8.0-dev.1939+5a3ea9bec"
 PREFIX="$HOME/$CACHE_BASENAME"
 JOBS="-j2"
 
@@ -28,6 +28,8 @@ cd $ZIGDIR
 # Make the `zig version` number consistent.
 # This will affect the cmake command below.
 git config core.abbrev 9
+git fetch --unshallow || true
+git fetch --tags
 
 mkdir build
 cd build
@@ -37,7 +39,6 @@ cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
   -DZIG_TARGET_TRIPLE="$ARCH-native-gnu" \
   -DZIG_TARGET_MCPU="baseline" \
-  -DZIG_EXECUTABLE="$ZIG" \
   -DZIG_STATIC=ON
 
 # Now cmake will use zig as the C/C++ compiler. We reset the environment variables
@@ -47,6 +48,13 @@ unset CXX
 unset ZIG_LIBC
 
 make $JOBS install
+
+# Here we rebuild zig but this time using the Zig binary we just now produced to
+# build zig1.o rather than relying on the one built with stage0. See
+# https://github.com/ziglang/zig/issues/6830 for more details.
+cmake .. -DZIG_EXECUTABLE="$(pwd)/release/bin/zig" -DZIG_TARGET_MCPU="x86_64_v2"
+make $JOBS install
+
 release/bin/zig build test
 
 if [ "${BUILD_REASON}" != "PullRequest" ]; then

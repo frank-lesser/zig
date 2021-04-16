@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -7,17 +7,31 @@ const std = @import("std.zig");
 const debug = std.debug;
 const assert = debug.assert;
 const math = std.math;
-const builtin = @import("builtin");
+const builtin = std.builtin;
 const mem = @This();
 const meta = std.meta;
 const trait = meta.trait;
 const testing = std.testing;
 
-/// https://github.com/ziglang/zig/issues/2564
+/// Compile time known minimum page size.
+/// https://github.com/ziglang/zig/issues/4082
 pub const page_size = switch (builtin.arch) {
     .wasm32, .wasm64 => 64 * 1024,
+    .aarch64 => switch (builtin.os.tag) {
+        .macos, .ios, .watchos, .tvos => 16 * 1024,
+        else => 4 * 1024,
+    },
+    .sparcv9 => 8 * 1024,
     else => 4 * 1024,
 };
+
+/// The standard library currently thoroughly depends on byte size
+/// being 8 bits.  (see the use of u8 throughout allocation code as
+/// the "byte" type.)  Code which depends on this can reference this
+/// declaration.  If we ever try to port the standard library to a
+/// non-8-bit-byte platform, this will allow us to search for things
+/// which need to be updated.
+pub const byte_size_in_bits = 8;
 
 pub const Allocator = @import("mem/Allocator.zig");
 
@@ -134,7 +148,7 @@ test "mem.Allocator basics" {
 
 /// Copy all of source into dest at position 0.
 /// dest.len must be >= source.len.
-/// dest.ptr must be <= src.ptr.
+/// If the slices overlap, dest.ptr must be <= src.ptr.
 pub fn copy(comptime T: type, dest: []T, source: []const T) void {
     // TODO instead of manually doing this check for the whole array
     // and turning off runtime safety, the compiler should detect loops like
@@ -147,7 +161,7 @@ pub fn copy(comptime T: type, dest: []T, source: []const T) void {
 
 /// Copy all of source into dest at position 0.
 /// dest.len must be >= source.len.
-/// dest.ptr must be >= src.ptr.
+/// If the slices overlap, dest.ptr must be >= src.ptr.
 pub fn copyBackwards(comptime T: type, dest: []T, source: []const T) void {
     // TODO instead of manually doing this check for the whole array
     // and turning off runtime safety, the compiler should detect loops like
@@ -335,26 +349,6 @@ test "mem.zeroes" {
 
     var c = zeroes(C_union);
     testing.expectEqual(@as(u8, 0), c.a);
-}
-
-/// Sets a slice to zeroes.
-/// Prevents the store from being optimized out.
-pub fn secureZero(comptime T: type, s: []T) void {
-    // NOTE: We do not use a volatile slice cast here since LLVM cannot
-    // see that it can be replaced by a memset.
-    const ptr = @ptrCast([*]volatile u8, s.ptr);
-    const length = s.len * @sizeOf(T);
-    @memset(ptr, 0, length);
-}
-
-test "mem.secureZero" {
-    var a = [_]u8{0xfe} ** 8;
-    var b = [_]u8{0xfe} ** 8;
-
-    set(u8, a[0..], 0);
-    secureZero(u8, b[0..]);
-
-    testing.expectEqualSlices(u8, a[0..], b[0..]);
 }
 
 /// Initializes all fields of the struct with their default value, or zero values if no default value is present.
@@ -653,7 +647,10 @@ pub fn len(value: anytype) usize {
                 indexOfSentinel(info.child, sentinel, value)
             else
                 @compileError("length of pointer with no sentinel"),
-            .C => indexOfSentinel(info.child, 0, value),
+            .C => {
+                assert(value != null);
+                return indexOfSentinel(info.child, 0, value);
+            },
             .Slice => value.len,
         },
         .Struct => |info| if (info.is_tuple) {
@@ -714,7 +711,10 @@ pub fn lenZ(ptr: anytype) usize {
                 indexOfSentinel(info.child, sentinel, ptr)
             else
                 @compileError("length of pointer with no sentinel"),
-            .C => indexOfSentinel(info.child, 0, ptr),
+            .C => {
+                assert(ptr != null);
+                return indexOfSentinel(info.child, 0, ptr);
+            },
             .Slice => if (info.sentinel) |sentinel|
                 indexOfSentinel(info.child, sentinel, ptr.ptr)
             else
@@ -907,7 +907,7 @@ pub fn lastIndexOf(comptime T: type, haystack: []const T, needle: []const T) ?us
     if (needle.len > haystack.len) return null;
     if (needle.len == 0) return haystack.len;
 
-    if (!meta.trait.hasUniqueRepresentation(T) or haystack.len < 32 or needle.len <= 2)
+    if (!meta.trait.hasUniqueRepresentation(T) or haystack.len < 52 or needle.len <= 4)
         return lastIndexOfLinear(T, haystack, needle);
 
     const haystack_bytes = sliceAsBytes(haystack);
@@ -951,10 +951,10 @@ pub fn indexOfPos(comptime T: type, haystack: []const T, start_index: usize, nee
 }
 
 test "mem.indexOf" {
-    testing.expect(indexOf(u8, "one two three four five six seven eight nine ten", "three four").? == 8);
-    testing.expect(lastIndexOf(u8, "one two three four five six seven eight nine ten", "three four").? == 8);
-    testing.expect(indexOf(u8, "one two three four five six seven eight nine ten", "two two") == null);
-    testing.expect(lastIndexOf(u8, "one two three four five six seven eight nine ten", "two two") == null);
+    testing.expect(indexOf(u8, "one two three four five six seven eight nine ten eleven", "three four").? == 8);
+    testing.expect(lastIndexOf(u8, "one two three four five six seven eight nine ten eleven", "three four").? == 8);
+    testing.expect(indexOf(u8, "one two three four five six seven eight nine ten eleven", "two two") == null);
+    testing.expect(lastIndexOf(u8, "one two three four five six seven eight nine ten eleven", "two two") == null);
 
     testing.expect(indexOf(u8, "one two three four five six seven eight nine ten", "").? == 0);
     testing.expect(lastIndexOf(u8, "one two three four five six seven eight nine ten", "").? == 48);
@@ -1003,6 +1003,40 @@ test "mem.count" {
     testing.expect(count(u8, "foofoofoo", "foo") == 3);
     testing.expect(count(u8, "fffffff", "ff") == 3);
     testing.expect(count(u8, "owowowu", "owowu") == 1);
+}
+
+/// Returns true if the haystack contains expected_count or more needles
+/// needle.len must be > 0
+/// does not count overlapping needles
+pub fn containsAtLeast(comptime T: type, haystack: []const T, expected_count: usize, needle: []const T) bool {
+    assert(needle.len > 0);
+    if (expected_count == 0) return true;
+
+    var i: usize = 0;
+    var found: usize = 0;
+
+    while (indexOfPos(T, haystack, i, needle)) |idx| {
+        i = idx + needle.len;
+        found += 1;
+        if (found == expected_count) return true;
+    }
+    return false;
+}
+
+test "mem.containsAtLeast" {
+    testing.expect(containsAtLeast(u8, "aa", 0, "a"));
+    testing.expect(containsAtLeast(u8, "aa", 1, "a"));
+    testing.expect(containsAtLeast(u8, "aa", 2, "a"));
+    testing.expect(!containsAtLeast(u8, "aa", 3, "a"));
+
+    testing.expect(containsAtLeast(u8, "radaradar", 1, "radar"));
+    testing.expect(!containsAtLeast(u8, "radaradar", 2, "radar"));
+
+    testing.expect(containsAtLeast(u8, "radarradaradarradar", 3, "radar"));
+    testing.expect(!containsAtLeast(u8, "radarradaradarradar", 4, "radar"));
+
+    testing.expect(containsAtLeast(u8, "   radar      radar   ", 2, "radar"));
+    testing.expect(!containsAtLeast(u8, "   radar      radar   ", 3, "radar"));
 }
 
 /// Reads an integer from memory with size equal to bytes.len.
@@ -1339,6 +1373,20 @@ test "mem.tokenize (multibyte)" {
     testing.expect(it.next() == null);
 }
 
+test "mem.tokenize (reset)" {
+    var it = tokenize("   abc def   ghi  ", " ");
+    testing.expect(eql(u8, it.next().?, "abc"));
+    testing.expect(eql(u8, it.next().?, "def"));
+    testing.expect(eql(u8, it.next().?, "ghi"));
+
+    it.reset();
+
+    testing.expect(eql(u8, it.next().?, "abc"));
+    testing.expect(eql(u8, it.next().?, "def"));
+    testing.expect(eql(u8, it.next().?, "ghi"));
+    testing.expect(it.next() == null);
+}
+
 /// Returns an iterator that iterates over the slices of `buffer` that
 /// are separated by bytes in `delimiter`.
 /// split("abc|def||ghi", "|")
@@ -1437,6 +1485,11 @@ pub const TokenIterator = struct {
         return self.buffer[index..];
     }
 
+    /// Resets the iterator to the initial token.
+    pub fn reset(self: *TokenIterator) void {
+        self.index = 0;
+    }
+
     fn isSplitByte(self: TokenIterator, byte: u8) bool {
         for (self.delimiter_bytes) |delimiter_byte| {
             if (byte == delimiter_byte) {
@@ -1487,7 +1540,7 @@ pub fn joinZ(allocator: *Allocator, separator: []const u8, slices: []const []con
 }
 
 fn joinMaybeZ(allocator: *Allocator, separator: []const u8, slices: []const []const u8, zero: bool) ![]u8 {
-    if (slices.len == 0) return &[0]u8{};
+    if (slices.len == 0) return if (zero) try allocator.dupe(u8, &[1]u8{0}) else &[0]u8{};
 
     const total_len = blk: {
         var sum: usize = separator.len * (slices.len - 1);
@@ -1516,6 +1569,11 @@ fn joinMaybeZ(allocator: *Allocator, separator: []const u8, slices: []const []co
 
 test "mem.join" {
     {
+        const str = try join(testing.allocator, ",", &[_][]const u8{});
+        defer testing.allocator.free(str);
+        testing.expect(eql(u8, str, ""));
+    }
+    {
         const str = try join(testing.allocator, ",", &[_][]const u8{ "a", "b", "c" });
         defer testing.allocator.free(str);
         testing.expect(eql(u8, str, "a,b,c"));
@@ -1533,6 +1591,12 @@ test "mem.join" {
 }
 
 test "mem.joinZ" {
+    {
+        const str = try joinZ(testing.allocator, ",", &[_][]const u8{});
+        defer testing.allocator.free(str);
+        testing.expect(eql(u8, str, ""));
+        testing.expectEqual(str[str.len], 0);
+    }
     {
         const str = try joinZ(testing.allocator, ",", &[_][]const u8{ "a", "b", "c" });
         defer testing.allocator.free(str);
@@ -1931,25 +1995,31 @@ pub fn nativeToBig(comptime T: type, x: T) T {
     };
 }
 
+fn CopyPtrAttrs(comptime source: type, comptime size: builtin.TypeInfo.Pointer.Size, comptime child: type) type {
+    const info = @typeInfo(source).Pointer;
+    return @Type(.{
+        .Pointer = .{
+            .size = size,
+            .is_const = info.is_const,
+            .is_volatile = info.is_volatile,
+            .is_allowzero = info.is_allowzero,
+            .alignment = info.alignment,
+            .child = child,
+            .sentinel = null,
+        },
+    });
+}
+
 fn AsBytesReturnType(comptime P: type) type {
     if (!trait.isSingleItemPtr(P))
         @compileError("expected single item pointer, passed " ++ @typeName(P));
 
     const size = @sizeOf(meta.Child(P));
-    const alignment = meta.alignment(P);
 
-    if (alignment == 0) {
-        if (trait.isConstPtr(P))
-            return *const [size]u8;
-        return *[size]u8;
-    }
-
-    if (trait.isConstPtr(P))
-        return *align(alignment) const [size]u8;
-    return *align(alignment) [size]u8;
+    return CopyPtrAttrs(P, .One, [size]u8);
 }
 
-/// Given a pointer to a single item, returns a slice of the underlying bytes, preserving constness.
+/// Given a pointer to a single item, returns a slice of the underlying bytes, preserving pointer attributes.
 pub fn asBytes(ptr: anytype) AsBytesReturnType(@TypeOf(ptr)) {
     const P = @TypeOf(ptr);
     return @ptrCast(AsBytesReturnType(P), ptr);
@@ -1989,6 +2059,20 @@ test "asBytes" {
     testing.expect(eql(u8, asBytes(&zero), ""));
 }
 
+test "asBytes preserves pointer attributes" {
+    const inArr: u32 align(16) = 0xDEADBEEF;
+    const inPtr = @ptrCast(*align(16) const volatile u32, &inArr);
+    const outSlice = asBytes(inPtr);
+
+    const in = @typeInfo(@TypeOf(inPtr)).Pointer;
+    const out = @typeInfo(@TypeOf(outSlice)).Pointer;
+
+    testing.expectEqual(in.is_const, out.is_const);
+    testing.expectEqual(in.is_volatile, out.is_volatile);
+    testing.expectEqual(in.is_allowzero, out.is_allowzero);
+    testing.expectEqual(in.alignment, out.alignment);
+}
+
 /// Given any value, returns a copy of its bytes in an array.
 pub fn toBytes(value: anytype) [@sizeOf(@TypeOf(value))]u8 {
     return asBytes(&value).*;
@@ -2018,13 +2102,11 @@ fn BytesAsValueReturnType(comptime T: type, comptime B: type) type {
         @compileError(std.fmt.bufPrint(&buf, "expected *[{}]u8, passed " ++ @typeName(B), .{size}) catch unreachable);
     }
 
-    const alignment = comptime meta.alignment(B);
-
-    return if (comptime trait.isConstPtr(B)) *align(alignment) const T else *align(alignment) T;
+    return CopyPtrAttrs(B, .One, T);
 }
 
 /// Given a pointer to an array of bytes, returns a pointer to a value of the specified type
-/// backed by those bytes, preserving constness.
+/// backed by those bytes, preserving pointer attributes.
 pub fn bytesAsValue(comptime T: type, bytes: anytype) BytesAsValueReturnType(T, @TypeOf(bytes)) {
     return @ptrCast(BytesAsValueReturnType(T, @TypeOf(bytes)), bytes);
 }
@@ -2066,6 +2148,20 @@ test "bytesAsValue" {
     testing.expect(meta.eql(inst, inst2.*));
 }
 
+test "bytesAsValue preserves pointer attributes" {
+    const inArr align(16) = [4]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
+    const inSlice = @ptrCast(*align(16) const volatile [4]u8, &inArr)[0..];
+    const outPtr = bytesAsValue(u32, inSlice);
+
+    const in = @typeInfo(@TypeOf(inSlice)).Pointer;
+    const out = @typeInfo(@TypeOf(outPtr)).Pointer;
+
+    testing.expectEqual(in.is_const, out.is_const);
+    testing.expectEqual(in.is_volatile, out.is_volatile);
+    testing.expectEqual(in.is_allowzero, out.is_allowzero);
+    testing.expectEqual(in.alignment, out.alignment);
+}
+
 /// Given a pointer to an array of bytes, returns a value of the specified type backed by a
 /// copy of those bytes.
 pub fn bytesToValue(comptime T: type, bytes: anytype) T {
@@ -2081,9 +2177,8 @@ test "bytesToValue" {
     testing.expect(deadbeef == @as(u32, 0xDEADBEEF));
 }
 
-//TODO copy also is_volatile, etc. I tried to use @typeInfo, modify child type, use @Type, but ran into issues.
 fn BytesAsSliceReturnType(comptime T: type, comptime bytesType: type) type {
-    if (!(trait.isSlice(bytesType) and meta.Child(bytesType) == u8) and !(trait.isPtrTo(.Array)(bytesType) and meta.Child(meta.Child(bytesType)) == u8)) {
+    if (!(trait.isSlice(bytesType) or trait.isPtrTo(.Array)(bytesType)) or meta.Elem(bytesType) != u8) {
         @compileError("expected []u8 or *[_]u8, passed " ++ @typeName(bytesType));
     }
 
@@ -2091,11 +2186,11 @@ fn BytesAsSliceReturnType(comptime T: type, comptime bytesType: type) type {
         @compileError("number of bytes in " ++ @typeName(bytesType) ++ " is not divisible by size of " ++ @typeName(T));
     }
 
-    const alignment = meta.alignment(bytesType);
-
-    return if (trait.isConstPtr(bytesType)) []align(alignment) const T else []align(alignment) T;
+    return CopyPtrAttrs(bytesType, .Slice, T);
 }
 
+/// Given a slice of bytes, returns a slice of the specified type
+/// backed by those bytes, preserving pointer attributes.
 pub fn bytesAsSlice(comptime T: type, bytes: anytype) BytesAsSliceReturnType(T, @TypeOf(bytes)) {
     // let's not give an undefined pointer to @ptrCast
     // it may be equal to zero and fail a null check
@@ -2103,10 +2198,7 @@ pub fn bytesAsSlice(comptime T: type, bytes: anytype) BytesAsSliceReturnType(T, 
         return &[0]T{};
     }
 
-    const Bytes = @TypeOf(bytes);
-    const alignment = comptime meta.alignment(Bytes);
-
-    const cast_target = if (comptime trait.isConstPtr(Bytes)) [*]align(alignment) const T else [*]align(alignment) T;
+    const cast_target = CopyPtrAttrs(@TypeOf(bytes), .Many, T);
 
     return @ptrCast(cast_target, bytes)[0..@divExact(bytes.len, @sizeOf(T))];
 }
@@ -2164,17 +2256,29 @@ test "bytesAsSlice with specified alignment" {
     testing.expect(slice[0] == 0x33333333);
 }
 
-//TODO copy also is_volatile, etc. I tried to use @typeInfo, modify child type, use @Type, but ran into issues.
+test "bytesAsSlice preserves pointer attributes" {
+    const inArr align(16) = [4]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
+    const inSlice = @ptrCast(*align(16) const volatile [4]u8, &inArr)[0..];
+    const outSlice = bytesAsSlice(u16, inSlice);
+
+    const in = @typeInfo(@TypeOf(inSlice)).Pointer;
+    const out = @typeInfo(@TypeOf(outSlice)).Pointer;
+
+    testing.expectEqual(in.is_const, out.is_const);
+    testing.expectEqual(in.is_volatile, out.is_volatile);
+    testing.expectEqual(in.is_allowzero, out.is_allowzero);
+    testing.expectEqual(in.alignment, out.alignment);
+}
+
 fn SliceAsBytesReturnType(comptime sliceType: type) type {
     if (!trait.isSlice(sliceType) and !trait.isPtrTo(.Array)(sliceType)) {
         @compileError("expected []T or *[_]T, passed " ++ @typeName(sliceType));
     }
 
-    const alignment = meta.alignment(sliceType);
-
-    return if (trait.isConstPtr(sliceType)) []align(alignment) const u8 else []align(alignment) u8;
+    return CopyPtrAttrs(sliceType, .Slice, u8);
 }
 
+/// Given a slice, returns a slice of the underlying bytes, preserving pointer attributes.
 pub fn sliceAsBytes(slice: anytype) SliceAsBytesReturnType(@TypeOf(slice)) {
     const Slice = @TypeOf(slice);
 
@@ -2184,9 +2288,7 @@ pub fn sliceAsBytes(slice: anytype) SliceAsBytesReturnType(@TypeOf(slice)) {
         return &[0]u8{};
     }
 
-    const alignment = comptime meta.alignment(Slice);
-
-    const cast_target = if (comptime trait.isConstPtr(Slice)) [*]align(alignment) const u8 else [*]align(alignment) u8;
+    const cast_target = CopyPtrAttrs(Slice, .Many, u8);
 
     return @ptrCast(cast_target, slice)[0 .. slice.len * @sizeOf(meta.Elem(Slice))];
 }
@@ -2256,6 +2358,20 @@ test "sliceAsBytes and bytesAsSlice back" {
     testing.expect(bytes[9] == math.maxInt(u8));
     testing.expect(bytes[10] == math.maxInt(u8));
     testing.expect(bytes[11] == math.maxInt(u8));
+}
+
+test "sliceAsBytes preserves pointer attributes" {
+    const inArr align(16) = [2]u16{ 0xDEAD, 0xBEEF };
+    const inSlice = @ptrCast(*align(16) const volatile [2]u16, &inArr)[0..];
+    const outSlice = sliceAsBytes(inSlice);
+
+    const in = @typeInfo(@TypeOf(inSlice)).Pointer;
+    const out = @typeInfo(@TypeOf(outSlice)).Pointer;
+
+    testing.expectEqual(in.is_const, out.is_const);
+    testing.expectEqual(in.is_volatile, out.is_volatile);
+    testing.expectEqual(in.is_allowzero, out.is_allowzero);
+    testing.expectEqual(in.alignment, out.alignment);
 }
 
 /// Round an address up to the nearest aligned address
@@ -2363,4 +2479,47 @@ test "isAligned" {
 test "freeing empty string with null-terminated sentinel" {
     const empty_string = try dupeZ(testing.allocator, u8, "");
     testing.allocator.free(empty_string);
+}
+
+/// Returns a slice with the given new alignment,
+/// all other pointer attributes copied from `AttributeSource`.
+fn AlignedSlice(comptime AttributeSource: type, comptime new_alignment: u29) type {
+    const info = @typeInfo(AttributeSource).Pointer;
+    return @Type(.{
+        .Pointer = .{
+            .size = .Slice,
+            .is_const = info.is_const,
+            .is_volatile = info.is_volatile,
+            .is_allowzero = info.is_allowzero,
+            .alignment = new_alignment,
+            .child = info.child,
+            .sentinel = null,
+        },
+    });
+}
+
+/// Returns the largest slice in the given bytes that conforms to the new alignment,
+/// or `null` if the given bytes contain no conforming address.
+pub fn alignInBytes(bytes: []u8, comptime new_alignment: usize) ?[]align(new_alignment) u8 {
+    const begin_address = @ptrToInt(bytes.ptr);
+    const end_address = begin_address + bytes.len;
+
+    const begin_address_aligned = mem.alignForward(begin_address, new_alignment);
+    const new_length = std.math.sub(usize, end_address, begin_address_aligned) catch |e| switch (e) {
+        error.Overflow => return null,
+    };
+    const alignment_offset = begin_address_aligned - begin_address;
+    return @alignCast(new_alignment, bytes[alignment_offset .. alignment_offset + new_length]);
+}
+
+/// Returns the largest sub-slice within the given slice that conforms to the new alignment,
+/// or `null` if the given slice contains no conforming address.
+pub fn alignInSlice(slice: anytype, comptime new_alignment: usize) ?AlignedSlice(@TypeOf(slice), new_alignment) {
+    const bytes = sliceAsBytes(slice);
+    const aligned_bytes = alignInBytes(bytes, new_alignment) orelse return null;
+
+    const Element = @TypeOf(slice[0]);
+    const slice_length_bytes = aligned_bytes.len - (aligned_bytes.len % @sizeOf(Element));
+    const aligned_slice = bytesAsSlice(Element, aligned_bytes[0..slice_length_bytes]);
+    return @alignCast(new_alignment, aligned_slice);
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 const mem = std.mem;
 const maxInt = std.math.maxInt;
+const Vector = std.meta.Vector;
 
 test "int to ptr cast" {
     const x = @as(usize, 13);
@@ -16,14 +17,15 @@ test "integer literal to pointer cast" {
 }
 
 test "pointer reinterpret const float to int" {
-    // https://github.com/ziglang/zig/issues/3345
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
+    // The hex representation is 0x3fe3333333333303.
     const float: f64 = 5.99999999999994648725e-01;
     const float_ptr = &float;
     const int_ptr = @ptrCast(*const i32, float_ptr);
     const int_val = int_ptr.*;
-    expect(int_val == 858993411);
+    if (std.builtin.endian == .Little)
+        expect(int_val == 0x33333303)
+    else
+        expect(int_val == 0x3fe33333);
 }
 
 test "implicitly cast indirect pointer to maybe-indirect pointer" {
@@ -362,6 +364,43 @@ test "@floatCast comptime_int and comptime_float" {
         expect(@TypeOf(result) == f32);
         expect(result == 1234.0);
     }
+}
+
+test "vector casts" {
+    const S = struct {
+        fn doTheTest() void {
+            // Upcast (implicit, equivalent to @intCast)
+            var up0: Vector(2, u8) = [_]u8{ 0x55, 0xaa };
+            var up1 = @as(Vector(2, u16), up0);
+            var up2 = @as(Vector(2, u32), up0);
+            var up3 = @as(Vector(2, u64), up0);
+            // Downcast (safety-checked)
+            var down0 = up3;
+            var down1 = @intCast(Vector(2, u32), down0);
+            var down2 = @intCast(Vector(2, u16), down0);
+            var down3 = @intCast(Vector(2, u8), down0);
+
+            expect(mem.eql(u16, &@as([2]u16, up1), &[2]u16{ 0x55, 0xaa }));
+            expect(mem.eql(u32, &@as([2]u32, up2), &[2]u32{ 0x55, 0xaa }));
+            expect(mem.eql(u64, &@as([2]u64, up3), &[2]u64{ 0x55, 0xaa }));
+
+            expect(mem.eql(u32, &@as([2]u32, down1), &[2]u32{ 0x55, 0xaa }));
+            expect(mem.eql(u16, &@as([2]u16, down2), &[2]u16{ 0x55, 0xaa }));
+            expect(mem.eql(u8, &@as([2]u8, down3), &[2]u8{ 0x55, 0xaa }));
+        }
+
+        fn doTheTestFloat() void {
+            var vec = @splat(2, @as(f32, 1234.0));
+            var wider: Vector(2, f64) = vec;
+            expect(wider[0] == 1234.0);
+            expect(wider[1] == 1234.0);
+        }
+    };
+
+    S.doTheTest();
+    comptime S.doTheTest();
+    S.doTheTestFloat();
+    comptime S.doTheTestFloat();
 }
 
 test "comptime_int @intToFloat" {
@@ -831,6 +870,15 @@ test "peer type resolve string lit with sentinel-terminated mutable slice" {
     comptime expect(@TypeOf("hi", slice) == [:0]const u8);
 }
 
+test "peer type unsigned int to signed" {
+    var w: u31 = 5;
+    var x: u8 = 7;
+    var y: i32 = -5;
+    var a = w + y + x;
+    comptime expect(@TypeOf(a) == i32);
+    expect(a == 7);
+}
+
 test "peer type resolve array pointers, one of them const" {
     var array1: [4]u8 = undefined;
     const array2: [5]u8 = undefined;
@@ -869,4 +917,10 @@ test "comptime float casts" {
 test "cast from ?[*]T to ??[*]T" {
     const a: ??[*]u8 = @as(?[*]u8, null);
     expect(a != null and a.? == null);
+}
+
+test "cast between *[N]void and []void" {
+    var a: [4]void = undefined;
+    var b: []void = &a;
+    expect(b.len == 4);
 }

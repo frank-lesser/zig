@@ -1,7 +1,8 @@
 const std = @import("std");
-const builtin = @import("builtin");
+const builtin = std.builtin;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
 
 var global_x: i32 = 1;
@@ -541,7 +542,7 @@ test "pass string literal to async function" {
         fn hello(msg: []const u8) void {
             frame = @frame();
             suspend;
-            expectEqual(@as([]const u8, "hello"), msg);
+            expectEqualStrings("hello", msg);
             ok = true;
         }
     };
@@ -1544,6 +1545,68 @@ test "nosuspend on function calls" {
     expectEqual(@as(i32, 42), (try nosuspend S1.d()).b);
 }
 
+test "nosuspend on async function calls" {
+    const S0 = struct {
+        b: i32 = 42,
+    };
+    const S1 = struct {
+        fn c() S0 {
+            return S0{};
+        }
+        fn d() !S0 {
+            return S0{};
+        }
+    };
+    var frame_c = nosuspend async S1.c();
+    expectEqual(@as(i32, 42), (await frame_c).b);
+    var frame_d = nosuspend async S1.d();
+    expectEqual(@as(i32, 42), (try await frame_d).b);
+}
+
+// test "resume nosuspend async function calls" {
+//     const S0 = struct {
+//         b: i32 = 42,
+//     };
+//     const S1 = struct {
+//         fn c() S0 {
+//             suspend;
+//             return S0{};
+//         }
+//         fn d() !S0 {
+//             suspend;
+//             return S0{};
+//         }
+//     };
+//     var frame_c = nosuspend async S1.c();
+//     resume frame_c;
+//     expectEqual(@as(i32, 42), (await frame_c).b);
+//     var frame_d = nosuspend async S1.d();
+//     resume frame_d;
+//     expectEqual(@as(i32, 42), (try await frame_d).b);
+// }
+
+test "nosuspend resume async function calls" {
+    const S0 = struct {
+        b: i32 = 42,
+    };
+    const S1 = struct {
+        fn c() S0 {
+            suspend;
+            return S0{};
+        }
+        fn d() !S0 {
+            suspend;
+            return S0{};
+        }
+    };
+    var frame_c = async S1.c();
+    nosuspend resume frame_c;
+    expectEqual(@as(i32, 42), (await frame_c).b);
+    var frame_d = async S1.d();
+    nosuspend resume frame_d;
+    expectEqual(@as(i32, 42), (try await frame_d).b);
+}
+
 test "avoid forcing frame alignment resolution implicit cast to *c_void" {
     const S = struct {
         var x: ?*c_void = null;
@@ -1558,4 +1621,53 @@ test "avoid forcing frame alignment resolution implicit cast to *c_void" {
     var frame = async S.foo();
     resume @ptrCast(anyframe->bool, @alignCast(@alignOf(@Frame(S.foo)), S.x));
     expect(nosuspend await frame);
+}
+
+test "@asyncCall with pass-by-value arguments" {
+    const F0: u64 = 0xbeefbeefbeefbeef;
+    const F1: u64 = 0xf00df00df00df00d;
+    const F2: u64 = 0xcafecafecafecafe;
+
+    const S = struct {
+        pub const ST = struct { f0: usize, f1: usize };
+        pub const AT = [5]u8;
+
+        pub fn f(_fill0: u64, s: ST, _fill1: u64, a: AT, _fill2: u64) callconv(.Async) void {
+            // Check that the array and struct arguments passed by value don't
+            // end up overflowing the adjacent fields in the frame structure.
+            expectEqual(F0, _fill0);
+            expectEqual(F1, _fill1);
+            expectEqual(F2, _fill2);
+        }
+    };
+
+    var buffer: [1024]u8 align(@alignOf(@Frame(S.f))) = undefined;
+    // The function pointer must not be comptime-known.
+    var t = S.f;
+    var frame_ptr = @asyncCall(&buffer, {}, t, .{
+        F0,
+        .{ .f0 = 1, .f1 = 2 },
+        F1,
+        [_]u8{ 1, 2, 3, 4, 5 },
+        F2,
+    });
+}
+
+test "@asyncCall with arguments having non-standard alignment" {
+    const F0: u64 = 0xbeefbeef;
+    const F1: u64 = 0xf00df00df00df00d;
+
+    const S = struct {
+        pub fn f(_fill0: u32, s: struct { x: u64 align(16) }, _fill1: u64) callconv(.Async) void {
+            // The compiler inserts extra alignment for s, check that the
+            // generated code picks the right slot for fill1.
+            expectEqual(F0, _fill0);
+            expectEqual(F1, _fill1);
+        }
+    };
+
+    var buffer: [1024]u8 align(@alignOf(@Frame(S.f))) = undefined;
+    // The function pointer must not be comptime-known.
+    var t = S.f;
+    var frame_ptr = @asyncCall(&buffer, {}, t, .{ F0, undefined, F1 });
 }

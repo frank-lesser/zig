@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2015-2020 Zig Contributors
+// Copyright (c) 2015-2021 Zig Contributors
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
@@ -9,60 +9,63 @@
 // Read also http://seriot.ch/parsing_json.php for a good overview.
 
 const std = @import("../std.zig");
+const json = std.json;
+const testing = std.testing;
 
-fn ok(comptime s: []const u8) void {
-    std.testing.expect(std.json.validate(s));
-
-    var p = std.json.Parser.init(std.testing.allocator, false);
+fn testNonStreaming(s: []const u8) !void {
+    var p = json.Parser.init(testing.allocator, false);
     defer p.deinit();
 
-    var tree = p.parse(s) catch unreachable;
+    var tree = try p.parse(s);
     defer tree.deinit();
 }
 
-fn err(comptime s: []const u8) void {
-    std.testing.expect(!std.json.validate(s));
+fn ok(s: []const u8) !void {
+    testing.expect(json.validate(s));
 
-    var p = std.json.Parser.init(std.testing.allocator, false);
-    defer p.deinit();
-
-    if (p.parse(s)) |_| {
-        unreachable;
-    } else |_| {}
+    try testNonStreaming(s);
 }
 
-fn utf8Error(comptime s: []const u8) void {
-    std.testing.expect(!std.json.validate(s));
+fn err(s: []const u8) void {
+    testing.expect(!json.validate(s));
 
-    var p = std.json.Parser.init(std.testing.allocator, false);
-    defer p.deinit();
-
-    if (p.parse(s)) |_| {
-        unreachable;
-    } else |e| {
-        std.testing.expect(e == error.InvalidUtf8Byte);
-    }
+    testNonStreaming(s) catch return;
+    testing.expect(false);
 }
 
-fn any(comptime s: []const u8) void {
-    _ = std.json.validate(s);
+fn utf8Error(s: []const u8) void {
+    testing.expect(!json.validate(s));
 
-    var p = std.json.Parser.init(std.testing.allocator, false);
+    testing.expectError(error.InvalidUtf8Byte, testNonStreaming(s));
+}
+
+fn any(s: []const u8) void {
+    _ = json.validate(s);
+
+    testNonStreaming(s) catch {};
+}
+
+fn anyStreamingErrNonStreaming(s: []const u8) void {
+    _ = json.validate(s);
+
+    testNonStreaming(s) catch return;
+    testing.expect(false);
+}
+
+fn roundTrip(s: []const u8) !void {
+    testing.expect(json.validate(s));
+
+    var p = json.Parser.init(testing.allocator, false);
     defer p.deinit();
 
-    var tree = p.parse(s) catch return;
+    var tree = try p.parse(s);
     defer tree.deinit();
-}
 
-fn anyStreamingErrNonStreaming(comptime s: []const u8) void {
-    _ = std.json.validate(s);
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try tree.root.jsonStringify(.{}, fbs.writer());
 
-    var p = std.json.Parser.init(std.testing.allocator, false);
-    defer p.deinit();
-
-    if (p.parse(s)) |_| {
-        unreachable;
-    } else |_| {}
+    testing.expectEqualStrings(s, fbs.getWritten());
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -70,7 +73,7 @@ fn anyStreamingErrNonStreaming(comptime s: []const u8) void {
 // Additional tests not part of test JSONTestSuite.
 
 test "y_trailing_comma_after_empty" {
-    ok(
+    try roundTrip(
         \\{"1":[],"2":{},"3":"4"}
     );
 }
@@ -78,252 +81,252 @@ test "y_trailing_comma_after_empty" {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 test "y_array_arraysWithSpaces" {
-    ok(
+    try ok(
         \\[[]   ]
     );
 }
 
 test "y_array_empty" {
-    ok(
+    try roundTrip(
         \\[]
     );
 }
 
 test "y_array_empty-string" {
-    ok(
+    try roundTrip(
         \\[""]
     );
 }
 
 test "y_array_ending_with_newline" {
-    ok(
+    try roundTrip(
         \\["a"]
     );
 }
 
 test "y_array_false" {
-    ok(
+    try roundTrip(
         \\[false]
     );
 }
 
 test "y_array_heterogeneous" {
-    ok(
+    try ok(
         \\[null, 1, "1", {}]
     );
 }
 
 test "y_array_null" {
-    ok(
+    try roundTrip(
         \\[null]
     );
 }
 
 test "y_array_with_1_and_newline" {
-    ok(
+    try ok(
         \\[1
         \\]
     );
 }
 
 test "y_array_with_leading_space" {
-    ok(
+    try ok(
         \\ [1]
     );
 }
 
 test "y_array_with_several_null" {
-    ok(
+    try roundTrip(
         \\[1,null,null,null,2]
     );
 }
 
 test "y_array_with_trailing_space" {
-    ok("[2] ");
+    try ok("[2] ");
 }
 
 test "y_number_0e+1" {
-    ok(
+    try ok(
         \\[0e+1]
     );
 }
 
 test "y_number_0e1" {
-    ok(
+    try ok(
         \\[0e1]
     );
 }
 
 test "y_number_after_space" {
-    ok(
+    try ok(
         \\[ 4]
     );
 }
 
 test "y_number_double_close_to_zero" {
-    ok(
+    try ok(
         \\[-0.000000000000000000000000000000000000000000000000000000000000000000000000000001]
     );
 }
 
 test "y_number_int_with_exp" {
-    ok(
+    try ok(
         \\[20e1]
     );
 }
 
 test "y_number" {
-    ok(
+    try ok(
         \\[123e65]
     );
 }
 
 test "y_number_minus_zero" {
-    ok(
+    try ok(
         \\[-0]
     );
 }
 
 test "y_number_negative_int" {
-    ok(
+    try roundTrip(
         \\[-123]
     );
 }
 
 test "y_number_negative_one" {
-    ok(
+    try roundTrip(
         \\[-1]
     );
 }
 
 test "y_number_negative_zero" {
-    ok(
+    try ok(
         \\[-0]
     );
 }
 
 test "y_number_real_capital_e" {
-    ok(
+    try ok(
         \\[1E22]
     );
 }
 
 test "y_number_real_capital_e_neg_exp" {
-    ok(
+    try ok(
         \\[1E-2]
     );
 }
 
 test "y_number_real_capital_e_pos_exp" {
-    ok(
+    try ok(
         \\[1E+2]
     );
 }
 
 test "y_number_real_exponent" {
-    ok(
+    try ok(
         \\[123e45]
     );
 }
 
 test "y_number_real_fraction_exponent" {
-    ok(
+    try ok(
         \\[123.456e78]
     );
 }
 
 test "y_number_real_neg_exp" {
-    ok(
+    try ok(
         \\[1e-2]
     );
 }
 
 test "y_number_real_pos_exponent" {
-    ok(
+    try ok(
         \\[1e+2]
     );
 }
 
 test "y_number_simple_int" {
-    ok(
+    try roundTrip(
         \\[123]
     );
 }
 
 test "y_number_simple_real" {
-    ok(
+    try ok(
         \\[123.456789]
     );
 }
 
 test "y_object_basic" {
-    ok(
+    try roundTrip(
         \\{"asd":"sdf"}
     );
 }
 
 test "y_object_duplicated_key_and_value" {
-    ok(
+    try ok(
         \\{"a":"b","a":"b"}
     );
 }
 
 test "y_object_duplicated_key" {
-    ok(
+    try ok(
         \\{"a":"b","a":"c"}
     );
 }
 
 test "y_object_empty" {
-    ok(
+    try roundTrip(
         \\{}
     );
 }
 
 test "y_object_empty_key" {
-    ok(
+    try roundTrip(
         \\{"":0}
     );
 }
 
 test "y_object_escaped_null_in_key" {
-    ok(
+    try ok(
         \\{"foo\u0000bar": 42}
     );
 }
 
 test "y_object_extreme_numbers" {
-    ok(
+    try ok(
         \\{ "min": -1.0e+28, "max": 1.0e+28 }
     );
 }
 
 test "y_object" {
-    ok(
+    try ok(
         \\{"asd":"sdf", "dfg":"fgh"}
     );
 }
 
 test "y_object_long_strings" {
-    ok(
+    try ok(
         \\{"x":[{"id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}], "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
     );
 }
 
 test "y_object_simple" {
-    ok(
+    try roundTrip(
         \\{"a":[]}
     );
 }
 
 test "y_object_string_unicode" {
-    ok(
+    try ok(
         \\{"title":"\u041f\u043e\u043b\u0442\u043e\u0440\u0430 \u0417\u0435\u043c\u043b\u0435\u043a\u043e\u043f\u0430" }
     );
 }
 
 test "y_object_with_newlines" {
-    ok(
+    try ok(
         \\{
         \\"a": "b"
         \\}
@@ -331,353 +334,311 @@ test "y_object_with_newlines" {
 }
 
 test "y_string_1_2_3_bytes_UTF-8_sequences" {
-    ok(
+    try ok(
         \\["\u0060\u012a\u12AB"]
     );
 }
 
 test "y_string_accepted_surrogate_pair" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uD801\udc37"]
     );
 }
 
 test "y_string_accepted_surrogate_pairs" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\ud83d\ude39\ud83d\udc8d"]
     );
 }
 
 test "y_string_allowed_escapes" {
-    ok(
+    try ok(
         \\["\"\\\/\b\f\n\r\t"]
     );
 }
 
 test "y_string_backslash_and_u_escaped_zero" {
-    ok(
+    try ok(
         \\["\\u0000"]
     );
 }
 
 test "y_string_backslash_doublequotes" {
-    ok(
+    try roundTrip(
         \\["\""]
     );
 }
 
 test "y_string_comments" {
-    ok(
+    try ok(
         \\["a/*b*/c/*d//e"]
     );
 }
 
 test "y_string_double_escape_a" {
-    ok(
+    try ok(
         \\["\\a"]
     );
 }
 
 test "y_string_double_escape_n" {
-    ok(
+    try roundTrip(
         \\["\\n"]
     );
 }
 
 test "y_string_escaped_control_character" {
-    ok(
+    try ok(
         \\["\u0012"]
     );
 }
 
 test "y_string_escaped_noncharacter" {
-    ok(
+    try ok(
         \\["\uFFFF"]
     );
 }
 
 test "y_string_in_array" {
-    ok(
+    try ok(
         \\["asd"]
     );
 }
 
 test "y_string_in_array_with_leading_space" {
-    ok(
+    try ok(
         \\[ "asd"]
     );
 }
 
 test "y_string_last_surrogates_1_and_2" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uDBFF\uDFFF"]
     );
 }
 
 test "y_string_nbsp_uescaped" {
-    ok(
+    try ok(
         \\["new\u00A0line"]
     );
 }
 
 test "y_string_nonCharacterInUTF-8_U+10FFFF" {
-    ok(
+    try ok(
         \\["􏿿"]
     );
 }
 
 test "y_string_nonCharacterInUTF-8_U+FFFF" {
-    ok(
+    try ok(
         \\["￿"]
     );
 }
 
 test "y_string_null_escape" {
-    ok(
+    try ok(
         \\["\u0000"]
     );
 }
 
 test "y_string_one-byte-utf-8" {
-    ok(
+    try ok(
         \\["\u002c"]
     );
 }
 
 test "y_string_pi" {
-    ok(
+    try ok(
         \\["π"]
     );
 }
 
 test "y_string_reservedCharacterInUTF-8_U+1BFFF" {
-    ok(
+    try ok(
         \\["𛿿"]
     );
 }
 
 test "y_string_simple_ascii" {
-    ok(
+    try ok(
         \\["asd "]
     );
 }
 
 test "y_string_space" {
-    ok(
+    try roundTrip(
         \\" "
     );
 }
 
 test "y_string_surrogates_U+1D11E_MUSICAL_SYMBOL_G_CLEF" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uD834\uDd1e"]
     );
 }
 
 test "y_string_three-byte-utf-8" {
-    ok(
+    try ok(
         \\["\u0821"]
     );
 }
 
 test "y_string_two-byte-utf-8" {
-    ok(
+    try ok(
         \\["\u0123"]
     );
 }
 
 test "y_string_u+2028_line_sep" {
-    ok("[\"\xe2\x80\xa8\"]");
+    try ok("[\"\xe2\x80\xa8\"]");
 }
 
 test "y_string_u+2029_par_sep" {
-    ok("[\"\xe2\x80\xa9\"]");
+    try ok("[\"\xe2\x80\xa9\"]");
 }
 
 test "y_string_uescaped_newline" {
-    ok(
+    try ok(
         \\["new\u000Aline"]
     );
 }
 
 test "y_string_uEscape" {
-    ok(
+    try ok(
         \\["\u0061\u30af\u30EA\u30b9"]
     );
 }
 
 test "y_string_unescaped_char_delete" {
-    ok("[\"\x7f\"]");
+    try ok("[\"\x7f\"]");
 }
 
 test "y_string_unicode_2" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["⍂㈴⍂"]
     );
 }
 
 test "y_string_unicodeEscapedBackslash" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\u005C"]
     );
 }
 
 test "y_string_unicode_escaped_double_quote" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\u0022"]
     );
 }
 
 test "y_string_unicode" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uA66D"]
     );
 }
 
 test "y_string_unicode_U+10FFFE_nonchar" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uDBFF\uDFFE"]
     );
 }
 
 test "y_string_unicode_U+1FFFE_nonchar" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uD83F\uDFFE"]
     );
 }
 
 test "y_string_unicode_U+200B_ZERO_WIDTH_SPACE" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\u200B"]
     );
 }
 
 test "y_string_unicode_U+2064_invisible_plus" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\u2064"]
     );
 }
 
 test "y_string_unicode_U+FDD0_nonchar" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uFDD0"]
     );
 }
 
 test "y_string_unicode_U+FFFE_nonchar" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
-    ok(
+    try ok(
         \\["\uFFFE"]
     );
 }
 
 test "y_string_utf8" {
-    ok(
+    try ok(
         \\["€𝄞"]
     );
 }
 
 test "y_string_with_del_character" {
-    ok("[\"a\x7fa\"]");
+    try ok("[\"a\x7fa\"]");
 }
 
 test "y_structure_lonely_false" {
-    ok(
+    try roundTrip(
         \\false
     );
 }
 
 test "y_structure_lonely_int" {
-    ok(
+    try roundTrip(
         \\42
     );
 }
 
 test "y_structure_lonely_negative_real" {
-    ok(
+    try ok(
         \\-0.1
     );
 }
 
 test "y_structure_lonely_null" {
-    ok(
+    try roundTrip(
         \\null
     );
 }
 
 test "y_structure_lonely_string" {
-    ok(
+    try roundTrip(
         \\"asd"
     );
 }
 
 test "y_structure_lonely_true" {
-    ok(
+    try roundTrip(
         \\true
     );
 }
 
 test "y_structure_string_empty" {
-    ok(
+    try roundTrip(
         \\""
     );
 }
 
 test "y_structure_trailing_newline" {
-    ok(
+    try roundTrip(
         \\["a"]
     );
 }
 
 test "y_structure_true_in_array" {
-    ok(
+    try roundTrip(
         \\[true]
     );
 }
 
 test "y_structure_whitespace_array" {
-    ok(" [] ");
+    try ok(" [] ");
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1858,63 +1819,42 @@ test "i_object_key_lone_2nd_surrogate" {
 }
 
 test "i_string_1st_surrogate_but_2nd_missing" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uDADA"]
     );
 }
 
 test "i_string_1st_valid_surrogate_2nd_invalid" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uD888\u1234"]
     );
 }
 
 test "i_string_incomplete_surrogate_and_escape_valid" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uD800\n"]
     );
 }
 
 test "i_string_incomplete_surrogate_pair" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uDd1ea"]
     );
 }
 
 test "i_string_incomplete_surrogates_escape_valid" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uD800\uD800\n"]
     );
 }
 
 test "i_string_invalid_lonely_surrogate" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\ud800"]
     );
 }
 
 test "i_string_invalid_surrogate" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\ud800abc"]
     );
@@ -1927,9 +1867,6 @@ test "i_string_invalid_utf-8" {
 }
 
 test "i_string_inverted_surrogates_U+1D11E" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uDd1e\uD834"]
     );
@@ -1942,9 +1879,6 @@ test "i_string_iso_latin_1" {
 }
 
 test "i_string_lone_second_surrogate" {
-    // https://github.com/ziglang/zig/issues/5127
-    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
-
     anyStreamingErrNonStreaming(
         \\["\uDFAA"]
     );
